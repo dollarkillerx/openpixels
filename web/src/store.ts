@@ -1,12 +1,15 @@
+import type { PhotoAnalysis } from "./analysis";
 import type { Lut } from "./lut";
 import type { ErasePatch } from "./protocol";
 
 const DB_NAME = "openpixels";
-const VERSION = 3;
+const VERSION = 4;
 const HANDLES = "handles";
 const LUTS = "luts";
 const PROJECTS = "projects";
 const ERASES = "erases";
+const ASSETS = "assets";
+const ANALYSES = "analyses";
 
 export interface StoredLut extends Lut {
   id: number;
@@ -22,6 +25,8 @@ function open(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(LUTS)) db.createObjectStore(LUTS, { keyPath: "id", autoIncrement: true });
       if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS, { keyPath: "id", autoIncrement: true });
       if (!db.objectStoreNames.contains(ERASES)) db.createObjectStore(ERASES);
+      if (!db.objectStoreNames.contains(ASSETS)) db.createObjectStore(ASSETS, { keyPath: "id", autoIncrement: true });
+      if (!db.objectStoreNames.contains(ANALYSES)) db.createObjectStore(ANALYSES);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -61,6 +66,39 @@ export const saveErases = (id: string, erases: ErasePatch[]) =>
   erases.length > 0
     ? run(ERASES, "readwrite", (s) => s.put(erases, id))
     : run(ERASES, "readwrite", (s) => s.delete(id));
+
+/** An imported image for replacing backgrounds and skies. */
+export interface StoredAsset {
+  id: number;
+  name: string;
+  mode: number;
+  blob: Blob;
+}
+
+/** Imported ids start here, clear of the built-in images. */
+const FIRST_ASSET_ID = 100;
+
+export async function saveAsset(name: string, mode: number, blob: Blob): Promise<StoredAsset> {
+  const existing = await listAssets();
+  const id = Math.max(FIRST_ASSET_ID - 1, ...existing.map((item) => item.id)) + 1;
+  const stored: StoredAsset = { id, name, mode, blob };
+  await run(ASSETS, "readwrite", (s) => s.put(stored));
+  return stored;
+}
+
+export const listAssets = () => run<StoredAsset[]>(ASSETS, "readonly", (s) => s.getAll());
+export const getAsset = (id: number) => run<StoredAsset | undefined>(ASSETS, "readonly", (s) => s.get(id));
+
+export const saveAnalysis = (id: string, analysis: PhotoAnalysis) => run(ANALYSES, "readwrite", (s) => s.put(analysis, id));
+
+/** Every stored analysis, by photo id. */
+export async function loadAnalyses(): Promise<Record<string, PhotoAnalysis>> {
+  const [ids, values] = await Promise.all([
+    run<IDBValidKey[]>(ANALYSES, "readonly", (s) => s.getAllKeys()),
+    run<PhotoAnalysis[]>(ANALYSES, "readonly", (s) => s.getAll()),
+  ]);
+  return Object.fromEntries(ids.map((id, index) => [String(id), values[index]]));
+}
 
 export const rememberHandle = (id: string, handle: FileSystemFileHandle) =>
   run(HANDLES, "readwrite", (s) => s.put(handle, id));

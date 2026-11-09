@@ -58,6 +58,100 @@ impl LensProfile {
     }
 }
 
+/// Corrections for one shot from the Lensfun database, already interpolated to its
+/// focal length and aperture. The field names are Lensfun's.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(tag = "model", rename_all = "lowercase")]
+pub enum LensfunDistortion {
+    Ptlens { a: f32, b: f32, c: f32 },
+    Poly3 { k1: f32 },
+    Poly5 { k1: f32, k2: f32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(tag = "model", rename_all = "lowercase")]
+pub enum LensfunTca {
+    Linear { kr: f32, kb: f32 },
+    Poly3 {
+        vr: f32,
+        vb: f32,
+        #[serde(default)]
+        cr: f32,
+        #[serde(default)]
+        cb: f32,
+        #[serde(default)]
+        br: f32,
+        #[serde(default)]
+        bb: f32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct LensfunVignetting {
+    pub k1: f32,
+    pub k2: f32,
+    pub k3: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LensfunCalibration {
+    pub distortion: Option<LensfunDistortion>,
+    pub tca: Option<LensfunTca>,
+    pub vignetting: Option<LensfunVignetting>,
+    /// Lensfun's distortion radius at this image's corner. Its radius of 1 is half the
+    /// short edge of the sensor the lens was calibrated on.
+    pub hugin_scale: f32,
+    /// Lensfun's vignetting radius at this image's corner; 1 on the calibration sensor.
+    pub corner_scale: f32,
+}
+
+impl LensProfile {
+    /// Converts Lensfun's models to the polynomials in the half-diagonal radius used here.
+    pub fn from_lensfun(calibration: &LensfunCalibration) -> Self {
+        let samples = |value: &dyn Fn(f32) -> f32| -> Vec<(f32, f32)> {
+            (0..FIT_SAMPLES)
+                .map(|i| {
+                    let radius = (i as f32 + 0.5) / FIT_SAMPLES as f32;
+                    (radius * radius, value(radius))
+                })
+                .collect()
+        };
+        let hugin = calibration.hugin_scale;
+        let mut profile = LensProfile::default();
+        if let Some(model) = calibration.distortion {
+            let ratio = move |r: f32| {
+                let r = r * hugin;
+                match model {
+                    LensfunDistortion::Ptlens { a, b, c } => a * r * r * r + b * r * r + c * r + 1.0 - a - b - c,
+                    LensfunDistortion::Poly3 { k1 } => k1 * r * r + 1.0 - k1,
+                    LensfunDistortion::Poly5 { k1, k2 } => 1.0 + k1 * r * r + k2 * r * r * r * r,
+                }
+            };
+            let centre = ratio(0.0);
+            profile.distortion = fit_polynomial(&samples(&|r| ratio(r) / centre - 1.0), 1);
+        }
+        if let Some(model) = calibration.tca {
+            let ([vr, cr, br], [vb, cb, bb]) = match model {
+                LensfunTca::Linear { kr, kb } => ([kr, 0.0, 0.0], [kb, 0.0, 0.0]),
+                LensfunTca::Poly3 { vr, vb, cr, cb, br, bb } => ([vr, cr, br], [vb, cb, bb]),
+            };
+            let curve = |v: f32, c: f32, b: f32| samples(&|r| (b * r * hugin + c) * r * hugin + v - 1.0);
+            profile.chroma_red = fit_chroma(&curve(vr, cr, br));
+            profile.chroma_blue = fit_chroma(&curve(vb, cb, bb));
+        }
+        if let Some(LensfunVignetting { k1, k2, k3 }) = calibration.vignetting {
+            let scale = calibration.corner_scale;
+            let gain = move |r: f32| {
+                let r2 = (r * scale).powi(2);
+                1.0 / (1.0 + r2 * (k1 + r2 * (k2 + r2 * k3)))
+            };
+            profile.vignette = fit_polynomial(&samples(&|r| gain(r) - 1.0), 1);
+        }
+        profile
+    }
+}
+
 #[derive(Default)]
 struct FoundTags<'a> {
     sony_vignette: Option<Vec<i16>>,
@@ -458,6 +552,59 @@ impl<'a> Tiff<'a> {
         }
         queue.push(self.u32(offset + 2 + count * 12)? as usize);
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod lensfun_tests {
+    use super::*;
+
+    fn polynomial(terms: [f32; 4], r2: f32) -> f32 {
+        r2 * (terms[0] + r2 * (terms[1] + r2 * (terms[2] + r2 * terms[3])))
+    }
+
+    fn lensfun(distortion: Option<LensfunDistortion>, tca: Option<LensfunTca>, vignetting: Option<LensfunVignetting>) -> LensProfile {
+        // A 3:2 full-frame image on a 3:2 full-frame calibration.
+        LensProfile::from_lensfun(&LensfunCalibration { distortion, tca, vignetting, hugin_scale: 1.5f32.hypot(1.0), corner_scale: 1.0 })
+    }
+
+    #[test]
+    fn distortion_is_measured_from_half_the_short_edge() {
+        let profile = lensfun(Some(LensfunDistortion::Poly3 { k1: -0.05 }), None, None);
+        // Halfway to the corner is 0.9014 of half the short edge.
+        let r: f32 = 0.5 * 1.5f32.hypot(1.0);
+        let expected = (-0.05 * r * r + 1.05) / 1.05 - 1.0;
+        assert!((polynomial(profile.distortion, 0.25) - expected).abs() < 1e-4, "{:?}", profile.distortion);
+    }
+
+    #[test]
+    fn ptlens_matches_its_formula_near_the_corner() {
+        let (a, b, c) = (0.01f32, -0.04, 0.02);
+        let profile = lensfun(Some(LensfunDistortion::Ptlens { a, b, c }), None, None);
+        let r = 0.98f32.sqrt() * 1.5f32.hypot(1.0);
+        let centre = 1.0 - a - b - c;
+        let expected = (a * r * r * r + b * r * r + c * r + centre) / centre - 1.0;
+        assert!((polynomial(profile.distortion, 0.98) - expected).abs() < 0.002, "{:?}", profile.distortion);
+    }
+
+    #[test]
+    fn vignetting_brightens_the_corner_by_the_inverse_falloff() {
+        let profile = lensfun(None, None, Some(LensfunVignetting { k1: -0.5, k2: 0.1, k3: 0.0 }));
+        let gain = 1.0 + polynomial(profile.vignette, 0.96);
+        let expected = 1.0 / (1.0 + 0.96 * (-0.5 + 0.96 * 0.1));
+        assert!((gain - expected).abs() < 0.01, "{gain} against {expected}");
+    }
+
+    #[test]
+    fn tca_scales_red_and_blue_around_green() {
+        let profile = lensfun(None, Some(LensfunTca::Linear { kr: 1.001, kb: 0.998 }), None);
+        assert!((profile.chroma_red[0] - 0.001).abs() < 1e-5);
+        assert!((profile.chroma_blue[0] + 0.002).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_calibration_with_nothing_in_it_changes_nothing() {
+        assert_eq!(lensfun(None, None, None), LensProfile::default());
     }
 }
 

@@ -2,7 +2,7 @@
 //! not call a method while an async one is still pending.
 
 use op_core::{
-    Adjustments, DevelopJob, ErasePatch, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
+    Adjustments, DevelopJob, ErasePatch, LensfunCalibration, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
     OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
     neutral_white_balance, resize_rgb,
 };
@@ -26,6 +26,8 @@ struct ImageInfo {
     camera: Option<String>,
     base_exposure: Option<f32>,
     lens: Option<op_core::LensProfile>,
+    lens_query: Option<op_core::LensQuery>,
+    capture_time: Option<String>,
     camera_match: bool,
 }
 
@@ -213,6 +215,31 @@ impl Engine {
             <[f32; 3]>::try_from(values).map_err(|_| JsError::new("expected 3 channel values"))
         };
         Ok(proxy.srgb_nchw_tensor(width, height, channels(mean)?, channels(std)?))
+    }
+
+    /// Sets the image that replaces the background or sky, straight sRGB RGBA8.
+    pub fn set_replace_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.renderer.set_replace_image(width, height, rgba);
+    }
+
+    /// Sets where the sky is, `width * height` bytes covering the whole image.
+    pub fn set_sky_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
+        match &self.proxy {
+            Some(proxy) => {
+                let (refined_w, refined_h, refined) = proxy.refine_mask(mask, width, height);
+                self.renderer.set_sky_mask(refined_w, refined_h, &refined);
+            }
+            None => self.renderer.set_sky_mask(width, height, mask),
+        }
+    }
+
+    /// Applies corrections from the Lensfun database, given as JSON, and returns the
+    /// resulting lens profile as JSON.
+    pub fn set_lens_calibration(&mut self, json: &str) -> Result<String, JsError> {
+        let calibration: LensfunCalibration = serde_json::from_str(json).map_err(js_error)?;
+        let profile = op_core::LensProfile::from_lensfun(&calibration);
+        self.renderer.set_lens_profile(profile);
+        serde_json::to_string(&profile).map_err(js_error)
     }
 
     /// Sets the subject mask, `width * height` bytes covering the whole image.
@@ -561,6 +588,8 @@ impl Engine {
         self.heals.clear();
         self.erases.clear();
         self.healed_proxy = None;
+        // The next photo's sky is unknown, and the last one's must not show on it.
+        self.renderer.set_sky_mask(1, 1, &[0]);
     }
 
     fn finish_open(&mut self, opened: op_core::Opened, bytes: Option<&[u8]>) -> Result<String, JsError> {
@@ -572,6 +601,8 @@ impl Engine {
             camera: opened.camera,
             base_exposure: opened.base_exposure,
             lens: opened.lens,
+            lens_query: opened.lens_query,
+            capture_time: self.source_exif.as_deref().and_then(op_core::capture_time),
             camera_match: opened.camera_matrix.is_some(),
         };
         self.renderer.set_base_exposure(opened.base_exposure);

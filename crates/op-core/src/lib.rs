@@ -17,12 +17,12 @@ mod xtrans;
 pub use adjust::{Adjustments, neutral_white_balance};
 pub use curve::{CURVE_LUT_SIZE, ToneCurve};
 pub use decode::{
-    DecodeError, DevelopJob, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
+    DecodeError, DevelopJob, LensQuery, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
     process_tile, open_rgba8};
-pub use exif::export_exif;
+pub use exif::{capture_time, export_exif};
 pub use geometry::Geometry;
 pub use icc::srgb_icc_profile;
-pub use lens::{LensMap, LensProfile};
+pub use lens::{LensMap, LensProfile, LensfunCalibration};
 pub use output::{OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, fit_long_edge, resize_rgb};
 pub use heal::{ErasePatch, HealSpot, apply_erases, apply_heals, find_heal_source};
 pub use image_buf::LinearImage;

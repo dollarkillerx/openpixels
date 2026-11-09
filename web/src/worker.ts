@@ -3,6 +3,7 @@ import { decodeHeic, isHeic } from "./heic";
 import { renderWatermark } from "./output";
 import init, { Engine } from "./wasm-pkg/op_wasm";
 import { engineJson } from "./library";
+import { lensfunCalibration } from "./lensfun";
 import type {
   Adjustments,
   EngineRequest,
@@ -113,6 +114,15 @@ async function developInParallel() {
   engine!.finish_raw_develop();
 }
 
+/** RAW files with no corrections of their own use the lens database, if it knows the lens. */
+async function applyLensDatabase(info: Pick<LoadResult, "lens" | "lensQuery" | "lensSource">) {
+  if (info.lens || !info.lensQuery) return;
+  const calibration = await lensfunCalibration(info.lensQuery);
+  if (!calibration) return;
+  info.lens = JSON.parse(engine!.set_lens_calibration(JSON.stringify(calibration)));
+  info.lensSource = "lensfun";
+}
+
 function pushErases(erases: ErasePatch[]) {
   engine!.clear_erases();
   for (const { x, y, width, height, size, rgb, alpha } of erases) {
@@ -143,6 +153,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
         decoded = engine!.decode(bytes);
       }
       const info = JSON.parse(decoded);
+      await applyLensDatabase(info);
       const t1 = performance.now();
       const proxy = JSON.parse(engine!.build_proxy(PROXY_LONG_EDGE));
       engine!.set_warp_strokes(JSON.stringify(request.warps));
@@ -254,6 +265,16 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       const result: ModelInput = { tensor, ms: performance.now() - start };
       return [result, [tensor]];
     }
+
+    case "setSkyMask":
+      engine!.set_sky_mask(request.width, request.height, new Uint8Array(request.mask));
+      scheduleRender();
+      return [undefined, []];
+
+    case "setReplaceImage":
+      engine!.set_replace_image(request.width, request.height, new Uint8Array(request.rgba));
+      scheduleRender();
+      return [undefined, []];
 
     case "setMask":
       engine!.set_mask(request.width, request.height, new Uint8Array(request.mask));

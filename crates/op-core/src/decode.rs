@@ -48,8 +48,20 @@ pub struct Opened {
     pub base_exposure: Option<f32>,
     /// Lens corrections stored in the file.
     pub lens: Option<LensProfile>,
+    /// What to look up in a lens database, for RAW files that carry no corrections.
+    pub lens_query: Option<LensQuery>,
     /// Colour matrix that matches the camera's own JPEG, when one helps.
     pub camera_matrix: Option<[[f32; 3]; 3]>,
+}
+
+/// Identifies a shot for looking up its lens corrections.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LensQuery {
+    pub camera: String,
+    pub lens: String,
+    pub focal: f32,
+    pub aperture: Option<f32>,
 }
 
 /// Opens a RAW, JPEG or PNG file from memory for editing.
@@ -59,7 +71,7 @@ pub fn open(bytes: &[u8]) -> Result<Opened, DecodeError> {
     } else {
         let working = decode_raster(bytes)?;
         let (width, height) = (working.width, working.height);
-        Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, camera_matrix: None })
+        Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, lens_query: None, camera_matrix: None })
     }
 }
 
@@ -71,7 +83,7 @@ pub fn open_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<Opened, Decode
     let table = srgb_to_linear_table();
     let pixels = rgba.chunks_exact(4).flat_map(|p| [table[p[0] as usize], table[p[1] as usize], table[p[2] as usize]]).collect();
     let working = LinearImage::new(width, height, pixels);
-    Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, camera_matrix: None })
+    Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, lens_query: None, camera_matrix: None })
 }
 
 fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
@@ -80,6 +92,8 @@ fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
     let working = decode_linear(&raw, Demosaic::HalfSize)?;
     // Half-size output rounds down, so this can be one pixel short of the final size.
     let (width, height) = (working.width * 2, working.height * 2);
+    let lens = LensProfile::from_file(bytes);
+    let lens_query = lens.is_none().then(|| lens_query(&raw, bytes, &camera)).flatten();
     let pair = embedded_comparison(&raw, &working);
     let base_exposure = pair
         .as_ref()
@@ -93,8 +107,19 @@ fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
         width,
         height,
         base_exposure: Some(base_exposure),
-        lens: LensProfile::from_file(bytes),
+        lens,
+        lens_query,
         camera_matrix,
+    })
+}
+
+fn lens_query(raw: &FlashRaw<'_>, bytes: &[u8], camera: &str) -> Option<LensQuery> {
+    let exposure = &raw.metadata().exposure;
+    Some(LensQuery {
+        camera: camera.to_string(),
+        lens: crate::exif::lens_model(bytes)?,
+        focal: exposure.focal_length.filter(|focal| *focal > 0.0)?,
+        aperture: exposure.f_number.filter(|aperture| *aperture > 0.0),
     })
 }
 

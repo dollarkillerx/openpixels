@@ -257,15 +257,66 @@ impl TiffReader<'_> {
     }
 }
 
-/// Copies capture details from a JPEG, HEIF or TIFF source. Location is deliberately left out.
-fn copy_source_tags(source: &[u8], main: &mut Vec<Entry>, details: &mut Vec<Entry>) -> Option<()> {
-    let data = tiff_block(source)?;
+/// The embedded JPEG of a Fujifilm RAF, whose EXIF has the lens name.
+fn raf_preview(source: &[u8]) -> Option<&[u8]> {
+    let offset = u32::from_be_bytes(source.get(84..88)?.try_into().ok()?) as usize;
+    let length = u32::from_be_bytes(source.get(88..92)?.try_into().ok()?) as usize;
+    source.get(offset..offset.checked_add(length)?)
+}
+
+/// The EXIF sub-IFD of a Canon CR3, stored as its own TIFF structure in a `CMT2` box.
+fn cr3_details(source: &[u8]) -> Option<&[u8]> {
+    let at = source.windows(4).position(|window| window == b"CMT2")?;
+    let size = u32::from_be_bytes(source.get(at.checked_sub(4)?..at)?.try_into().ok()?) as usize;
+    source.get(at + 4..(at - 4).checked_add(size)?)
+}
+
+fn ascii_tag(reader: &TiffReader<'_>, ifd: usize, tag: u16) -> Option<String> {
+    let entry = reader.entry(ifd, tag)?;
+    let end = entry.data.iter().position(|&byte| byte == 0).unwrap_or(entry.data.len());
+    let text = std::str::from_utf8(&entry.data[..end]).ok()?.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+fn tiff_reader(data: &[u8]) -> Option<TiffReader<'_>> {
     let big_endian = match data.get(..2)? {
         b"II" => false,
         b"MM" => true,
         _ => return None,
     };
-    let reader = TiffReader { data, big_endian };
+    Some(TiffReader { data, big_endian })
+}
+
+fn details_ifd(reader: &TiffReader<'_>) -> Option<usize> {
+    let pointer = reader.entry(reader.u32(4)? as usize, EXIF_IFD_POINTER)?;
+    Some(u32::from_le_bytes(pointer.data.get(..4)?.try_into().ok()?) as usize)
+}
+
+/// The name of the lens that took a RAW file.
+pub(crate) fn lens_model(source: &[u8]) -> Option<String> {
+    const LENS_MODEL: u16 = 42036;
+    if source.get(8..12)? == b"crx " {
+        let reader = tiff_reader(cr3_details(source)?)?;
+        return ascii_tag(&reader, reader.u32(4)? as usize, LENS_MODEL);
+    }
+    let data = if source.starts_with(b"FUJIFILMCCD-RAW") { tiff_block(raf_preview(source)?)? } else { tiff_block(source)? };
+    let reader = tiff_reader(data)?;
+    ascii_tag(&reader, details_ifd(&reader)?, LENS_MODEL)
+}
+
+/// When a photo was taken, as `YYYY:MM:DD HH:MM:SS`, from an APP1 payload made by [`export_exif`].
+pub fn capture_time(exif: &[u8]) -> Option<String> {
+    const DATE_TIME: u16 = 306;
+    const DATE_TIME_ORIGINAL: u16 = 36867;
+    let reader = tiff_reader(exif.strip_prefix(EXIF_PREFIX)?)?;
+    details_ifd(&reader)
+        .and_then(|ifd| ascii_tag(&reader, ifd, DATE_TIME_ORIGINAL))
+        .or_else(|| ascii_tag(&reader, reader.u32(4)? as usize, DATE_TIME))
+}
+
+/// Copies capture details from a JPEG, HEIF or TIFF source. Location is deliberately left out.
+fn copy_source_tags(source: &[u8], main: &mut Vec<Entry>, details: &mut Vec<Entry>) -> Option<()> {
+    let reader = tiff_reader(tiff_block(source)?)?;
     let first = reader.u32(4)? as usize;
     main.extend(COPIED_MAIN_TAGS.iter().filter_map(|&tag| reader.entry(first, tag)));
     let pointer = reader.entry(first, EXIF_IFD_POINTER)?;
@@ -536,6 +587,31 @@ pub(crate) mod tests {
         let pointer = main.iter().find(|(tag, _)| *tag == EXIF_IFD_POINTER).unwrap().1;
         let details = entries(&tiff, read_u32(&tiff, pointer) as usize);
         assert_eq!(read_u16(&tiff, details.iter().find(|(tag, _)| *tag == 34855).unwrap().1), 400);
+    }
+
+    #[test]
+    fn capture_time_comes_from_the_details_then_the_main_directory() {
+        let mut main = vec![ascii(306, "2020:01:02 03:04:05")];
+        let mut block = EXIF_PREFIX.to_vec();
+        block.extend(tiff_structure(main.clone(), vec![ascii(36867, "2021:06:07 08:09:10")], |_, _| {}));
+        assert_eq!(capture_time(&block).as_deref(), Some("2021:06:07 08:09:10"));
+
+        main.push(short(274, 1));
+        let mut block = EXIF_PREFIX.to_vec();
+        block.extend(tiff_structure(main, vec![short(40961, 1)], |_, _| {}));
+        assert_eq!(capture_time(&block).as_deref(), Some("2020:01:02 03:04:05"));
+        assert_eq!(capture_time(b"not exif"), None);
+    }
+
+    #[test]
+    fn a_cr3_gives_its_lens_name_from_the_cmt2_box() {
+        let lens = tiff_structure(vec![ascii(42036, "RF50mm F1.8 STM")], vec![], |_, _| {});
+        // The lens tag sits in the first directory of this structure.
+        let mut file = b"\0\0\0\x18ftypcrx \0\0\0\x01crx isom".to_vec();
+        file.extend(((lens.len() + 8) as u32).to_be_bytes());
+        file.extend(b"CMT2");
+        file.extend(&lens);
+        assert_eq!(lens_model(&file).as_deref(), Some("RF50mm F1.8 STM"));
     }
 
     #[test]

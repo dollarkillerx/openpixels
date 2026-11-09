@@ -35,3 +35,8 @@ fetch "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_land
 fetch "https://huggingface.co/opencv/inpainting_lama/resolve/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/inpainting_lama_2025jan.onnx" \
   7df918ac3921d3daf0aae1d219776cf0dc4e4935f035af81841b40adcf74fdf2 \
   web/public/models/lama.onnx
+
+# Sky, water and person segmentation (MIT; trained on ADE20K).
+fetch "https://huggingface.co/Realcat/skywater_seg/resolve/dac255883ec5faf508561a47172096bfd8708db0/skywater_segformer_b2_fp16.onnx" \
+  a4f518e6ace87b3ee473ea2578d00f0fb5f7bf8e4e6a3a49ae368c048c4e47c3 \
+  web/public/models/skywater.onnx

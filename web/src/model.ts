@@ -7,6 +7,16 @@ export const MODEL = {
   std: [0.5, 0.5, 0.5],
 };
 
+/** SkyWater-Seg (MIT), which labels background, sky, water and person. */
+export const SKY_MODEL = {
+  url: "/models/skywater.onnx",
+  size: 384,
+  mean: [0.485, 0.456, 0.406],
+  std: [0.229, 0.224, 0.225],
+  classes: 4,
+  skyClass: 1,
+};
+
 /** LaMa inpainting (Apache-2.0). This export only accepts one input size. */
 export const INPAINT_MODEL = {
   url: "/models/lama.onnx",

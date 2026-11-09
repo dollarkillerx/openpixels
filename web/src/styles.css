@@ -113,6 +113,8 @@ body { background: var(--bg); color: var(--text); }
 .thumb.current { border-color: var(--accent); }
 .thumb { position: relative; }
 .thumb.rejected img { opacity: 0.35; }
+.thumb-score { position: absolute; left: 3px; bottom: 3px; padding: 0 4px; border-radius: 3px; background: rgba(0, 0, 0, 0.65); color: #ddd; font-size: 10px; font-style: normal; line-height: 14px; }
+.thumb-score.best { background: #e3a34b; color: #1a1a1a; }
 .thumb-flag { position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
 .thumb-flag.pick { background: #5bc26a; }
 .thumb-flag.reject { background: #e0564b; }

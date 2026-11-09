@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ColorWheel } from "./ColorWheel";
 import { CropOverlay } from "./CropOverlay";
 import { ToneCurve } from "./ToneCurve";
@@ -6,7 +6,11 @@ import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, sourceToOutput, type Crop } from "./frame";
 import { BUILT_IN_LOOKS, builtInLut, parseCube } from "./lut";
-import { deleteProject, forgetHandle, getLut, listLuts, listProjects, loadErases, recallHandle, recallHandleEntries, rememberHandle, saveErases, saveLut, saveProject, type Project, type StoredLut } from "./store";
+import { deleteProject, forgetHandle, getAsset, getLut, listAssets, listLuts, listProjects, loadAnalyses, loadErases, recallHandle, recallHandleEntries, rememberHandle, saveAnalysis, saveAsset, saveErases, saveLut, saveProject, type Project, type StoredAsset, type StoredLut } from "./store";
+import { analyzeImage, groupPhotos, judgeGroup, type PhotoAnalysis, type Verdict } from "./analysis";
+import { matchColours } from "./colormatch";
+import { locateFaces } from "./face";
+import { BUILT_IN_REPLACEMENTS, REPLACE_BACKGROUND, REPLACE_SKY, builtInReplacement, decodeReplacement } from "./replace";
 import { eraseCrop, rasterizeErase, type EraseDab } from "./erase";
 import { lensToSource, lensView, sourceToLens } from "./lens";
 import { FORMAT_DETAILS, type OutputFormat, type OutputSettings, type Watermark, type WatermarkPosition } from "./output";
@@ -154,6 +158,18 @@ const COMPARE_ALL = 1.01;
 const STAMP_SPACING = 0.35;
 const STAMP_FLUSH_MS = 40;
 const ERASE_SPACING = 0.3;
+const ANALYSIS_LONG_EDGE = 1024;
+const MATCH_LONG_EDGE = 256;
+/** `groupFilter` value showing only the best photo of each group. */
+const GROUP_BEST = -1;
+
+/** Milliseconds for a `YYYY:MM:DD HH:MM:SS` capture time. Only differences between them matter. */
+function captureMillis(text: string | null) {
+  const match = text?.match(/^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+  if (!match) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+  return Date.UTC(year, month - 1, day, hour, minute, second);
+}
 const FLAG_PICK = 1;
 const FLAG_REJECT = -1;
 const FLAG_KEYS: Record<string, number> = { p: FLAG_PICK, x: FLAG_REJECT, u: 0 };
@@ -195,7 +211,7 @@ function thumbnailUrl({ rgb, width, height }: Thumbnail): string {
 }
 
 /** The analysis a saved edit needs before it can be rendered. */
-const needsSubject = (edit: Adjustments) => (edit.backgroundExposure ?? 0) !== 0;
+const needsSubject = (edit: Adjustments) => (edit.backgroundExposure ?? 0) !== 0 || edit.replaceMode === REPLACE_BACKGROUND;
 const needsSkin = (edit: Adjustments) => (edit.skinSmooth ?? 0) !== 0 || (edit.skinBlemish ?? 0) !== 0;
 
 const isDifferentImage = (error: unknown) => error instanceof Error && error.message === STALE;
@@ -248,6 +264,13 @@ export function App() {
   const [ratings, setRatings] = useState<Record<string, number>>(loadRatings);
   const [flags, setFlags] = useState<Record<string, number>>(loadFlags);
   const [flagFilter, setFlagFilter] = useState(0);
+  const [analyses, setAnalyses] = useState<Record<string, PhotoAnalysis>>({});
+  const [analyzing, setAnalyzing] = useState<{ done: number; total: number } | null>(null);
+  const [cullStatus, setCullStatus] = useState("");
+  const [groupFilter, setGroupFilter] = useState(0);
+  const [replaceAssets, setReplaceAssets] = useState<StoredAsset[]>([]);
+  const [matchReference, setMatchReference] = useState("");
+  const [matching, setMatching] = useState(false);
   const [compare, setCompare] = useState(0);
   const compareHeldRef = useRef<number | null>(null);
   const compareDragRef = useRef(false);
@@ -290,7 +313,21 @@ export function App() {
     const flag = flags[id] ?? 0;
     return flagFilter === 0 || (flagFilter === 2 ? flag !== FLAG_REJECT : flag === flagFilter);
   };
-  const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating && passesFlag(photo.id));
+  const { groupOf, verdicts, groupCount } = useMemo(() => {
+    const items = photos.filter((photo) => analyses[photo.id]).map((photo) => ({ id: photo.id, analysis: analyses[photo.id] }));
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const groups = groupPhotos(items);
+    const groupOf = new Map<string, number>();
+    const verdicts = new Map<string, Verdict>();
+    groups.forEach((ids, index) => {
+      ids.forEach((id) => groupOf.set(id, index + 1));
+      judgeGroup(ids.map((id) => byId.get(id)!)).forEach((verdict, id) => verdicts.set(id, verdict));
+    });
+    return { groupOf, verdicts, groupCount: groups.length };
+  }, [photos, analyses]);
+  const passesGroup = (id: string) =>
+    groupFilter === 0 || (groupFilter === GROUP_BEST ? verdicts.get(id)?.best !== false : groupOf.get(id) === groupFilter);
+  const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating && passesFlag(photo.id) && passesGroup(photo.id));
   // An erase takes seconds and lands on the photo it started on.
   const locked = batchRunning || erasing;
   const projectOfActive = projects.find((item) => item.id === activeProject) ?? null;
@@ -343,6 +380,13 @@ export function App() {
   const resolveLook = useCallback(async (id: number) => {
     if (!id) return null;
     return builtInLut(id) ?? (await getLut(id).catch(() => undefined)) ?? null;
+  }, []);
+
+  const resolveReplace = useCallback(async (id: number) => {
+    const builtIn = builtInReplacement(id);
+    if (builtIn) return builtIn;
+    const asset = await getAsset(id).catch(() => undefined);
+    return asset ? decodeReplacement(asset.blob) : null;
   }, []);
 
   const refreshThumbnail = useCallback(async (id: string) => {
@@ -441,6 +485,11 @@ export function App() {
           if (ticket === openTicketRef.current) setMaskStats(stats);
           setDetecting(false);
         }
+        if (edit.replaceMode === REPLACE_SKY) {
+          setDetecting(true);
+          await engineRef.current!.detectSky();
+          setDetecting(false);
+        }
         if (needsSkin(edit)) {
           setFindingFaces(true);
           const stats = await engineRef.current!.prepareSkin(result.proxyWidth, result.proxyHeight);
@@ -504,6 +553,24 @@ export function App() {
 
   // The look follows the edit, whatever changed it: a slider, undo, a preset or a new photo.
   const lookId = adjustments.lutId ?? 0;
+  const replaceMode = adjustments.replaceMode ?? 0;
+  const replaceAsset = adjustments.replaceAsset ?? 0;
+
+  useEffect(() => {
+    if (!ready || !loaded || !replaceMode) return;
+    let cancelled = false;
+    void resolveReplace(replaceAsset).then((image) => {
+      if (!cancelled && image) void engineRef.current?.setReplaceImage(image);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, loaded, replaceMode, replaceAsset, resolveReplace]);
+
+  useEffect(() => {
+    void loadAnalyses().then(setAnalyses).catch(() => {});
+    void listAssets().then(setReplaceAssets).catch(() => {});
+  }, []);
   useEffect(() => {
     if (!ready || !loaded) return;
     let cancelled = false;
@@ -943,6 +1010,133 @@ export function App() {
     if (!loaded || s < 0 || s > 1 || t < 0 || t > 1) return null;
     const shown = outputToSource(s, t, adjustments, loaded.width, loaded.height);
     return lens ? lensToSource(lens, shown.x, shown.y) : shown;
+  };
+
+  const findReplaceMask = async (mode: number) => {
+    if (!loaded) return;
+    const ticket = openTicketRef.current;
+    setDetecting(true);
+    setError("");
+    try {
+      if (mode === REPLACE_BACKGROUND) {
+        const stats = await engineRef.current!.detectSubject(loaded.proxyWidth, loaded.proxyHeight);
+        if (ticket === openTicketRef.current) setMaskStats(stats);
+      } else if (mode === REPLACE_SKY) {
+        await engineRef.current!.detectSky();
+      }
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setDetecting(false);
+      if (currentId) void refreshThumbnail(currentId).catch(() => {});
+    }
+  };
+
+  const chooseReplaceMode = (mode: number) => {
+    const fits = (id: number) =>
+      BUILT_IN_REPLACEMENTS.some((item) => item.id === id && item.mode === mode) || replaceAssets.some((item) => item.id === id && item.mode === mode);
+    const asset = fits(replaceAsset) ? replaceAsset : (BUILT_IN_REPLACEMENTS.find((item) => item.mode === mode)?.id ?? 0);
+    applyEdit({ ...adjustments, replaceMode: mode, replaceAsset: asset, replaceAmount: adjustments.replaceAmount || 1 }, true);
+    void findReplaceMask(mode);
+  };
+
+  const importReplacement = async (file: File | undefined) => {
+    if (!file || !replaceMode) return;
+    try {
+      await decodeReplacement(file);
+      const stored = await saveAsset(file.name, replaceMode, file);
+      setReplaceAssets((list) => [...list, stored]);
+      applyEdit({ ...adjustments, replaceAsset: stored.id }, true);
+    } catch {
+      setError("无法读取这张图片");
+    }
+  };
+
+  /** Builds a look from a reference, measured on this photo as it is without one. */
+  const runColourMatch = async (reference: Blob, name: string) => {
+    if (!loaded) return;
+    const engine = engineRef.current!;
+    setMatching(true);
+    setError("");
+    try {
+      const bitmap = await createImageBitmap(reference);
+      const scale = Math.min(1, MATCH_LONG_EDGE / Math.max(bitmap.width, bitmap.height));
+      const [width, height] = [Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))];
+      const context = new OffscreenCanvas(width, height).getContext("2d", { willReadFrequently: true })!;
+      context.drawImage(bitmap, 0, 0, width, height);
+      bitmap.close();
+      await engine.setLook(null);
+      const thumbnail = await engine.thumbnail(MATCH_LONG_EDGE, false);
+      const lut = matchColours(new Uint8Array(thumbnail.rgb), 3, context.getImageData(0, 0, width, height).data, 4);
+      const stored = await saveLut(`追色 ${name}`, lut);
+      setImportedLuts((list) => [...list, stored]);
+      applyEdit({ ...adjustments, lutId: stored.id, lutAmount: 1 }, true);
+    } catch (reason) {
+      setError(reason instanceof DOMException ? "浏览器读不了这个文件。RAW 请先打开一次，再用它作参考。" : `追色失败：${(reason as Error).message}`);
+      await engine.setLook(await resolveLook(lookId));
+    } finally {
+      setMatching(false);
+    }
+  };
+
+  const matchFromStrip = async () => {
+    const photo = photos.find((item) => item.id === matchReference);
+    if (!photo) return;
+    // A thumbnail shows its edits; otherwise read the file, which the browser cannot do for RAW.
+    const reference = photo.thumbnail ? await (await fetch(photo.thumbnail)).blob() : photo.file;
+    await runColourMatch(reference, photo.file.name.replace(/\.[^.]+$/, ""));
+  };
+
+  const runAnalysis = async () => {
+    if (!current) return;
+    const engine = engineRef.current!;
+    const returnTo = current;
+    const pending = photos.filter((photo) => !analyses[photo.id]);
+    setCullStatus("");
+    setError("");
+    if (pending.length === 0) {
+      setCullStatus(`${photos.length} 张都已分析过，共 ${groupCount} 组。`);
+      return;
+    }
+    flushPendingEdit();
+    setBatchRunning(true);
+    setAnalyzing({ done: 0, total: pending.length });
+    try {
+      for (const [index, photo] of pending.entries()) {
+        const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
+        const result = await openPhoto(photo, edit, loadHeals(photo.id), loadWarps(photo.id));
+        const thumbnail = await engine.thumbnail(ANALYSIS_LONG_EDGE, false);
+        const faces = await locateFaces(thumbnail);
+        const captured = captureMillis(result.captureTime);
+        const analysis = analyzeImage(new Uint8Array(thumbnail.rgb), thumbnail.width, thumbnail.height, faces, captured ?? photo.file.lastModified, captured !== null);
+        await saveAnalysis(photo.id, analysis);
+        setAnalyses((all) => ({ ...all, [photo.id]: analysis }));
+        setAnalyzing({ done: index + 1, total: pending.length });
+      }
+    } catch (reason) {
+      setError(`分析失败：${(reason as Error).message}`);
+    } finally {
+      setBatchRunning(false);
+      setAnalyzing(null);
+      await selectPhoto(returnTo);
+    }
+  };
+
+  /** Flags the best and the clearly failed shots of each group, keeping manual flags. */
+  const autoPick = () => {
+    let [picked, rejected] = [0, 0];
+    for (const photo of photos) {
+      const verdict = verdicts.get(photo.id);
+      if (!verdict || flags[photo.id]) continue;
+      if (verdict.best) {
+        flag(photo.id, FLAG_PICK);
+        picked++;
+      } else if (verdict.reject) {
+        flag(photo.id, FLAG_REJECT);
+        rejected++;
+      }
+    }
+    setCullStatus(`选中 ${picked} 张，淘汰 ${rejected} 张。已手动标记的照片没有改动。`);
   };
 
   const importLut = async (file: File | undefined) => {
@@ -1418,6 +1612,11 @@ export function App() {
             result.proxyHeight,
           );
         }
+        if (edit.replaceMode) {
+          const image = await resolveReplace(edit.replaceAsset ?? 0);
+          if (image) await engine.setReplaceImage(image);
+        }
+        if (edit.replaceMode === REPLACE_SKY) await engine.detectSky();
         if (needsSubject(edit)) await engine.detectSubject(result.proxyWidth, result.proxyHeight);
         if (needsSkin(edit)) await engine.prepareSkin(result.proxyWidth, result.proxyHeight);
         const { bytes, heapMB: heap } = await engine.exportImage(output);
@@ -1599,6 +1798,7 @@ export function App() {
                 onClick={() => void selectPhoto(photo)}
               >
                 {photo.thumbnail ? <img src={photo.thumbnail} alt={photo.file.name} /> : <span>{photo.file.name}</span>}
+                {groupOf.has(photo.id) && <i className={`thumb-score ${verdicts.get(photo.id)?.best ? "best" : ""}`} title="分组 · 评分">{groupOf.get(photo.id)} · {verdicts.get(photo.id)?.score}</i>}
                 {flags[photo.id] === FLAG_PICK && <i className="thumb-flag pick" aria-label="已选中" />}
                 {flags[photo.id] === FLAG_REJECT && <i className="thumb-flag reject" aria-label="已淘汰" />}
               </button>
@@ -1695,6 +1895,20 @@ export function App() {
                 <option value={FLAG_REJECT}>只看淘汰</option>
               </select>
             </div>
+            <div className="row">
+              <button className="button secondary" disabled={!current || locked} onClick={() => void runAnalysis()}>分析并分组</button>
+              <button className="button secondary" disabled={verdicts.size === 0 || locked} onClick={autoPick}>自动选片</button>
+              <select aria-label="分组筛选" value={groupFilter} disabled={locked || verdicts.size === 0} onChange={(event) => setGroupFilter(Number(event.target.value))}>
+                <option value={0}>全部分组</option>
+                <option value={GROUP_BEST}>每组最佳</option>
+                {Array.from({ length: groupCount }, (_, index) => (
+                  <option key={index} value={index + 1}>第 {index + 1} 组</option>
+                ))}
+              </select>
+            </div>
+            {(analyzing || cullStatus) && (
+              <p className="progress" data-testid="cull-status">{analyzing ? `正在分析 ${analyzing.done}/${analyzing.total}…` : cullStatus}</p>
+            )}
           </section>
         )}
 
@@ -1756,17 +1970,23 @@ export function App() {
           <label className="check">
             <input
               type="checkbox"
-              aria-label="使用文件内的镜头校正"
+              aria-label="使用自动镜头校正"
               checked={!!loaded?.lens && !!adjustments.lensAuto}
               disabled={!loaded?.lens || locked}
               onChange={(event) => setValue("lensAuto", event.target.checked ? 1 : 0)}
             />
-            使用文件内的镜头校正
+            使用自动镜头校正
           </label>
           {loaded?.isRaw && (
             <p className="progress" data-testid="camera-status">
               {loaded.cameraMatch ? "已按机内 JPEG 拟合相机色彩。" : "默认色彩已接近机内 JPEG，无需相机匹配。"}
-              {loaded.lens ? "文件内含镜头数据。" : "文件没有可用的镜头数据，可用下方滑块手动校正。"}
+              {loaded.lensSource === "lensfun"
+                ? `Lensfun 镜头库有 ${loaded.lensQuery?.lens} 的校正数据（CC BY-SA 3.0），勾选上方选项后生效。`
+                : loaded.lens
+                  ? "文件内含镜头数据。"
+                  : loaded.lensQuery
+                    ? `镜头库里没有 ${loaded.lensQuery.lens} 的数据，可用下方滑块手动校正。`
+                    : "文件没有可用的镜头数据，可用下方滑块手动校正。"}
             </p>
           )}
         </section>
@@ -1808,6 +2028,30 @@ export function App() {
             <output>{(adjustments.lutAmount ?? 0).toFixed(2)}</output>
             <input aria-label="滤镜强度" type="range" min={0} max={1} step={0.01} value={adjustments.lutAmount ?? 0} disabled={!lookId || locked} onChange={(event) => setValue("lutAmount", Number(event.target.value))} />
           </label>
+          <div className="row">
+            <select aria-label="追色参考" value={matchReference} disabled={!loaded || locked || matching} onChange={(event) => setMatchReference(event.target.value)}>
+              <option value="">选择参考照片</option>
+              {photos.filter((photo) => photo.id !== currentId).map((photo) => (
+                <option key={photo.id} value={photo.id}>{photo.file.name}</option>
+              ))}
+            </select>
+            <button className="button secondary" disabled={!matchReference || !loaded || locked || matching} onClick={() => void matchFromStrip()}>{matching ? "追色中…" : "追色"}</button>
+            <label className={`button secondary ${!loaded || locked || matching ? "disabled" : ""}`}>
+              导入参考图
+              <input
+                type="file"
+                hidden
+                accept="image/*"
+                aria-label="导入追色参考图"
+                disabled={!loaded || locked || matching}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void runColourMatch(file, file.name.replace(/\.[^.]+$/, ""));
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          </div>
         </section>
 
         <section>
@@ -1894,6 +2138,47 @@ export function App() {
               onDoubleClick={() => setValue("backgroundExposure", 0)}
             />
           </label>
+        </section>
+
+        <section>
+          <h2>换背景 / 换天</h2>
+          <div className="row">
+            <select aria-label="替换内容" value={replaceMode} disabled={!loaded || locked} onChange={(event) => chooseReplaceMode(Number(event.target.value))}>
+              <option value={0}>不替换</option>
+              <option value={REPLACE_BACKGROUND}>换背景</option>
+              <option value={REPLACE_SKY}>换天</option>
+            </select>
+            <select aria-label="替换素材" value={replaceAsset} disabled={!replaceMode || locked} onChange={(event) => setValue("replaceAsset", Number(event.target.value))}>
+              {BUILT_IN_REPLACEMENTS.filter((item) => item.mode === replaceMode).map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+              {replaceAssets.filter((item) => item.mode === replaceMode).map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+            <label className={`button secondary ${!replaceMode || locked ? "disabled" : ""}`}>
+              导入图片
+              <input
+                type="file"
+                hidden
+                accept="image/*"
+                aria-label="导入替换图片"
+                disabled={!replaceMode || locked}
+                onChange={(event) => {
+                  void importReplacement(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          {detecting && replaceMode > 0 && <p className="progress">正在识别…</p>}
+          {([["融合强度", "replaceAmount", 0, 1], ["替换亮度", "replaceExposure", -3, 3], ["上下位置", "replaceShift", -0.5, 0.5]] as const).map(([label, key, min, max]) => (
+            <label className="slider" key={key}>
+              <span>{label}</span>
+              <output>{(adjustments[key] ?? 0).toFixed(2)}</output>
+              <input aria-label={label} type="range" min={min} max={max} step={0.01} value={adjustments[key] ?? 0} disabled={!replaceMode || locked} onChange={(event) => setValue(key, Number(event.target.value))} />
+            </label>
+          ))}
         </section>
 
         <section>

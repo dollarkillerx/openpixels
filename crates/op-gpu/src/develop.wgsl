@@ -42,6 +42,10 @@ struct Adjustments {
     perspective: vec2<f32>,
     padding: vec2<f32>,
     local_range: array<vec4<f32>, 4>,
+    replace_mode: f32,
+    replace_exposure: f32,
+    replace_shift: f32,
+    replace_amount: f32,
 }
 
 struct Region {
@@ -76,6 +80,9 @@ struct Region {
 @group(0) @binding(3) var<uniform> region: Region;
 // Subject mask spanning the whole image; 1 is subject, 0 is background.
 @group(0) @binding(4) var subject_mask: texture_2d<f32>;
+// Replacement image, sampled as linear light, and where the sky is.
+@group(0) @binding(14) var replace_image: texture_2d<f32>;
+@group(0) @binding(15) var sky_mask: texture_2d<f32>;
 @group(0) @binding(5) var mask_sampler: sampler;
 // Heavily blurred scene-linear luminance of the whole image, for clarity.
 @group(0) @binding(6) var blurred_luma: texture_2d<f32>;
@@ -490,6 +497,27 @@ fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
 }
 
 // 16 * 16 = 256 invocations, the WebGPU default limit per workgroup.
+// Blends in the replacement image. Comes after the tone and colour edits, which are
+// tuned to the photo, and before the look and grain, which unify the two.
+fn apply_replacement(rgb: vec3<f32>, uv: vec2<f32>, background: f32) -> vec3<f32> {
+    if adj.replace_mode == 0.0 {
+        return rgb;
+    }
+    var alpha = background;
+    if adj.replace_mode == 2.0 {
+        // Tightened, because a half-covered edge lets the old, usually brighter sky through.
+        alpha = smoothstep(0.3, 0.7, textureSampleLevel(sky_mask, mask_sampler, uv, 0.0).r);
+    }
+    // Fills the frame without stretching, showing the centre of what does not fit.
+    let image_size = vec2<f32>(textureDimensions(replace_image));
+    let ratio = (region.full_size.x / region.full_size.y) / (image_size.x / image_size.y);
+    let visible = select(vec2<f32>(1.0, 1.0 / ratio), vec2<f32>(ratio, 1.0), ratio < 1.0);
+    var at = (uv - 0.5) * visible + 0.5;
+    at.y -= adj.replace_shift;
+    let fill = textureSampleLevel(replace_image, mask_sampler, at, 0.0).rgb * pow(2.0, adj.replace_exposure);
+    return mix(rgb, fill, clamp(alpha * adj.replace_amount, 0.0, 1.0));
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if f32(id.x) >= region.extent.x || f32(id.y) >= region.extent.y {
@@ -527,6 +555,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = apply_hsl(rgb);
     rgb = apply_color(rgb);
     rgb = apply_vignette(rgb, pixel);
+    rgb = apply_replacement(rgb, uv, background);
 
     let tint = vec3<f32>(0.95, 0.2, 0.35);
     var display = mix(apply_grain(apply_look(linear_to_srgb(rgb)), pixel), tint, adj.mask_overlay * background * 0.65);

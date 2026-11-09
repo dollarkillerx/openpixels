@@ -2,7 +2,8 @@ import { buildSkinMask } from "./face";
 import type { Lut } from "./lut";
 import type { OutputSettings } from "./output";
 import type { EraseCrop } from "./erase";
-import { INPAINT_MODEL, MODEL, modelInputSize } from "./model";
+import { INPAINT_MODEL, MODEL, SKY_MODEL, modelInputSize } from "./model";
+import type { ReplaceImage } from "./replace";
 import type {
   Adjustments,
   EngineRequest,
@@ -195,26 +196,34 @@ export class EngineClient {
     return { faces: skin.faces, ms: performance.now() - start };
   }
 
-  /** Runs the matting model on the open image and applies the result as its mask. */
-  async detectSubject(proxyWidth: number, proxyHeight: number): Promise<MaskStats> {
-    const size = modelInputSize(proxyWidth, proxyHeight);
-    const input = await this.call<ModelInput>({
-      type: "modelInput",
-      ...size,
-      mean: MODEL.mean,
-      std: MODEL.std,
-    });
-
+  private async segment(model: SegmentRequest["model"], size: { width: number; height: number }, mean: number[], std: number[]) {
+    const input = await this.call<ModelInput>({ type: "modelInput", ...size, mean, std });
     const id = this.nextId++;
     const reply = await new Promise<SegmentReply>((resolve) => {
       this.pendingSegments.set(id, resolve);
-      const request: SegmentRequest = { id, tensor: input.tensor, ...size };
+      const request: SegmentRequest = { id, model, tensor: input.tensor, ...size };
       this.aiWorker.postMessage(request, [input.tensor]);
     });
     if ("error" in reply) throw new Error(reply.error);
+    return { ...reply, inputMs: input.ms };
+  }
 
-    const { mask, width, height, loadMs, inferMs } = reply;
+  /** Runs the matting model on the open image and applies the result as its mask. */
+  async detectSubject(proxyWidth: number, proxyHeight: number): Promise<MaskStats> {
+    const { mask, width, height, inputMs, loadMs, inferMs } = await this.segment("matte", modelInputSize(proxyWidth, proxyHeight), MODEL.mean, MODEL.std);
     await this.call<void>({ type: "setMask", mask, width, height }, [mask]);
-    return { inputMs: input.ms, loadMs, inferMs };
+    return { inputMs, loadMs, inferMs };
+  }
+
+  /** Finds the sky in the open image, for replacing it. */
+  async detectSky(): Promise<MaskStats> {
+    const size = { width: SKY_MODEL.size, height: SKY_MODEL.size };
+    const { mask, width, height, inputMs, loadMs, inferMs } = await this.segment("sky", size, SKY_MODEL.mean, SKY_MODEL.std);
+    await this.call<void>({ type: "setSkyMask", mask, width, height }, [mask]);
+    return { inputMs, loadMs, inferMs };
+  }
+
+  setReplaceImage({ rgba, width, height }: ReplaceImage) {
+    return this.call<void>({ type: "setReplaceImage", rgba, width, height }, [rgba]);
   }
 }

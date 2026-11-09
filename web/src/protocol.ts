@@ -37,6 +37,14 @@ export interface WarpStroke {
   strength: number;
 }
 
+/** What identifies a shot's lens. See `LensQuery` in op-core. */
+export interface LensQuery {
+  camera: string;
+  lens: string;
+  focal: number;
+  aperture: number | null;
+}
+
 export interface LoadResult {
   width: number;
   height: number;
@@ -44,6 +52,11 @@ export interface LoadResult {
   camera: string | null;
   baseExposure: number | null;
   lens: LensProfile | null;
+  lensQuery: LensQuery | null;
+  /** Set when the corrections came from the lens database and not the file. */
+  lensSource?: "lensfun";
+  /** `YYYY:MM:DD HH:MM:SS`, when the file records it. */
+  captureTime: string | null;
   cameraMatch: boolean;
   proxyWidth: number;
   proxyHeight: number;
@@ -106,6 +119,8 @@ export type EngineRequest =
     }
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
   | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }
+  | { type: "setSkyMask"; mask: ArrayBuffer; width: number; height: number }
+  | { type: "setReplaceImage"; rgba: ArrayBuffer; width: number; height: number }
   | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number }
   | { type: "setLocalMask"; mask: ArrayBuffer; width: number; height: number }
   | { type: "setLook"; size: number; data: ArrayBuffer };
@@ -123,6 +138,7 @@ export type FromWorker =
 
 export interface SegmentRequest {
   id: number;
+  model: "matte" | "sky";
   tensor: ArrayBuffer;
   width: number;
   height: number;

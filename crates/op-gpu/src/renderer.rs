@@ -106,6 +106,8 @@ pub struct Renderer {
     curve_texture: wgpu::Texture,
     curve_view: wgpu::TextureView,
     look_view: wgpu::TextureView,
+    replace_view: wgpu::TextureView,
+    sky_mask_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     lens_profile: Option<LensProfile>,
     camera_matrix: Option<[[f32; 3]; 3]>,
@@ -191,6 +193,8 @@ impl Renderer {
         });
         let curve_view = curve_texture.create_view(&Default::default());
         let look_view = create_look_view(&device, &queue, 2, &IDENTITY_LOOK);
+        let replace_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
+        let sky_mask_view = create_mask_view(&device, &queue, 1, 1, &[0]);
 
         Self {
             device,
@@ -214,6 +218,8 @@ impl Renderer {
             curve_texture,
             curve_view,
             look_view,
+            replace_view,
+            sky_mask_view,
             base_exposure: None,
             lens_profile: None,
             camera_matrix: None,
@@ -224,6 +230,11 @@ impl Renderer {
     /// Enables the default RAW look with an exposure offset in EV, or disables it for
     /// images that already have a tone curve.
     /// Sets what the open file says about its lens and its camera's colour.
+    /// Replaces the lens corrections, for lenses the file itself says nothing about.
+    pub fn set_lens_profile(&mut self, lens: LensProfile) {
+        self.lens_profile = Some(lens);
+    }
+
     pub fn set_camera_data(&mut self, lens: Option<LensProfile>, matrix: Option<[[f32; 3]; 3]>) {
         self.lens_profile = lens;
         self.camera_matrix = matrix;
@@ -240,6 +251,18 @@ impl Renderer {
 
     /// Sets the subject mask for the current image. `mask` holds `width * height`
     /// bytes covering the whole image, at any resolution.
+    /// Sets the image that replaces the background or sky, straight sRGB RGBA8.
+    pub fn set_replace_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.replace_view = create_replace_view(&self.device, &self.queue, width, height, rgba);
+        self.rebuild_preview_bindings();
+    }
+
+    /// Sets where the sky is, `width * height` bytes covering the whole image.
+    pub fn set_sky_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
+        self.sky_mask_view = create_mask_view(&self.device, &self.queue, width, height, mask);
+        self.rebuild_preview_bindings();
+    }
+
     pub fn set_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
         self.mask_view = create_mask_view(&self.device, &self.queue, width, height, mask);
         self.rebuild_preview_bindings();
@@ -756,6 +779,14 @@ impl Renderer {
                     binding: 13,
                     resource: wgpu::BindingResource::TextureView(&self.haze_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&self.replace_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(&self.sky_mask_view),
+                },
             ],
         })
     }
@@ -895,6 +926,8 @@ fn develop_pass(device: &wgpu::Device, format: wgpu::TextureFormat, shader: &str
             },
             texture_entry(12, wgpu::ShaderStages::COMPUTE, true),
             texture_entry(13, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(14, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(15, wgpu::ShaderStages::COMPUTE, true),
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -928,6 +961,30 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8, exif: Optio
         jpeg_encoder::ColorType::Rgb,
     )?;
     Ok(out)
+}
+
+fn create_replace_view(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8]) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("replacement"),
+        size: extent(width, height),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        extent(width, height),
+    );
+    texture.create_view(&Default::default())
 }
 
 fn create_mask_view(
@@ -1266,6 +1323,49 @@ mod tests {
             }
         }
         LinearImage::new(width, height, pixels)
+    }
+
+    #[test]
+    fn replacing_the_background_keeps_the_subject_and_fills_the_rest() {
+        let mut renderer = renderer();
+        renderer.set_mask(2, 1, &[255, 0]);
+        renderer.set_replace_image(1, 1, &[188, 188, 188, 255]);
+        let image = flat_gray(64, 16);
+        let adj = Adjustments { replace_mode: 1.0, replace_amount: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        let at = |x: usize| out[(8 * 64 + x) * 3];
+        assert_eq!(at(60), 188, "background");
+        assert!(at(2).abs_diff(export(&renderer, &image, &Adjustments::default(), 64)[2 * 3]) <= 1, "subject");
+    }
+
+    #[test]
+    fn replacing_the_sky_follows_its_own_mask_and_keeps_tiles_identical() {
+        let mut renderer = renderer();
+        renderer.set_sky_mask(1, 2, &[255, 0]);
+        renderer.set_replace_image(2, 2, &[230, 40, 40, 255, 40, 40, 230, 255, 230, 40, 40, 255, 40, 40, 230, 255]);
+        let image = flat_gray(64, 64);
+        let adj = Adjustments { replace_mode: 2.0, replace_amount: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 512);
+        let plain = export(&renderer, &image, &Adjustments::default(), 512);
+        assert!(out[(2 * 64 + 4) * 3].abs_diff(230) <= 8, "sky takes the replacement");
+        assert_eq!(out[(61 * 64 + 4) * 3], plain[(61 * 64 + 4) * 3], "the ground is untouched");
+        assert_eq!(out, export(&renderer, &image, &adj, 16));
+    }
+
+    #[test]
+    fn a_replacement_fills_the_frame_without_stretching() {
+        let mut renderer = renderer();
+        renderer.set_mask(1, 1, &[0]);
+        // A wide image, of which a square frame only shows the middle half.
+        let mut rgba = Vec::new();
+        for x in 0..4 {
+            rgba.extend(if x == 1 || x == 2 { [200, 200, 200, 255] } else { [20, 20, 20, 255] });
+        }
+        renderer.set_replace_image(4, 1, &rgba);
+        let image = flat_gray(32, 32);
+        let adj = Adjustments { replace_mode: 1.0, replace_amount: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        assert!(out[(16 * 32 + 2) * 3] > 150 && out[(16 * 32 + 29) * 3] > 150, "only the middle shows");
     }
 
     #[test]

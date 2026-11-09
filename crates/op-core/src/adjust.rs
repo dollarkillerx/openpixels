@@ -74,6 +74,13 @@ pub struct Adjustments {
     /// Per local layer: lightest-to-darkest limits, then hue in degrees and hue half
     /// width. A zero upper limit means the layer has no range.
     pub local_range: [[f32; 4]; 4],
+    /// 0 is off, 1 replaces the background, 2 replaces the sky.
+    pub replace_mode: f32,
+    /// Brightness of the replacement, in EV.
+    pub replace_exposure: f32,
+    /// Moves the replacement up (negative) or down (positive), as a fraction of its height.
+    pub replace_shift: f32,
+    pub replace_amount: f32,
 }
 
 /// The white balance sliders' travel either way.
@@ -105,7 +112,7 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 16);
     }
 
     #[test]

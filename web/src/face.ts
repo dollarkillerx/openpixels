@@ -1,4 +1,5 @@
 import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import type { FaceFinding } from "./analysis";
 import type { Thumbnail } from "./protocol";
 
 const MODEL_URL = "/models/face_landmarker.task";
@@ -46,6 +47,7 @@ function getLandmarker(): Promise<FaceLandmarker> {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
       runningMode: "IMAGE",
       numFaces: MAX_FACES,
+      outputFaceBlendshapes: true,
     });
   })();
   return landmarker;
@@ -182,6 +184,21 @@ async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promis
  * or a tight close-up, the whole frame is passed on and the retouch's own colour
  * checks decide what is skin; `faces` is then 0.
  */
+/** Where the faces are in a thumbnail, and how open their eyes are. */
+export async function locateFaces(thumbnail: Thumbnail): Promise<FaceFinding[]> {
+  const detector = await getLandmarker();
+  const { faceLandmarks, faceBlendshapes } = detector.detect(toImageData(thumbnail));
+  return faceLandmarks.map((landmarks, index) => {
+    const xs = landmarks.map((point) => point.x * thumbnail.width);
+    const ys = landmarks.map((point) => point.y * thumbnail.height);
+    const shape = (name: string) => faceBlendshapes[index]?.categories.find((item) => item.categoryName === name)?.score ?? 0;
+    return {
+      box: { left: Math.max(0, Math.min(...xs)), top: Math.max(0, Math.min(...ys)), right: Math.min(thumbnail.width, Math.max(...xs)), bottom: Math.min(thumbnail.height, Math.max(...ys)) },
+      blink: Math.min(shape("eyeBlinkLeft"), shape("eyeBlinkRight")),
+    };
+  });
+}
+
 export async function buildSkinMask(
   thumbnail: Thumbnail,
   detailed: () => Promise<Thumbnail>,
