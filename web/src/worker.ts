@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { decodeHeic, isHeic } from "./heic";
 import init, { Engine } from "./wasm-pkg/op_wasm";
 import { engineJson } from "./library";
 import type {
@@ -124,7 +125,15 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       const fileMB = request.buffer.byteLength / 1048576;
       hasImage = false;
       const t0 = performance.now();
-      const info = JSON.parse(engine!.decode(new Uint8Array(request.buffer)));
+      const bytes = new Uint8Array(request.buffer);
+      let decoded: string;
+      if (isHeic(bytes)) {
+        const raster = await decodeHeic(bytes);
+        decoded = engine!.decode_rgba(raster.rgba, raster.width, raster.height);
+      } else {
+        decoded = engine!.decode(bytes);
+      }
+      const info = JSON.parse(decoded);
       const t1 = performance.now();
       const proxy = JSON.parse(engine!.build_proxy(PROXY_LONG_EDGE));
       engine!.set_warp_strokes(JSON.stringify(request.warps));

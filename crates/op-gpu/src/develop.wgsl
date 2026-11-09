@@ -32,6 +32,9 @@ struct Adjustments {
     grade: array<vec4<f32>, 3>,
     local_overlay: f32,
     lut_amount: f32,
+    camera_profile: f32,
+    lens_auto: f32,
+    lens_manual: vec4<f32>,
 }
 
 struct Region {
@@ -48,6 +51,14 @@ struct Region {
     source_offset: vec2<f32>,
     // Pixels of valid data in the source texture.
     source_size: vec2<f32>,
+    // Lens light falloff correction: gain minus 1 over r², r⁴, r⁶, r⁸.
+    lens_vignette: vec4<f32>,
+    // Half size of the image with the half diagonal as 1.
+    lens_aspect: vec2<f32>,
+    // Colour matrix already blended by strength; the rows' w components are unused.
+    camera_red: vec4<f32>,
+    camera_green: vec4<f32>,
+    camera_blue: vec4<f32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -82,6 +93,17 @@ const LOOK_KNEE = 0.348;
 fn look_curve(x: f32) -> f32 {
     let toe = pow(max(x, 0.0), LOOK_CONTRAST);
     return toe / (toe + LOOK_KNEE);
+}
+
+fn apply_lens_light(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    let position = ((pixel + 0.5) / region.full_size - 0.5) * 2.0 * region.lens_aspect;
+    let r2 = dot(position, position);
+    let v = region.lens_vignette;
+    return rgb * max(1.0 + r2 * (v.x + r2 * (v.y + r2 * (v.z + r2 * v.w))), 0.0);
+}
+
+fn apply_camera_matrix(rgb: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(region.camera_red.xyz, rgb), dot(region.camera_green.xyz, rgb), dot(region.camera_blue.xyz, rgb));
 }
 
 // Turns sensor-referred RAW data into a display-referred image.
@@ -375,6 +397,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var rgb = apply_denoise(source_at(source_pixel), source_pixel);
     rgb = apply_sharpen(rgb, source_pixel);
     rgb = apply_skin(rgb, uv);
+    rgb = apply_lens_light(rgb, pixel);
+    rgb = apply_camera_matrix(rgb);
     rgb = white_balance(rgb);
     let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background + local_values.x);
     rgb *= scene_gain;

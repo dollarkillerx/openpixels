@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ColorWheel } from "./ColorWheel";
 import { CropOverlay } from "./CropOverlay";
 import { ToneCurve } from "./ToneCurve";
 import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, sourceToOutput, type Crop } from "./frame";
 import { BUILT_IN_LOOKS, builtInLut, parseCube } from "./lut";
-import { forgetHandles, getLut, listLuts, recallHandles, rememberHandle, saveLut, type StoredLut } from "./store";
+import { deleteProject, forgetHandle, getLut, listLuts, listProjects, recallHandle, recallHandleEntries, rememberHandle, saveLut, saveProject, type Project, type StoredLut } from "./store";
+import { lensToSource, lensView, sourceToLens } from "./lens";
+import { ProjectLibrary } from "./ProjectLibrary";
 import { LOCAL_SLIDERS, MAX_LOCAL_LAYERS, removeLocalValues, renderLocalMask, type LocalKind, type LocalLayer } from "./local";
 import {
   exportName,
@@ -23,8 +26,7 @@ import {
   saveWarps,
   savePresets,
   saveEdits,
-  type Presets,
-} from "./library";
+  type Presets, loadLastProject, saveLastProject } from "./library";
 import type { Adjustments, HealSpot, LoadResult, Thumbnail, WarpStroke } from "./protocol";
 
 interface SliderDef {
@@ -63,6 +65,15 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
       { key: "denoiseLuma", label: "明度降噪", min: 0, max: 1 },
       { key: "denoiseChroma", label: "色彩降噪", min: 0, max: 1 },
       { key: "vignette", label: "暗角", min: -1, max: 1 },
+    ],
+  },
+  {
+    title: "镜头校正",
+    sliders: [
+      { key: "lensDistortion", label: "畸变", min: -1, max: 1 },
+      { key: "lensVignette", label: "暗角补偿", min: -1, max: 1 },
+      { key: "lensCaRed", label: "红/青边", min: -1, max: 1 },
+      { key: "lensCaBlue", label: "蓝/黄边", min: -1, max: 1 },
     ],
   },
 ];
@@ -115,7 +126,7 @@ const FRAME_WINDOW = 30;
 const THUMBNAIL_LONG_EDGE = 200;
 const SETTLE_MS = 400;
 const HISTORY_LIMIT = 100;
-const RAW_ACCEPT = ".arw,.cr2,.cr3,.nef,.nrw,.raf,.rw2,.orf,.dng,.pef,.srw,.iiq,.3fr,.jpg,.jpeg,.png,.tif,.tiff";
+const RAW_ACCEPT = ".arw,.cr2,.cr3,.nef,.nrw,.raf,.rw2,.orf,.dng,.pef,.srw,.iiq,.3fr,.jpg,.jpeg,.png,.tif,.tiff,.heic,.heif";
 
 interface Photo {
   id: string;
@@ -201,7 +212,14 @@ export function App() {
   const [liquifyMode, setLiquifyMode] = useState(0);
   const [ratings, setRatings] = useState<Record<string, number>>(loadRatings);
   const [importedLuts, setImportedLuts] = useState<StoredLut[]>([]);
-  const [restorable, setRestorable] = useState<FileSystemFileHandle[]>([]);
+  const [restorable, setRestorable] = useState<{ id: string; handle: FileSystemFileHandle }[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const projectsRef = useRef<Project[]>([]);
+  const [activeProject, setActiveProject] = useState<number | null>(null);
+  const [lastProject, setLastProject] = useState<number | null>(loadLastProject);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [projectNotice, setProjectNotice] = useState("");
+  const coverSourceRef = useRef<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const handleDragRef = useRef<"a" | "b" | null>(null);
   const [minRating, setMinRating] = useState(0);
@@ -217,6 +235,9 @@ export function App() {
   const current = photos.find((photo) => photo.id === currentId) ?? null;
   const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating);
   const locked = batchRunning;
+  const projectOfActive = projects.find((item) => item.id === activeProject) ?? null;
+  const resumable = activeProject === null ? (projects.find((item) => item.id === lastProject) ?? null) : null;
+  const lens = loaded ? lensView(loaded.lens, adjustments, loaded.width, loaded.height) : null;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -251,7 +272,14 @@ export function App() {
 
   useEffect(() => {
     listLuts().then(setImportedLuts).catch(() => {});
-    recallHandles().then(setRestorable).catch(() => {});
+    Promise.all([listProjects(), recallHandleEntries()])
+      .then(([stored, entries]) => {
+        projectsRef.current = stored;
+        setProjects(stored);
+        const inProjects = new Set(stored.flatMap((project) => project.photoIds));
+        setRestorable(entries.filter((entry) => !inProjects.has(entry.id)));
+      })
+      .catch(() => {});
   }, []);
 
   const resolveLook = useCallback(async (id: number) => {
@@ -377,6 +405,36 @@ export function App() {
     },
     [selectPhoto],
   );
+
+  // Photos added while a project is open belong to it, and its first photo is the cover.
+  useEffect(() => {
+    if (activeProject === null || photos.length === 0) return;
+    const project = projectsRef.current.find((item) => item.id === activeProject);
+    if (!project) return;
+    const known = new Set(project.photoIds);
+    const added = photos.filter((photo) => !known.has(photo.id)).map((photo) => photo.id);
+    const photoIds = [...project.photoIds, ...added];
+    const coverUrl = photos.find((photo) => photo.id === photoIds[0])?.thumbnail;
+    const coverChanged = !!coverUrl && coverSourceRef.current[project.id] !== coverUrl;
+    if (added.length === 0 && !coverChanged) return;
+    if (coverUrl) coverSourceRef.current[project.id] = coverUrl;
+    void (async () => {
+      let cover = project.cover;
+      if (coverChanged) {
+        const blob = await (await fetch(coverUrl)).blob();
+        cover = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+      const latest = projectsRef.current.find((item) => item.id === project.id) ?? project;
+      const merged = [...new Set([...latest.photoIds, ...photoIds])];
+      const saved = await saveProject({ ...latest, photoIds: merged, cover });
+      projectsRef.current = [...projectsRef.current.filter((item) => item.id !== saved.id), saved];
+      setProjects(projectsRef.current);
+    })().catch(() => {});
+  }, [activeProject, photos]);
 
   // The look follows the edit, whatever changed it: a slider, undo, a preset or a new photo.
   const lookId = adjustments.lutId ?? 0;
@@ -564,7 +622,8 @@ export function App() {
     const s = (event.clientX - bounds.left - box.left) / box.width;
     const t = (event.clientY - bounds.top - box.top) / box.height;
     if (!loaded || s < 0 || s > 1 || t < 0 || t > 1) return null;
-    return outputToSource(s, t, adjustments, loaded.width, loaded.height);
+    const shown = outputToSource(s, t, adjustments, loaded.width, loaded.height);
+    return lens ? lensToSource(lens, shown.x, shown.y) : shown;
   };
 
   const importLut = async (file: File | undefined) => {
@@ -602,9 +661,10 @@ export function App() {
     }
   };
 
-  const restoreLibrary = async () => {
+  /** Asks to read files again; browsers forget the permission between visits. */
+  const grantRead = async (handles: FileSystemFileHandle[]) => {
     const granted: FileSystemFileHandle[] = [];
-    for (const handle of restorable) {
+    for (const handle of handles) {
       const access = handle as FileSystemFileHandle & {
         requestPermission?: (d: { mode: string }) => Promise<PermissionState>;
       };
@@ -612,6 +672,11 @@ export function App() {
         granted.push(handle);
       }
     }
+    return granted;
+  };
+
+  const restoreLibrary = async () => {
+    const granted = await grantRead(restorable.map((entry) => entry.handle));
     setRestorable([]);
     try {
       await addHandles(granted);
@@ -621,8 +686,96 @@ export function App() {
   };
 
   const clearLibrary = () => {
-    void forgetHandles();
+    for (const entry of restorable) void forgetHandle(entry.id);
     setRestorable([]);
+  };
+
+  const storeProject = async (project: Omit<Project, "id"> & { id?: number }) => {
+    const saved = await saveProject(project);
+    const others = projectsRef.current.filter((item) => item.id !== saved.id);
+    projectsRef.current = [...others, saved];
+    setProjects(projectsRef.current);
+    return saved;
+  };
+
+  const clearWorkspace = () => {
+    flushPendingEdit();
+    openTicketRef.current++;
+    setPhotos([]);
+    setCurrentId(null);
+    setLoaded(null);
+    setAdjustments({});
+    localsRef.current = [];
+    setLocals([]);
+    setProjectNotice("");
+  };
+
+  const rememberProject = (id: number | null) => {
+    setActiveProject(id);
+    setLastProject(id);
+    saveLastProject(id);
+  };
+
+  const openProject = async (project: Project) => {
+    setLibraryOpen(false);
+    clearWorkspace();
+    rememberProject(project.id);
+    try {
+      const handles = await Promise.all(project.photoIds.map((id) => recallHandle(id).catch(() => undefined)));
+      const granted = await grantRead(handles.filter((handle): handle is FileSystemFileHandle => !!handle));
+      const files = await Promise.all(granted.map((handle) => handle.getFile().catch(() => null)));
+      const opened = files.filter((file): file is File => !!file);
+      addFiles(opened);
+      const missing = project.photoIds.length - opened.length;
+      if (missing > 0) setProjectNotice(`有 ${missing} 张没有读取权限或已移动，重新添加同一文件即可恢复修图。`);
+    } catch (reason) {
+      setError(`打开项目失败：${(reason as Error).message}`);
+    }
+  };
+
+  const createProject = async (name: string, withCurrentPhotos: boolean) => {
+    const created = await storeProject({ name, photoIds: withCurrentPhotos ? photos.map((photo) => photo.id) : [], updatedAt: Date.now() });
+    if (withCurrentPhotos) {
+      setLibraryOpen(false);
+      rememberProject(created.id);
+    } else {
+      await openProject(created);
+    }
+  };
+
+  const leaveProject = () => {
+    clearWorkspace();
+    rememberProject(null);
+    setLibraryOpen(false);
+  };
+
+  const removeProject = async (project: Project) => {
+    if (project.id === activeProject) leaveProject();
+    await deleteProject(project.id);
+    projectsRef.current = projectsRef.current.filter((item) => item.id !== project.id);
+    setProjects(projectsRef.current);
+    if (lastProject === project.id) rememberProject(activeProject === project.id ? null : activeProject);
+    const stillUsed = new Set(projectsRef.current.flatMap((item) => item.photoIds));
+    for (const id of project.photoIds) if (!stillUsed.has(id)) void forgetHandle(id);
+  };
+
+  const removeFromProject = () => {
+    const project = projectsRef.current.find((item) => item.id === activeProject);
+    if (!project || !current) return;
+    const updated = { ...project, photoIds: project.photoIds.filter((id) => id !== current.id), cover: undefined };
+    // Updated before saving, so nothing re-adds the photo while the write is under way.
+    projectsRef.current = projectsRef.current.map((item) => (item.id === project.id ? updated : item));
+    void storeProject(updated);
+    delete coverSourceRef.current[project.id];
+    if (!projectsRef.current.some((item) => item.photoIds.includes(current.id))) void forgetHandle(current.id);
+    const index = photos.findIndex((photo) => photo.id === current.id);
+    const rest = photos.filter((photo) => photo.id !== current.id);
+    if (rest.length === 0) {
+      clearWorkspace();
+    } else {
+      setPhotos(rest);
+      void selectPhoto(rest[Math.min(index, rest.length - 1)]);
+    }
   };
 
   const startHandle = (which: "a" | "b") => (event: React.PointerEvent<HTMLElement>) => {
@@ -639,7 +792,8 @@ export function App() {
     const box = fitBox((imageFrame.width * shownCrop.w) / (imageFrame.height * shownCrop.h), bounds.width, bounds.height);
     const s = (event.clientX - bounds.left - box.left) / box.width;
     const t = (event.clientY - bounds.top - box.top) / box.height;
-    const point = outputToSource(s, t, adjustments, loaded.width, loaded.height);
+    const shown = outputToSource(s, t, adjustments, loaded.width, loaded.height);
+    const point = lens ? lensToSource(lens, shown.x, shown.y) : shown;
     localsRef.current = localsRef.current.map((layer, index) => (index === activeLocal ? { ...layer, [which]: point } : layer));
     setLocals(localsRef.current);
     scheduleLocalMask();
@@ -990,15 +1144,31 @@ export function App() {
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
-            addFiles([...event.dataTransfer.files]);
+            const files = [...event.dataTransfer.files];
+            // Handles must be requested during the event, and let the photos be reopened.
+            const pending = [...event.dataTransfer.items]
+              .filter((item) => item.kind === "file")
+              .map((item) =>
+                (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.(),
+              );
+            void Promise.all(pending)
+              .then(async (handles) => {
+                const fileHandles = handles.filter((h): h is FileSystemFileHandle => h?.kind === "file");
+                // Drags from other pages have no handle: such photos still open, for this session.
+                if (files.length > 0 && fileHandles.length === files.length) await addHandles(fileHandles);
+                else addFiles(files);
+              })
+              .catch(() => addFiles(files));
           }}
         >
-          <canvas ref={canvasRef} />
-          {!loaded && !busy && <p className="hint">{ready ? "拖入一组 RAW、JPEG 或 PNG" : "正在初始化 WebGPU…"}</p>}
+          <canvas ref={canvasRef} style={{ visibility: loaded ? undefined : "hidden" }} />
+          {!loaded && !busy && <p className="hint">{ready ? "拖入一组 RAW、JPEG、PNG 或 HEIC" : "正在初始化 WebGPU…"}</p>}
           {busy && <p className="hint">{busy}</p>}
           {(adjustments.localOverlay ?? 0) > 0 && loaded && locals[activeLocal] && locals[activeLocal].kind !== "brush" &&
             (["a", "b"] as const).map((which) => {
-              const point = sourceToOutput(locals[activeLocal][which].x, locals[activeLocal][which].y, adjustments, loaded.width, loaded.height);
+              const handle = locals[activeLocal][which];
+              const corrected = lens ? sourceToLens(lens, handle.x, handle.y) : handle;
+              const point = sourceToOutput(corrected.x, corrected.y, adjustments, loaded.width, loaded.height);
               return (
                 <div
                   key={which}
@@ -1052,9 +1222,23 @@ export function App() {
         )}
       </div>
 
+      {libraryOpen && (
+        <ProjectLibrary
+          projects={projects}
+          activeId={activeProject}
+          photoCount={photos.length}
+          onOpen={(project) => void openProject(project)}
+          onCreate={(name, withCurrent) => void createProject(name, withCurrent)}
+          onRename={(project, name) => void storeProject({ ...project, name })}
+          onDelete={(project) => void removeProject(project)}
+          onLeave={leaveProject}
+          onClose={() => setLibraryOpen(false)}
+        />
+      )}
       <aside className="panel">
         <header>
           <h1>OpenPixels</h1>
+          <button className="button secondary" disabled={!ready || locked} onClick={() => setLibraryOpen(true)}>项目库</button>
           <button className="button" disabled={!ready || locked} onClick={() => void openPicker()}>添加图片</button>
           <input
             ref={fileInputRef}
@@ -1072,6 +1256,19 @@ export function App() {
 
         {error && <p className="error" role="alert">{error}</p>}
 
+        {projectOfActive && (
+          <div className="project-bar" data-testid="active-project">
+            <span>项目：{projectOfActive.name}</span>
+            <button className="button secondary" disabled={!current || locked} onClick={removeFromProject}>移出当前图片</button>
+          </div>
+        )}
+        {projectNotice && <p className="progress">{projectNotice}</p>}
+        {resumable && photos.length === 0 && (
+          <div className="restore" data-testid="resume-project">
+            <span>上次的项目：{resumable.name}（{resumable.photoIds.length} 张）</span>
+            <button className="button" disabled={!ready} onClick={() => void openProject(resumable)}>打开</button>
+          </div>
+        )}
         {restorable.length > 0 && photos.length === 0 && (
           <div className="restore" data-testid="restore">
             <span>上次有 {restorable.length} 张图片</span>
@@ -1139,6 +1336,38 @@ export function App() {
         ))}
 
         <section>
+          <h2>相机配置</h2>
+          <label className="field">
+            <span>色彩配置</span>
+            <select
+              aria-label="色彩配置"
+              value={loaded?.cameraMatch && adjustments.cameraProfile ? 1 : 0}
+              disabled={!loaded?.cameraMatch || locked}
+              onChange={(event) => setValue("cameraProfile", Number(event.target.value))}
+            >
+              <option value={0}>标准</option>
+              <option value={1}>相机匹配</option>
+            </select>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              aria-label="使用文件内的镜头校正"
+              checked={!!loaded?.lens && !!adjustments.lensAuto}
+              disabled={!loaded?.lens || locked}
+              onChange={(event) => setValue("lensAuto", event.target.checked ? 1 : 0)}
+            />
+            使用文件内的镜头校正
+          </label>
+          {loaded?.isRaw && (
+            <p className="progress" data-testid="camera-status">
+              {loaded.cameraMatch ? "已按机内 JPEG 拟合相机色彩。" : "默认色彩已接近机内 JPEG，无需相机匹配。"}
+              {loaded.lens ? "文件内含镜头数据。" : "文件没有可用的镜头数据，可用下方滑块手动校正。"}
+            </p>
+          )}
+        </section>
+
+        <section>
           <h2>曲线</h2>
           <ToneCurve adjustments={adjustments} disabled={!loaded || locked} onChange={setValue} />
         </section>
@@ -1179,24 +1408,18 @@ export function App() {
 
         <section>
           <h2>色调分离</h2>
-          {GRADE_RANGES.map(({ key, label }) => (
-            <div key={key}>
-              {[
-                { suffix: "Hue", name: "色相", max: 360, step: 1 },
-                { suffix: "Amount", name: "强度", max: 1, step: 0.01 },
-              ].map(({ suffix, name, max, step }) => {
-                const field = `grade${key}${suffix}`;
-                const value = adjustments[field] ?? 0;
-                return (
-                  <label className="slider" key={suffix}>
-                    <span>{label}{name}</span>
-                    <output>{suffix === "Hue" ? value.toFixed(0) : value.toFixed(2)}</output>
-                    <input aria-label={`${label}${name}`} type="range" min={0} max={max} step={step} value={value} disabled={!loaded || locked} onChange={(event) => setValue(field, Number(event.target.value))} onDoubleClick={() => setValue(field, 0)} />
-                  </label>
-                );
-              })}
-            </div>
-          ))}
+          <div className="wheels">
+            {GRADE_RANGES.map(({ key, label }) => (
+              <ColorWheel
+                key={key}
+                label={label}
+                hue={adjustments[`grade${key}Hue`] ?? 0}
+                amount={adjustments[`grade${key}Amount`] ?? 0}
+                disabled={!loaded || locked}
+                onChange={(hue, amount) => applyEdit({ ...adjustments, [`grade${key}Hue`]: hue, [`grade${key}Amount`]: amount })}
+              />
+            ))}
+          </div>
         </section>
 
         <section>

@@ -1,3 +1,5 @@
+import type { LensProfile } from "./lens";
+
 export type Adjustments = Record<string, number>;
 
 /** A healed spot. See `HealSpot` in op-core for the units. */
@@ -25,6 +27,8 @@ export interface LoadResult {
   isRaw: boolean;
   camera: string | null;
   baseExposure: number | null;
+  lens: LensProfile | null;
+  cameraMatch: boolean;
   proxyWidth: number;
   proxyHeight: number;
   fileMB: number;

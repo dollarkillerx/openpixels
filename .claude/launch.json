@@ -6,6 +6,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--dir", "web", "dev"],
       "port": 5173
+    },
+    {
+      "name": "web-production",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "web", "exec", "vite", "preview", "--port", "4173", "--strictPort"],
+      "port": 4173
     }
   ]
 }

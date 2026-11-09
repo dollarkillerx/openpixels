@@ -7,6 +7,7 @@ const HEALS_KEY = "openpixels.heals.v1";
 const WARPS_KEY = "openpixels.warps.v1";
 const LOCALS_KEY = "openpixels.locals.v1";
 const RATINGS_KEY = "openpixels.ratings.v1";
+const LAST_PROJECT_KEY = "openpixels.lastProject.v1";
 
 /** Editing aids that belong to the session, never to a saved edit. */
 const SESSION_ONLY = new Set(["maskOverlay", "cropEditing", "localOverlay"]);
@@ -40,6 +41,7 @@ export function engineJson(adjustments: Adjustments): string {
     hslSaturation: bands("hslSat"),
     hslLuminance: bands("hslLum"),
     curve: ["M", "R", "G", "B"].map((channel) => [0, 1, 2, 3, 4].map((i) => adjustments[`curve${channel}${i}`] ?? 0)),
+    lensManual: [adjustments.lensDistortion ?? 0, adjustments.lensVignette ?? 0, adjustments.lensCaRed ?? 0, adjustments.lensCaBlue ?? 0],
     grade: ["Shadow", "Mid", "High"].map((range) => [
       adjustments[`grade${range}Hue`] ?? 0,
       adjustments[`grade${range}Amount`] ?? 0,
@@ -51,6 +53,10 @@ export function engineJson(adjustments: Adjustments): string {
     ),
   });
 }
+
+/** The project to offer on the next visit. */
+export const loadLastProject = () => read<number | null>(LAST_PROJECT_KEY, null);
+export const saveLastProject = (id: number | null) => write(LAST_PROJECT_KEY, id);
 
 /** Identifies a photo across sessions without reading its contents. */
 export const fileId = (file: File) => `${file.name}|${file.size}|${file.lastModified}`;

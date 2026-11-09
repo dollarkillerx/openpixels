@@ -1,9 +1,10 @@
 import type { Lut } from "./lut";
 
 const DB_NAME = "openpixels";
-const VERSION = 1;
+const VERSION = 2;
 const HANDLES = "handles";
 const LUTS = "luts";
+const PROJECTS = "projects";
 
 export interface StoredLut extends Lut {
   id: number;
@@ -14,8 +15,10 @@ function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, VERSION);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(HANDLES);
-      request.result.createObjectStore(LUTS, { keyPath: "id", autoIncrement: true });
+      const db = request.result;
+      if (!db.objectStoreNames.contains(HANDLES)) db.createObjectStore(HANDLES);
+      if (!db.objectStoreNames.contains(LUTS)) db.createObjectStore(LUTS, { keyPath: "id", autoIncrement: true });
+      if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS, { keyPath: "id", autoIncrement: true });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -48,5 +51,33 @@ export const getLut = (id: number) => run<StoredLut | undefined>(LUTS, "readonly
 export const rememberHandle = (id: string, handle: FileSystemFileHandle) =>
   run(HANDLES, "readwrite", (s) => s.put(handle, id));
 
-export const recallHandles = () => run<FileSystemFileHandle[]>(HANDLES, "readonly", (s) => s.getAll());
-export const forgetHandles = () => run(HANDLES, "readwrite", (s) => s.clear());
+export const recallHandle = (id: string) => run<FileSystemFileHandle | undefined>(HANDLES, "readonly", (s) => s.get(id));
+export const forgetHandle = (id: string) => run(HANDLES, "readwrite", (s) => s.delete(id));
+
+/** Every remembered photo, with its id. */
+export async function recallHandleEntries(): Promise<{ id: string; handle: FileSystemFileHandle }[]> {
+  const [ids, handles] = await Promise.all([
+    run<IDBValidKey[]>(HANDLES, "readonly", (s) => s.getAllKeys()),
+    run<FileSystemFileHandle[]>(HANDLES, "readonly", (s) => s.getAll()),
+  ]);
+  return ids.map((id, index) => ({ id: String(id), handle: handles[index] }));
+}
+
+/** A named group of photos. Their edits stay keyed by photo, so projects can share them. */
+export interface Project {
+  id: number;
+  name: string;
+  photoIds: string[];
+  /** Data URL of a small preview. */
+  cover?: string;
+  updatedAt: number;
+}
+
+export const listProjects = () => run<Project[]>(PROJECTS, "readonly", (s) => s.getAll());
+export const deleteProject = (id: number) => run(PROJECTS, "readwrite", (s) => s.delete(id));
+
+export async function saveProject(project: Omit<Project, "id"> & { id?: number }): Promise<Project> {
+  const record = { ...project, updatedAt: Date.now() };
+  const id = await run<IDBValidKey>(PROJECTS, "readwrite", (s) => s.put(record));
+  return { ...record, id: Number(id) };
+}

@@ -7,6 +7,11 @@ struct Blit {
     uv_origin: vec2<f32>,
     uv_axis_s: vec2<f32>,
     uv_axis_t: vec2<f32>,
+    // Lens corrections; see `LensMap` in op-core.
+    lens_aspect: vec2<f32>,
+    lens_scale: f32,
+    distortion: vec4<f32>,
+    chroma: vec4<f32>,
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
@@ -30,10 +35,26 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
     return out;
 }
 
+// Where a corrected position reads from, given a channel's fringe scale terms.
+fn lens_source(uv: vec2<f32>, constant: f32, slope: f32) -> vec2<f32> {
+    let position = (uv - 0.5) * 2.0 * blit.lens_aspect;
+    let r2 = dot(position, position);
+    let d = blit.distortion;
+    let stretch = 1.0 + r2 * (d.x + r2 * (d.y + r2 * (d.z + r2 * d.w)));
+    let fringe = 1.0 + constant + slope * r2;
+    return 0.5 + position * stretch * blit.lens_scale * fringe / (2.0 * blit.lens_aspect);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let offset = textureSample(warp, image_sampler, in.uv).rg;
-    let colour = textureSample(image, image_sampler, in.uv + offset);
+    let at = in.uv + offset;
+    let colour = vec4<f32>(
+        textureSample(image, image_sampler, lens_source(at, blit.chroma.x, blit.chroma.y)).r,
+        textureSample(image, image_sampler, lens_source(at, 0.0, 0.0)).g,
+        textureSample(image, image_sampler, lens_source(at, blit.chroma.z, blit.chroma.w)).b,
+        1.0,
+    );
     // Rotation can show areas beyond the image; the export leaves those black too.
     if any(in.uv < vec2<f32>(0.0)) || any(in.uv > vec2<f32>(1.0)) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);

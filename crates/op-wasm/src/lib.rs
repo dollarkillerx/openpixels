@@ -24,6 +24,8 @@ struct ImageInfo {
     is_raw: bool,
     camera: Option<String>,
     base_exposure: Option<f32>,
+    lens: Option<op_core::LensProfile>,
+    camera_match: bool,
 }
 
 #[derive(Serialize)]
@@ -136,26 +138,18 @@ impl Engine {
 
     /// Opens a file for editing. Returns JSON metadata.
     pub fn decode(&mut self, bytes: &[u8]) -> Result<String, JsError> {
-        // Drop the previous image first so two large buffers never coexist.
-        self.working = None;
-        self.raw_file = None;
-        self.heals.clear();
-        self.healed_proxy = None;
+        self.release_image();
         let opened = op_core::open(bytes).map_err(js_error)?;
         self.source_exif = Some(export_exif(bytes));
-        let info = ImageInfo {
-            width: opened.width,
-            height: opened.height,
-            is_raw: opened.is_raw,
-            camera: opened.camera,
-            base_exposure: opened.base_exposure,
-        };
-        self.renderer.set_base_exposure(opened.base_exposure);
-        self.working = Some(opened.working);
-        if opened.is_raw {
-            self.raw_file = Some(bytes.to_vec());
-        }
-        serde_json::to_string(&info).map_err(js_error)
+        self.finish_open(opened, Some(bytes))
+    }
+
+    /// Opens an image a browser-side codec already decoded. Returns JSON metadata.
+    pub fn decode_rgba(&mut self, rgba: &[u8], width: u32, height: u32) -> Result<String, JsError> {
+        self.release_image();
+        let opened = op_core::open_rgba8(width, height, rgba).map_err(js_error)?;
+        self.source_exif = None;
+        self.finish_open(opened, None)
     }
 
     /// Builds and uploads the interactive proxy. Returns JSON with its size.
@@ -318,6 +312,9 @@ impl Engine {
         let Some((u, v)) = self.renderer.canvas_to_image(&self.geometry, size, stage_x, stage_y) else {
             return Ok("null".into());
         };
+        // Spots live on the unwarped image, while the stage shows the corrected one.
+        let (proxy_width, proxy_height) = self.proxy.as_ref().map_or((1, 1), |proxy| (proxy.width, proxy.height));
+        let (u, v) = self.renderer.lens_map(&self.adjustments, proxy_width, proxy_height).source_uv(u, v, 1);
         let current = self.healed_proxy.as_ref().or(self.proxy.as_ref());
         let current = current.ok_or_else(|| JsError::new("no image loaded"))?;
         let Some(spot) = find_heal_source(current, u, v, radius) else {
@@ -410,13 +407,42 @@ impl Engine {
             .await
             .map_err(js_error)?;
         let (image_width, image_height) = (image.width, image.height);
-        let warped = self.warped(rgb, image_width, image_height);
+        // In the order the blit undoes them: lens, then liquify, then framing.
+        let corrected = self.renderer.lens_map(&self.adjustments, image_width, image_height).apply_rgb8(&rgb, image_width, image_height);
+        let warped = self.warped(corrected, image_width, image_height);
         let (framed, width, height) = self.geometry.apply_rgb8(&warped, image_width, image_height);
         encode_jpeg(&framed, width, height, quality, self.source_exif.clone()).map_err(js_error)
     }
 }
 
 impl Engine {
+    /// Drops the previous image first so two large buffers never coexist.
+    fn release_image(&mut self) {
+        self.working = None;
+        self.raw_file = None;
+        self.heals.clear();
+        self.healed_proxy = None;
+    }
+
+    fn finish_open(&mut self, opened: op_core::Opened, bytes: Option<&[u8]>) -> Result<String, JsError> {
+        let info = ImageInfo {
+            width: opened.width,
+            height: opened.height,
+            is_raw: opened.is_raw,
+            camera: opened.camera,
+            base_exposure: opened.base_exposure,
+            lens: opened.lens,
+            camera_match: opened.camera_matrix.is_some(),
+        };
+        self.renderer.set_base_exposure(opened.base_exposure);
+        self.renderer.set_camera_data(opened.lens, opened.camera_matrix);
+        self.working = Some(opened.working);
+        if opened.is_raw {
+            self.raw_file = bytes.map(<[u8]>::to_vec);
+        }
+        serde_json::to_string(&info).map_err(js_error)
+    }
+
     fn warped(&self, rgb: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
         match &self.warp {
             Some(field) if !field.is_identity() => field.warp_rgb8(&rgb, width, height),

@@ -9,8 +9,9 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
 use crate::LinearImage;
+use crate::lens::LensProfile;
 use crate::demosaic::{BayerPattern, Cfa, TILE_MARGIN, demosaic_block};
-use crate::look::{DEFAULT_BASE_EXPOSURE, estimate_base_exposure};
+use crate::look::{DEFAULT_BASE_EXPOSURE, estimate_base_exposure, fit_camera_matrix};
 
 const DEMOSAIC_TILE_SIZE: usize = 1024;
 const EXPOSURE_MATCH_LONG_EDGE: u32 = 480;
@@ -45,6 +46,10 @@ pub struct Opened {
     /// Exposure offset for the default RAW look, in EV. `None` for finished images,
     /// which already have a tone curve.
     pub base_exposure: Option<f32>,
+    /// Lens corrections stored in the file.
+    pub lens: Option<LensProfile>,
+    /// Colour matrix that matches the camera's own JPEG, when one helps.
+    pub camera_matrix: Option<[[f32; 3]; 3]>,
 }
 
 /// Opens a RAW, JPEG or PNG file from memory for editing.
@@ -54,8 +59,19 @@ pub fn open(bytes: &[u8]) -> Result<Opened, DecodeError> {
     } else {
         let working = decode_raster(bytes)?;
         let (width, height) = (working.width, working.height);
-        Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None })
+        Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, camera_matrix: None })
     }
+}
+
+/// Opens a finished image already decoded to sRGB RGBA8, as from a browser-side codec.
+pub fn open_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<Opened, DecodeError> {
+    if rgba.len() != width as usize * height as usize * 4 {
+        return Err(DecodeError::UnexpectedRawLayout);
+    }
+    let table = srgb_to_linear_table();
+    let pixels = rgba.chunks_exact(4).flat_map(|p| [table[p[0] as usize], table[p[1] as usize], table[p[2] as usize]]).collect();
+    let working = LinearImage::new(width, height, pixels);
+    Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, camera_matrix: None })
 }
 
 fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
@@ -64,13 +80,33 @@ fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
     let working = decode_linear(&raw, Demosaic::HalfSize)?;
     // Half-size output rounds down, so this can be one pixel short of the final size.
     let (width, height) = (working.width * 2, working.height * 2);
-    let base_exposure = camera_matched_exposure(&raw, &working).unwrap_or(DEFAULT_BASE_EXPOSURE);
-    Ok(Opened { working, is_raw: true, camera: Some(camera), width, height, base_exposure: Some(base_exposure) })
+    let pair = embedded_comparison(&raw, &working);
+    let base_exposure = pair
+        .as_ref()
+        .and_then(|(linear, shown)| estimate_base_exposure(linear, shown))
+        .unwrap_or(DEFAULT_BASE_EXPOSURE);
+    let camera_matrix = pair.and_then(|(linear, shown)| fit_camera_matrix(&linear, &shown, base_exposure));
+    Ok(Opened {
+        working,
+        is_raw: true,
+        camera: Some(camera),
+        width,
+        height,
+        base_exposure: Some(base_exposure),
+        lens: LensProfile::from_file(bytes),
+        camera_matrix,
+    })
 }
 
 /// Exposure offset that matches the JPEG embedded in the RAW file. Uses the smallest
 /// preview that is still detailed enough, since decoding a full-size one is slow.
 pub fn camera_matched_exposure(raw: &FlashRaw<'_>, working: &LinearImage) -> Option<f32> {
+    let (linear, shown) = embedded_comparison(raw, working)?;
+    estimate_base_exposure(&linear, &shown)
+}
+
+/// The linear image and the camera's embedded JPEG at one small size, tightly packed RGB8.
+fn embedded_comparison(raw: &FlashRaw<'_>, working: &LinearImage) -> Option<(LinearImage, Vec<u8>)> {
     let preview = raw
         .previews()
         .iter()
@@ -90,7 +126,7 @@ pub fn camera_matched_exposure(raw: &FlashRaw<'_>, working: &LinearImage) -> Opt
 
     let linear = working.proxy(EXPOSURE_MATCH_LONG_EDGE);
     let shown = imageops::resize(&shown, linear.width, linear.height, FilterType::Triangle);
-    estimate_base_exposure(&linear, shown.as_raw())
+    Some((linear, shown.into_raw()))
 }
 
 /// Develops a RAW file at full resolution for export, with the highest-quality
@@ -417,6 +453,14 @@ mod tests {
         let table = srgb_to_linear_table();
         assert_eq!(f16::from_bits(table[0]).to_f32(), 0.0);
         assert_eq!(f16::from_bits(table[255]).to_f32(), 1.0);
+    }
+
+    #[test]
+    fn rgba_input_must_match_its_declared_size() {
+        assert!(open_rgba8(2, 2, &[0; 15]).is_err());
+        let opened = open_rgba8(1, 1, &[255, 0, 0, 255]).unwrap();
+        assert_eq!((opened.width, opened.is_raw), (1, false));
+        assert_eq!(f16::from_bits(opened.working.pixels[0]).to_f32(), 1.0);
     }
 
     #[test]

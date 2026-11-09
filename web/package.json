@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.2",
+    "libheif-js": "1.23.5",
     "onnxruntime-web": "1.31.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

@@ -5,6 +5,8 @@ pub mod demosaic;
 pub mod exif;
 pub mod geometry;
 pub mod heal;
+pub mod icc;
+pub mod lens;
 pub mod image_buf;
 pub mod look;
 pub mod retouch;
@@ -15,10 +17,11 @@ pub use adjust::Adjustments;
 pub use curve::{CURVE_LUT_SIZE, ToneCurve};
 pub use decode::{
     DecodeError, DevelopJob, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
-    process_tile,
-};
+    process_tile, open_rgba8};
 pub use exif::export_exif;
 pub use geometry::Geometry;
+pub use icc::srgb_icc_profile;
+pub use lens::{LensMap, LensProfile};
 pub use heal::{HealSpot, apply_heals, find_heal_source};
 pub use image_buf::LinearImage;
 pub use retouch::{SkinRetouch, build_skin_retouch};

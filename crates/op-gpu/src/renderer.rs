@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use futures_channel::oneshot;
-use op_core::{Adjustments, CURVE_LUT_SIZE, Geometry, LinearImage, SkinRetouch, ToneCurve, WarpField};
+use op_core::{Adjustments, CURVE_LUT_SIZE, Geometry, LensMap, LensProfile, LinearImage, SkinRetouch, ToneCurve, WarpField};
 use wgpu::util::align_to;
 
 const SOURCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -36,6 +36,24 @@ struct Region {
     has_base_look: f32,
     source_offset: [f32; 2],
     source_size: [f32; 2],
+    lens_vignette: [f32; 4],
+    lens_aspect: [f32; 2],
+    _padding: [f32; 2],
+    camera: [[f32; 4]; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct BlitParams {
+    scale: [f32; 2],
+    uv_origin: [f32; 2],
+    uv_axis_s: [f32; 2],
+    uv_axis_t: [f32; 2],
+    lens_aspect: [f32; 2],
+    lens_scale: f32,
+    _padding: f32,
+    distortion: [f32; 4],
+    chroma: [f32; 4],
 }
 
 struct Preview {
@@ -71,6 +89,8 @@ pub struct Renderer {
     curve_view: wgpu::TextureView,
     look_view: wgpu::TextureView,
     base_exposure: Option<f32>,
+    lens_profile: Option<LensProfile>,
+    camera_matrix: Option<[[f32; 3]; 3]>,
     preview: Option<Preview>,
 }
 
@@ -145,7 +165,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                uniform_entry(2, wgpu::ShaderStages::VERTEX),
+                uniform_entry(2, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 texture_entry(3, wgpu::ShaderStages::FRAGMENT, true),
             ],
         });
@@ -188,7 +208,7 @@ impl Renderer {
         });
         let adjust_buffer = uniform_buffer(&device, "adjustments", size_of::<Adjustments>());
         let region_buffer = uniform_buffer(&device, "region", size_of::<Region>());
-        let blit_buffer = uniform_buffer(&device, "blit", size_of::<[f32; 8]>());
+        let blit_buffer = uniform_buffer(&device, "blit", size_of::<BlitParams>());
         let mask_view = create_mask_view(&device, &queue, 1, 1, &[255]);
         let blurred_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
         let skin_smooth_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
@@ -227,12 +247,25 @@ impl Renderer {
             curve_view,
             look_view,
             base_exposure: None,
+            lens_profile: None,
+            camera_matrix: None,
             preview: None,
         }
     }
 
     /// Enables the default RAW look with an exposure offset in EV, or disables it for
     /// images that already have a tone curve.
+    /// Sets what the open file says about its lens and its camera's colour.
+    pub fn set_camera_data(&mut self, lens: Option<LensProfile>, matrix: Option<[[f32; 3]; 3]>) {
+        self.lens_profile = lens;
+        self.camera_matrix = matrix;
+    }
+
+    /// The lens corrections in effect for an edit of an image this size.
+    pub fn lens_map(&self, adjustments: &Adjustments, width: u32, height: u32) -> LensMap {
+        LensMap::new(self.lens_profile.as_ref(), adjustments, width, height)
+    }
+
     pub fn set_base_exposure(&mut self, base_exposure: Option<f32>) {
         self.base_exposure = base_exposure;
     }
@@ -409,8 +442,19 @@ impl Renderer {
         self.write_params(adjustments, [width, height], [0.0; 2], [width, height], [0.0; 2], [width, height]);
         let scale = letterbox(geometry.output_size(preview.width, preview.height), target_size);
         let map = geometry.uv_map(preview.width, preview.height);
-        let blit: [[f32; 2]; 4] = [scale, map.origin, map.axis_s, map.axis_t];
-        self.queue.write_buffer(&self.blit_buffer, 0, cast_slice(&blit));
+        let lens = self.lens_map(adjustments, preview.width, preview.height);
+        let blit = BlitParams {
+            scale,
+            uv_origin: map.origin,
+            uv_axis_s: map.axis_s,
+            uv_axis_t: map.axis_t,
+            lens_aspect: lens.aspect,
+            lens_scale: lens.scale,
+            _padding: 0.0,
+            distortion: lens.distortion,
+            chroma: lens.chroma,
+        };
+        self.queue.write_buffer(&self.blit_buffer, 0, bytes_of(&blit));
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.dispatch(&mut encoder, &preview.develop, preview.width, preview.height);
@@ -652,6 +696,7 @@ impl Renderer {
         source_size: [f32; 2],
     ) {
         self.queue.write_buffer(&self.adjust_buffer, 0, bytes_of(adjustments));
+        let lens = self.lens_map(adjustments, full_size[0] as u32, full_size[1] as u32);
         let region = Region {
             full_size,
             offset,
@@ -660,8 +705,26 @@ impl Renderer {
             has_base_look: f32::from(u8::from(self.base_exposure.is_some())),
             source_offset,
             source_size,
+            lens_vignette: lens.vignette,
+            lens_aspect: lens.aspect,
+            _padding: [0.0; 2],
+            camera: self.camera_rows(adjustments.camera_profile),
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
+    }
+
+    /// The camera matrix blended from the identity by `strength`.
+    fn camera_rows(&self, strength: f32) -> [[f32; 4]; 3] {
+        std::array::from_fn(|row| {
+            std::array::from_fn(|col| {
+                let identity = f32::from(u8::from(row == col));
+                match (self.camera_matrix, col) {
+                    (_, 3) => 0.0,
+                    (Some(matrix), _) => identity + (matrix[row][col] - identity) * strength,
+                    (None, _) => identity,
+                }
+            })
+        })
     }
 
     fn dispatch(
@@ -702,6 +765,7 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8, exif: Optio
     if let Some(exif) = exif {
         encoder.add_app_segment(1, exif)?;
     }
+    encoder.add_icc_profile(&op_core::srgb_icc_profile())?;
     encoder.encode(
         rgb,
         width as u16,
@@ -1184,6 +1248,37 @@ mod tests {
         let image = ramp(300, 170);
         let adj = Adjustments { exposure: 0.2, ..Default::default() };
         assert_eq!(export(&renderer, &image, &adj, 64), export(&renderer, &image, &adj, 512));
+    }
+
+    #[test]
+    fn the_camera_matrix_scales_with_its_strength() {
+        let mut renderer = renderer();
+        let swap = [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
+        renderer.set_camera_data(None, Some(swap));
+        let image = LinearImage::new(1, 1, [0.5f32, 0.2, 0.05].map(|v| f16::from_f32(v).to_bits()).to_vec());
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let full = export(&renderer, &image, &Adjustments { camera_profile: 1.0, ..Default::default() }, 64);
+        assert_eq!((plain[0], plain[2]), (full[2], full[0]), "red and blue swap");
+        let half = export(&renderer, &image, &Adjustments { camera_profile: 0.5, ..Default::default() }, 64);
+        assert!(half[0] < plain[0] && half[0] > full[0], "{half:?}");
+    }
+
+    #[test]
+    fn lens_vignetting_brightens_the_corners_only() {
+        let renderer = renderer();
+        let adj = Adjustments { lens_manual: [0.0, 1.0, 0.0, 0.0], ..Default::default() };
+        let plain = export(&renderer, &flat_gray(101, 101), &Adjustments::default(), 64);
+        let lifted = export(&renderer, &flat_gray(101, 101), &adj, 64);
+        let centre = (50 * 101 + 50) * 3;
+        assert!(i32::from(lifted[centre]) - i32::from(plain[centre]) <= 1, "centre moved");
+        assert!(lifted[0] > plain[0] + 25, "corner {} -> {}", plain[0], lifted[0]);
+    }
+
+    #[test]
+    fn lens_vignetting_is_seamless_across_tiles() {
+        let renderer = renderer();
+        let adj = Adjustments { lens_manual: [0.0, 0.8, 0.0, 0.0], ..Default::default() };
+        assert_eq!(export(&renderer, &ramp(300, 170), &adj, 64), export(&renderer, &ramp(300, 170), &adj, 512));
     }
 
     #[test]

@@ -53,8 +53,12 @@ pub struct Adjustments {
     pub local_overlay: f32,
     /// Blend of the 3D lookup table, 0..=1.
     pub lut_amount: f32,
-    #[serde(skip)]
-    pub _padding: [f32; 2],
+    /// Blend towards the colour matrix fitted to the camera's own JPEG, 0..=1.
+    pub camera_profile: f32,
+    /// Non-zero to apply the lens corrections stored in the file.
+    pub lens_auto: f32,
+    /// Manual distortion, vignetting, red fringe and blue fringe, each -1..=1.
+    pub lens_manual: [f32; 4],
 }
 
 #[cfg(test)]
@@ -69,6 +73,6 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16);
     }
 }
