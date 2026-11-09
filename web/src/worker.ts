@@ -121,6 +121,11 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       engine!.set_mask(request.width, request.height, new Uint8Array(request.mask));
       scheduleRender();
       return [undefined, []];
+
+    case "setSkinMask":
+      engine!.set_skin_mask(new Uint8Array(request.mask), request.faceWidth);
+      scheduleRender();
+      return [undefined, []];
   }
 }
 

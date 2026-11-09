@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use futures_channel::oneshot;
-use op_core::{Adjustments, LinearImage};
+use op_core::{Adjustments, LinearImage, SkinRetouch};
 use wgpu::util::align_to;
 
 const SOURCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -62,6 +62,8 @@ pub struct Renderer {
     blit_buffer: wgpu::Buffer,
     mask_view: wgpu::TextureView,
     blurred_luma_view: wgpu::TextureView,
+    skin_smooth_view: wgpu::TextureView,
+    skin_blemish_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     preview: Option<Preview>,
 }
@@ -96,6 +98,8 @@ impl Renderer {
                     count: None,
                 },
                 texture_entry(6, wgpu::ShaderStages::COMPUTE, true),
+                texture_entry(7, wgpu::ShaderStages::COMPUTE, true),
+                texture_entry(8, wgpu::ShaderStages::COMPUTE, true),
             ],
         });
         let develop_pipeline_layout =
@@ -168,6 +172,8 @@ impl Renderer {
         let blit_buffer = uniform_buffer(&device, "blit", size_of::<[f32; 2]>());
         let mask_view = create_mask_view(&device, &queue, 1, 1, &[255]);
         let blurred_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
+        let skin_smooth_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
+        let skin_blemish_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
 
         Self {
             device,
@@ -182,6 +188,8 @@ impl Renderer {
             blit_buffer,
             mask_view,
             blurred_luma_view,
+            skin_smooth_view,
+            skin_blemish_view,
             base_exposure: None,
             preview: None,
         }
@@ -197,6 +205,18 @@ impl Renderer {
     /// bytes covering the whole image, at any resolution.
     pub fn set_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
         self.mask_view = create_mask_view(&self.device, &self.queue, width, height, mask);
+        self.rebuild_preview_bindings();
+    }
+
+    /// Sets the skin corrections for the current image.
+    pub fn set_skin_retouch(&mut self, retouch: &SkinRetouch) {
+        let (width, height) = (retouch.width, retouch.height);
+        self.skin_smooth_view = create_correction_view(&self.device, &self.queue, width, height, &retouch.smooth);
+        self.skin_blemish_view = create_correction_view(&self.device, &self.queue, width, height, &retouch.blemish);
+        self.rebuild_preview_bindings();
+    }
+
+    fn rebuild_preview_bindings(&mut self) {
         if let Some(preview) = &self.preview {
             let develop = self.develop_bind_group(&preview.source_view, &preview.output_view);
             self.preview.as_mut().expect("checked above").develop = develop;
@@ -204,9 +224,11 @@ impl Renderer {
     }
 
     /// Uploads `proxy` as the image shown by [`Self::draw_preview`] and clears any
-    /// mask belonging to the previous image.
+    /// mask and skin corrections belonging to the previous image.
     pub fn set_preview(&mut self, proxy: &LinearImage) {
         self.mask_view = create_mask_view(&self.device, &self.queue, 1, 1, &[255]);
+        self.skin_smooth_view = create_correction_view(&self.device, &self.queue, 1, 1, &[0; 4]);
+        self.skin_blemish_view = create_correction_view(&self.device, &self.queue, 1, 1, &[0; 4]);
         let (luma_width, luma_height, luma) = proxy.blurred_luma(BLURRED_LUMA_LONG_EDGE);
         self.blurred_luma_view = create_luma_view(&self.device, &self.queue, luma_width, luma_height, &luma);
         let (width, height) = (proxy.width, proxy.height);
@@ -457,6 +479,14 @@ impl Renderer {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&self.blurred_luma_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&self.skin_smooth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&self.skin_blemish_view),
+                },
             ],
         })
     }
@@ -579,6 +609,36 @@ fn create_luma_view(
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(width * 2),
+            rows_per_image: Some(height),
+        },
+        extent(width, height),
+    );
+    texture.create_view(&Default::default())
+}
+
+fn create_correction_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    rgba: &[u16],
+) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("skin correction"),
+        size: extent(width, height),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SOURCE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        cast_slice(rgba),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * SOURCE_BYTES_PER_PIXEL),
             rows_per_image: Some(height),
         },
         extent(width, height),
@@ -809,6 +869,40 @@ mod tests {
         let blue_plain = export(&renderer, &pixel(0.05, 0.05, 0.6), &Adjustments::default(), 64);
         let blue = export(&renderer, &pixel(0.05, 0.05, 0.6), &adj, 64);
         assert_eq!(blue_plain, blue, "blue is outside the red band");
+    }
+
+    fn one_stop_correction(width: u32, height: u32) -> SkinRetouch {
+        let up = f16::from_f32(1.0).to_bits();
+        let count = width as usize * height as usize;
+        SkinRetouch {
+            width,
+            height,
+            smooth: [up, up, up, 0].repeat(count),
+            blemish: vec![0; count * 4],
+        }
+    }
+
+    #[test]
+    fn skin_corrections_scale_with_their_slider() {
+        let mut renderer = renderer();
+        let image = flat_gray(4, 4);
+        renderer.set_skin_retouch(&one_stop_correction(4, 4));
+        let off = export(&renderer, &image, &Adjustments::default(), 64);
+        let full = export(&renderer, &image, &Adjustments { skin_smooth: 1.0, ..Default::default() }, 64);
+        // sRGB(0.18) = 117.9, sRGB(0.36) = 160.6.
+        assert!((i32::from(off[0]) - 118).abs() <= 1, "got {}", off[0]);
+        assert!((i32::from(full[0]) - 161).abs() <= 1, "got {}", full[0]);
+    }
+
+    #[test]
+    fn a_new_image_clears_skin_corrections() {
+        let mut renderer = renderer();
+        let image = flat_gray(4, 4);
+        renderer.set_skin_retouch(&one_stop_correction(4, 4));
+        renderer.set_preview(&image);
+        let adj = Adjustments { skin_smooth: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        assert!((i32::from(out[0]) - 118).abs() <= 1, "got {}", out[0]);
     }
 
     #[test]

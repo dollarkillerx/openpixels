@@ -38,7 +38,8 @@ export type EngineRequest =
   | { type: "export"; quality: number }
   | { type: "thumbnail"; maxLongEdge: number }
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
-  | { type: "setMask"; mask: ArrayBuffer; width: number; height: number };
+  | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }
+  | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number };
 
 export type EngineCommand =
   | { type: "adjust"; adjustments: Adjustments }

@@ -29,8 +29,12 @@ pub struct Adjustments {
     pub clarity: f32,
     /// Small-radius edge contrast, 0..=1.
     pub sharpen: f32,
+    /// Strength of mid-frequency skin smoothing, 0..=1.
+    pub skin_smooth: f32,
+    /// Strength of blemish removal, 0..=1.
+    pub skin_blemish: f32,
     #[serde(skip)]
-    pub _padding: f32,
+    pub _padding: [f32; 3],
     /// Hue, saturation and luminance shift per colour band (red, orange, yellow,
     /// green, aqua, blue, purple, magenta), in two groups of four for the GPU.
     pub hsl_hue: [[f32; 4]; 2],
@@ -50,6 +54,6 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 16 * 4 + 6 * 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16);
     }
 }

@@ -6,11 +6,12 @@
   "type": "module",
   "scripts": {
     "wasm": "../scripts/build-wasm.sh",
-    "ort": "node scripts/copy-ort.mjs",
-    "dev": "pnpm ort && vite",
-    "build": "pnpm ort && tsc --noEmit && vite build"
+    "assets": "node scripts/copy-runtime-assets.mjs",
+    "dev": "pnpm assets && vite",
+    "build": "pnpm assets && tsc --noEmit && vite build"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.2.2",
     "onnxruntime-web": "1.31.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

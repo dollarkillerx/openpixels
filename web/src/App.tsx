@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chooseBatchTarget } from "./batch";
-import { EngineClient, type MaskStats } from "./engine";
+import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import {
   exportName,
   fileId,
@@ -106,6 +106,10 @@ function thumbnailUrl({ rgb, width, height }: Thumbnail): string {
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
+/** The analysis a saved edit needs before it can be rendered. */
+const needsSubject = (edit: Adjustments) => (edit.backgroundExposure ?? 0) !== 0;
+const needsSkin = (edit: Adjustments) => (edit.skinSmooth ?? 0) !== 0 || (edit.skinBlemish ?? 0) !== 0;
+
 const isDifferentImage = (error: unknown) => error instanceof Error && error.message === STALE;
 const STALE = "stale";
 
@@ -133,6 +137,8 @@ export function App() {
   const [exported, setExported] = useState<{ url: string; name: string; ms: number; sizeMB: number } | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [maskStats, setMaskStats] = useState<MaskStats | null>(null);
+  const [skinStats, setSkinStats] = useState<SkinStats | null>(null);
+  const [findingFaces, setFindingFaces] = useState(false);
   const [presets, setPresets] = useState<Presets>(loadPresets);
   const [selectedPreset, setSelectedPreset] = useState("");
   const [presetName, setPresetName] = useState("");
@@ -215,17 +221,27 @@ export function App() {
       setError("");
       setExported(null);
       setMaskStats(null);
+      setSkinStats(null);
       setDetecting(false);
+      setFindingFaces(false);
       try {
         const result = await openPhoto(photo, edit);
         setLoaded(result);
         setHeapMB(result.heapMB);
         setBusy("");
-        // A saved background edit needs its mask back before it can be shown.
-        if ((edit.backgroundExposure ?? 0) !== 0) {
+        const ticket = openTicketRef.current;
+        // A saved edit needs its analysis back before it can be shown.
+        if (needsSubject(edit)) {
           setDetecting(true);
-          setMaskStats(await engineRef.current!.detectSubject(result.proxyWidth, result.proxyHeight));
+          const stats = await engineRef.current!.detectSubject(result.proxyWidth, result.proxyHeight);
+          if (ticket === openTicketRef.current) setMaskStats(stats);
           setDetecting(false);
+        }
+        if (needsSkin(edit)) {
+          setFindingFaces(true);
+          const stats = await engineRef.current!.prepareSkin(result.proxyWidth, result.proxyHeight);
+          if (ticket === openTicketRef.current) setSkinStats(stats);
+          setFindingFaces(false);
         }
         await refreshThumbnail(photo.id);
       } catch (reason) {
@@ -233,6 +249,7 @@ export function App() {
         setError((reason as Error).message);
         setBusy("");
         setDetecting(false);
+        setFindingFaces(false);
       }
     },
     [flushPendingEdit, openPhoto, refreshThumbnail],
@@ -345,6 +362,21 @@ export function App() {
     }
   };
 
+  const findFaces = async () => {
+    if (!loaded) return;
+    setFindingFaces(true);
+    setError("");
+    const ticket = openTicketRef.current;
+    try {
+      const stats = await engineRef.current!.prepareSkin(loaded.proxyWidth, loaded.proxyHeight);
+      if (ticket === openTicketRef.current) setSkinStats(stats);
+    } catch (reason) {
+      setError(`人脸识别失败：${(reason as Error).message}`);
+    } finally {
+      setFindingFaces(false);
+    }
+  };
+
   const startExport = async () => {
     if (!current) return;
     setBusy("导出中…");
@@ -432,9 +464,8 @@ export function App() {
         setAdjustments(edit);
         const result = await openPhoto(photo, edit);
         setLoaded(result);
-        if ((edit.backgroundExposure ?? 0) !== 0) {
-          await engine.detectSubject(result.proxyWidth, result.proxyHeight);
-        }
+        if (needsSubject(edit)) await engine.detectSubject(result.proxyWidth, result.proxyHeight);
+        if (needsSkin(edit)) await engine.prepareSkin(result.proxyWidth, result.proxyHeight);
         const { jpeg, heapMB: heap } = await engine.exportJpeg(JPEG_QUALITY);
         await target.write(exportName(photo.file.name, used), new Uint8Array(jpeg));
         setHeapMB(heap);
@@ -451,6 +482,7 @@ export function App() {
   };
 
   const backgroundExposure = adjustments.backgroundExposure ?? 0;
+  const skinReady = (skinStats?.faces ?? 0) > 0;
   const history = currentId ? historyRef.current[currentId] : undefined;
 
   return (
@@ -608,6 +640,41 @@ export function App() {
               onDoubleClick={() => setValue("backgroundExposure", 0)}
             />
           </label>
+        </section>
+
+        <section>
+          <h2>皮肤</h2>
+          <button className="button" disabled={!loaded || findingFaces || locked} onClick={() => void findFaces()}>
+            {findingFaces ? "识别中…" : skinStats ? "重新识别人脸" : "识别人脸"}
+          </button>
+          {skinStats && (
+            <p className="progress" data-stat="faces">
+              {skinStats.faces > 0 ? `检测到 ${skinStats.faces} 张人脸，${skinStats.ms.toFixed(0)} ms` : "没有检测到人脸"}
+            </p>
+          )}
+          {[
+            { key: "skinSmooth", label: "磨皮" },
+            { key: "skinBlemish", label: "祛斑" },
+          ].map(({ key, label }) => {
+            const value = adjustments[key] ?? 0;
+            return (
+              <label className="slider" key={key}>
+                <span>{label}</span>
+                <output>{value.toFixed(2)}</output>
+                <input
+                  aria-label={label}
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={value}
+                  disabled={!skinReady || locked}
+                  onChange={(event) => setValue(key, Number(event.target.value))}
+                  onDoubleClick={() => setValue(key, 0)}
+                />
+              </label>
+            );
+          })}
         </section>
 
         <section>

@@ -183,6 +183,14 @@ impl Engine {
         self.renderer.wait_idle().await.map_err(js_error)
     }
 
+    /// Builds skin corrections from a facial skin mask at the proxy's size.
+    pub fn set_skin_mask(&mut self, mask: &[u8], face_width: f32) -> Result<(), JsError> {
+        let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let retouch = op_core::build_skin_retouch(proxy, mask, face_width);
+        self.renderer.set_skin_retouch(&retouch);
+        Ok(())
+    }
+
     /// Renders the proxy at thumbnail size, with the current adjustments, as RGB8.
     pub async fn thumbnail(&mut self, max_long_edge: u32) -> Result<Vec<u8>, JsError> {
         let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;

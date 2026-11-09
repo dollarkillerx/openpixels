@@ -195,7 +195,7 @@ fn resize_plane_bilinear(plane: &[u8], width: usize, height: usize, out_w: usize
 
 /// Mean over a square window, in time independent of the radius. The window shrinks
 /// at the image edges.
-fn box_filter(plane: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+pub(crate) fn box_filter(plane: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
     let along = |input: &[f32], len: usize, stride: usize, lines: usize, step: usize| -> Vec<f32> {
         let mut output = vec![0.0f32; input.len()];
         for line in 0..lines {

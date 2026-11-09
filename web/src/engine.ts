@@ -1,3 +1,4 @@
+import { buildSkinMask } from "./face";
 import { MODEL, modelInputSize } from "./model";
 import type {
   Adjustments,
@@ -22,6 +23,13 @@ interface Pending {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
 }
+
+export interface SkinStats {
+  faces: number;
+  ms: number;
+}
+
+const FACE_DETECTION_LONG_EDGE = 1024;
 
 /** Promise-based front end for the engine and segmentation workers. */
 export class EngineClient {
@@ -86,6 +94,17 @@ export class EngineClient {
 
   thumbnail(maxLongEdge: number) {
     return this.call<Thumbnail>({ type: "thumbnail", maxLongEdge });
+  }
+
+  /** Finds faces in the open image and builds its skin corrections. */
+  async prepareSkin(proxyWidth: number, proxyHeight: number): Promise<SkinStats> {
+    const start = performance.now();
+    const thumbnail = await this.thumbnail(FACE_DETECTION_LONG_EDGE);
+    const skin = await buildSkinMask(thumbnail, proxyWidth, proxyHeight);
+    if (skin) {
+      await this.call<void>({ type: "setSkinMask", mask: skin.mask, faceWidth: skin.faceWidth }, [skin.mask]);
+    }
+    return { faces: skin?.faces ?? 0, ms: performance.now() - start };
   }
 
   /** Runs the matting model on the open image and applies the result as its mask. */

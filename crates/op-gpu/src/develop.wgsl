@@ -20,7 +20,11 @@ struct Adjustments {
     mask_overlay: f32,
     clarity: f32,
     sharpen: f32,
-    padding: f32,
+    skin_smooth: f32,
+    skin_blemish: f32,
+    padding0: f32,
+    padding1: f32,
+    padding2: f32,
     hsl_hue: array<vec4<f32>, 2>,
     hsl_saturation: array<vec4<f32>, 2>,
     hsl_luminance: array<vec4<f32>, 2>,
@@ -51,6 +55,9 @@ struct Region {
 @group(0) @binding(5) var mask_sampler: sampler;
 // Heavily blurred scene-linear luminance of the whole image, for clarity.
 @group(0) @binding(6) var blurred_luma: texture_2d<f32>;
+// Log2 skin corrections for the whole image.
+@group(0) @binding(7) var skin_smooth_map: texture_2d<f32>;
+@group(0) @binding(8) var skin_blemish_map: texture_2d<f32>;
 
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 const TONE_GAMMA = 2.2;
@@ -126,6 +133,15 @@ fn apply_color(rgb: vec3<f32>) -> vec3<f32> {
     // Vibrance acts mostly on muted colours, saturation on all of them equally.
     let amount = (1.0 + adj.saturation) * (1.0 + adj.vibrance * (1.0 - chroma));
     return max(mix(vec3<f32>(luma), rgb, amount), vec3<f32>(0.0));
+}
+
+fn apply_skin(rgb: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    if adj.skin_smooth == 0.0 && adj.skin_blemish == 0.0 {
+        return rgb;
+    }
+    let smoothing = textureSampleLevel(skin_smooth_map, mask_sampler, uv, 0.0).rgb;
+    let blemishes = textureSampleLevel(skin_blemish_map, mask_sampler, uv, 0.0).rgb;
+    return rgb * pow(vec3<f32>(2.0), smoothing * adj.skin_smooth + blemishes * adj.skin_blemish);
 }
 
 fn source_at(pixel: vec2<i32>) -> vec3<f32> {
@@ -249,6 +265,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let source_pixel = vec2<i32>(id.xy) + vec2<i32>(region.source_offset);
     var rgb = apply_sharpen(source_at(source_pixel), source_pixel);
+    rgb = apply_skin(rgb, uv);
     rgb = white_balance(rgb);
     let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background);
     rgb *= scene_gain;

@@ -6,4 +6,5 @@ web/src/wasm-pkg/
 web/public/fixtures/
 web/public/models/
 web/public/ort/
+web/public/mediapipe/
 .DS_Store
