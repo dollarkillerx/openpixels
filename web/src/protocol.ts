@@ -1,5 +1,14 @@
 export type Adjustments = Record<string, number>;
 
+/** A healed spot. See `HealSpot` in op-core for the units. */
+export interface HealSpot {
+  x: number;
+  y: number;
+  radius: number;
+  sourceDx: number;
+  sourceDy: number;
+}
+
 export interface LoadResult {
   width: number;
   height: number;
@@ -34,9 +43,11 @@ export interface Thumbnail {
 /** Messages the engine worker answers, each paired by id with one reply. */
 export type EngineRequest =
   | { type: "init"; canvas: OffscreenCanvas }
-  | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments }
+  | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[] }
   | { type: "export"; quality: number }
-  | { type: "thumbnail"; maxLongEdge: number }
+  | { type: "thumbnail"; maxLongEdge: number; framed: boolean }
+  | { type: "healAt"; x: number; y: number; stageWidth: number; stageHeight: number; radius: number }
+  | { type: "setHeals"; heals: HealSpot[] }
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
   | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }
   | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number };

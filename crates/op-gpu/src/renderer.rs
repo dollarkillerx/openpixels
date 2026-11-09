@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use futures_channel::oneshot;
-use op_core::{Adjustments, LinearImage, SkinRetouch};
+use op_core::{Adjustments, Geometry, LinearImage, SkinRetouch};
 use wgpu::util::align_to;
 
 const SOURCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -41,6 +41,7 @@ struct Region {
 struct Preview {
     width: u32,
     height: u32,
+    source: wgpu::Texture,
     source_view: wgpu::TextureView,
     output_view: wgpu::TextureView,
     develop: wgpu::BindGroup,
@@ -169,7 +170,7 @@ impl Renderer {
         });
         let adjust_buffer = uniform_buffer(&device, "adjustments", size_of::<Adjustments>());
         let region_buffer = uniform_buffer(&device, "region", size_of::<Region>());
-        let blit_buffer = uniform_buffer(&device, "blit", size_of::<[f32; 2]>());
+        let blit_buffer = uniform_buffer(&device, "blit", size_of::<[f32; 8]>());
         let mask_view = create_mask_view(&device, &queue, 1, 1, &[255]);
         let blurred_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
         let skin_smooth_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
@@ -206,6 +207,38 @@ impl Renderer {
     pub fn set_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
         self.mask_view = create_mask_view(&self.device, &self.queue, width, height, mask);
         self.rebuild_preview_bindings();
+    }
+
+    /// Replaces the proxy's pixels, keeping its mask and corrections. `proxy` must have
+    /// the same size as the one given to [`Self::set_preview`].
+    pub fn update_preview_pixels(&self, proxy: &LinearImage) {
+        if let Some(preview) = &self.preview {
+            let (width, height) = (proxy.width, proxy.height);
+            self.upload_source(&preview.source, &proxy.rgba_region(0, 0, width, height), width, height);
+        }
+    }
+
+    /// Converts a position on the canvas, in 0..=1, to the position within the image
+    /// drawn with `geometry`. `None` outside the image.
+    pub fn canvas_to_image(
+        &self,
+        geometry: &Geometry,
+        target_size: (u32, u32),
+        canvas_x: f32,
+        canvas_y: f32,
+    ) -> Option<(f32, f32)> {
+        let preview = self.preview.as_ref()?;
+        let size = (preview.width, preview.height);
+        let scale = letterbox(geometry.output_size(size.0, size.1), target_size);
+        let s = (canvas_x - 0.5) / scale[0] + 0.5;
+        let t = (canvas_y - 0.5) / scale[1] + 0.5;
+        if !(0.0..=1.0).contains(&s) || !(0.0..=1.0).contains(&t) {
+            return None;
+        }
+        let map = geometry.uv_map(size.0, size.1);
+        let u = map.origin[0] + s * map.axis_s[0] + t * map.axis_t[0];
+        let v = map.origin[1] + s * map.axis_s[1] + t * map.axis_t[1];
+        ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((u, v))
     }
 
     /// Sets the skin corrections for the current image.
@@ -257,21 +290,24 @@ impl Renderer {
                 },
             ],
         });
-        self.preview = Some(Preview { width, height, source_view, output_view, develop, blit });
+        self.preview = Some(Preview { width, height, source, source_view, output_view, develop, blit });
     }
 
     /// Develops the proxy with `adjustments` and draws it, letterboxed, into `target`.
     pub fn draw_preview(
         &self,
         adjustments: &Adjustments,
+        geometry: &Geometry,
         target: &wgpu::TextureView,
         target_size: (u32, u32),
     ) -> Result<(), GpuError> {
         let preview = self.preview.as_ref().ok_or(GpuError::NoImage)?;
         let (width, height) = (preview.width as f32, preview.height as f32);
         self.write_params(adjustments, [width, height], [0.0; 2], [width, height], [0.0; 2], [width, height]);
-        let scale = letterbox((preview.width, preview.height), target_size);
-        self.queue.write_buffer(&self.blit_buffer, 0, bytes_of(&scale));
+        let scale = letterbox(geometry.output_size(preview.width, preview.height), target_size);
+        let map = geometry.uv_map(preview.width, preview.height);
+        let blit: [[f32; 2]; 4] = [scale, map.origin, map.axis_s, map.axis_t];
+        self.queue.write_buffer(&self.blit_buffer, 0, cast_slice(&blit));
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.dispatch(&mut encoder, &preview.develop, preview.width, preview.height);
@@ -930,6 +966,22 @@ mod tests {
         let image = ramp(300, 170);
         let adj = Adjustments { exposure: 0.2, ..Default::default() };
         assert_eq!(export(&renderer, &image, &adj, 64), export(&renderer, &image, &adj, 512));
+    }
+
+    #[test]
+    fn canvas_positions_map_through_the_crop() {
+        let mut renderer = renderer();
+        renderer.set_preview(&flat_gray(100, 100));
+        let geometry = Geometry { crop_x: 0.5, crop_y: 0.5, crop_w: 0.5, crop_h: 0.5, ..Default::default() };
+        let centre = renderer.canvas_to_image(&geometry, (200, 200), 0.5, 0.5).unwrap();
+        assert!((centre.0 - 0.75).abs() < 1e-4 && (centre.1 - 0.75).abs() < 1e-4, "{centre:?}");
+    }
+
+    #[test]
+    fn positions_in_the_letterbox_bars_are_outside_the_image() {
+        let mut renderer = renderer();
+        renderer.set_preview(&flat_gray(100, 100));
+        assert_eq!(renderer.canvas_to_image(&Geometry::default(), (200, 100), 0.05, 0.5), None);
     }
 
     #[test]

@@ -1,10 +1,11 @@
-import type { Adjustments } from "./protocol";
+import type { Adjustments, HealSpot } from "./protocol";
 
 const EDITS_KEY = "openpixels.edits.v1";
 const PRESETS_KEY = "openpixels.presets.v1";
+const HEALS_KEY = "openpixels.heals.v1";
 
 /** Editing aids that belong to the session, never to a saved edit. */
-const SESSION_ONLY = new Set(["maskOverlay"]);
+const SESSION_ONLY = new Set(["maskOverlay", "cropEditing"]);
 
 export type Presets = Record<string, Adjustments>;
 
@@ -57,6 +58,15 @@ export function saveEdits(edits: Record<string, Adjustments>) {
     else delete all[id];
   }
   write(EDITS_KEY, all);
+}
+
+export const loadHeals = (id: string): HealSpot[] => read<Record<string, HealSpot[]>>(HEALS_KEY, {})[id] ?? [];
+
+export function saveHeals(id: string, heals: HealSpot[]) {
+  const all = read<Record<string, HealSpot[]>>(HEALS_KEY, {});
+  if (heals.length > 0) all[id] = heals;
+  else delete all[id];
+  write(HEALS_KEY, all);
 }
 
 export const loadPresets = (): Presets => read<Presets>(PRESETS_KEY, {});

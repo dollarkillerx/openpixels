@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CropOverlay } from "./CropOverlay";
 import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
+import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, shrinkToImage, type Crop } from "./frame";
 import {
   exportName,
   fileId,
   loadEdit,
+  loadHeals,
   loadPresets,
   persistable,
+  saveHeals,
   savePresets,
   saveEdits,
   type Presets,
 } from "./library";
-import type { Adjustments, LoadResult, Thumbnail } from "./protocol";
+import type { Adjustments, HealSpot, LoadResult, Thumbnail } from "./protocol";
 
 interface SliderDef {
   key: string;
@@ -66,6 +70,17 @@ const HSL_CHANNELS = [
   { prefix: "hslHue", label: "色相" },
   { prefix: "hslSat", label: "饱和度" },
   { prefix: "hslLum", label: "明度" },
+];
+
+const CROP_RATIOS: { label: string; value: number | null }[] = [
+  { label: "自由", value: null },
+  { label: "1:1", value: 1 },
+  { label: "4:5", value: 4 / 5 },
+  { label: "3:4", value: 3 / 4 },
+  { label: "2:3", value: 2 / 3 },
+  { label: "5:7", value: 5 / 7 },
+  { label: "3:2", value: 3 / 2 },
+  { label: "16:9", value: 16 / 9 },
 ];
 
 const JPEG_QUALITY = 92;
@@ -146,6 +161,12 @@ export function App() {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchUrl, setBatchUrl] = useState<string | null>(null);
   const [hslBand, setHslBand] = useState(0);
+  const [stageSize, setStageSize] = useState({ width: 1, height: 1 });
+  const [cropRatio, setCropRatio] = useState<number | null>(null);
+  const [heals, setHeals] = useState<HealSpot[]>([]);
+  const [healing, setHealing] = useState(false);
+  const [healRadius, setHealRadius] = useState(0.012);
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
 
   const current = photos.find((photo) => photo.id === currentId) ?? null;
   const locked = batchRunning;
@@ -171,6 +192,7 @@ export function App() {
     if (!stage || !ready) return;
     const observer = new ResizeObserver(([entry]) => {
       const ratio = window.devicePixelRatio;
+      setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height });
       engineRef.current?.resize(
         Math.round(entry.contentRect.width * ratio),
         Math.round(entry.contentRect.height * ratio),
@@ -184,7 +206,7 @@ export function App() {
     const engine = engineRef.current;
     if (!engine) return;
     const ticket = openTicketRef.current;
-    const thumbnail = await engine.thumbnail(THUMBNAIL_LONG_EDGE);
+    const thumbnail = await engine.thumbnail(THUMBNAIL_LONG_EDGE, true);
     if (ticket !== openTicketRef.current) return;
     const url = thumbnailUrl(thumbnail);
     setPhotos((list) => list.map((photo) => (photo.id === id ? { ...photo, thumbnail: url } : photo)));
@@ -192,10 +214,10 @@ export function App() {
 
   /** Opens a photo in the engine. Rejects with STALE if another open overtook it. */
   const openPhoto = useCallback(
-    async (photo: Photo, edit: Adjustments) => {
+    async (photo: Photo, edit: Adjustments, spots: HealSpot[]) => {
       const engine = engineRef.current!;
       const ticket = ++openTicketRef.current;
-      const result = await engine.open(await photo.file.arrayBuffer(), edit);
+      const result = await engine.open(await photo.file.arrayBuffer(), edit, spots);
       if (ticket !== openTicketRef.current) throw new Error(STALE);
       return result;
     },
@@ -212,8 +234,11 @@ export function App() {
   const selectPhoto = useCallback(
     async (photo: Photo) => {
       flushPendingEdit();
-      const edit = editsRef.current[photo.id] ?? loadEdit(photo.id);
+      const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
+      const spots = loadHeals(photo.id);
       editsRef.current[photo.id] = edit;
+      setHeals(spots);
+      setHealing(false);
       settledRef.current = edit;
       setCurrentId(photo.id);
       setAdjustments(edit);
@@ -225,7 +250,7 @@ export function App() {
       setDetecting(false);
       setFindingFaces(false);
       try {
-        const result = await openPhoto(photo, edit);
+        const result = await openPhoto(photo, edit, spots);
         setLoaded(result);
         setHeapMB(result.heapMB);
         setBusy("");
@@ -347,6 +372,80 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [stepHistory]);
 
+  const quarter = adjustments.quarter ?? 0;
+  const rotate = adjustments.rotate ?? 0;
+  const imageFrame = frameSize(loaded?.width ?? 1, loaded?.height ?? 1, quarter);
+  const crop = cropOf(adjustments);
+  const cropEditing = (adjustments.cropEditing ?? 0) !== 0;
+  const shownCrop = cropEditing ? FULL_FRAME : crop;
+  const displayBox = fitBox(
+    (imageFrame.width * shownCrop.w) / (imageFrame.height * shownCrop.h),
+    stageSize.width,
+    stageSize.height,
+  );
+
+  const updateCrop = (next: Crop) =>
+    applyEdit({ ...adjustments, ...cropFields(shrinkToImage(next, rotate, imageFrame.width, imageFrame.height)) });
+
+  const toggleCropEditing = () => {
+    setHealing(false);
+    setValue("cropEditing", cropEditing ? 0 : 1);
+  };
+
+  const chooseRatio = (value: number | null) => {
+    setCropRatio(value);
+    if (value !== null) updateCrop(cropForRatio(value, imageFrame.width, imageFrame.height));
+  };
+
+  const setRotation = (degrees: number) =>
+    applyEdit({
+      ...adjustments,
+      rotate: degrees,
+      ...cropFields(shrinkToImage(crop, degrees, imageFrame.width, imageFrame.height)),
+    });
+
+  const turn = (direction: 1 | -1) => {
+    setCropRatio(null);
+    applyEdit({ ...adjustments, quarter: quarter + direction, rotate: 0, ...cropFields(FULL_FRAME) }, true);
+  };
+
+  const resetCrop = () => {
+    setCropRatio(null);
+    applyEdit({ ...adjustments, quarter: 0, rotate: 0, ...cropFields(FULL_FRAME) }, true);
+  };
+
+  const toggleHealing = () => {
+    if (cropEditing) setValue("cropEditing", 0);
+    setHealing((on) => !on);
+  };
+
+  const healAtPointer = async (event: React.MouseEvent<HTMLElement>) => {
+    if (!healing || !currentId) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const u = (event.clientX - bounds.left) / bounds.width;
+    const v = (event.clientY - bounds.top) / bounds.height;
+    try {
+      const spot = await engineRef.current!.healAt(u, v, Math.round(bounds.width), Math.round(bounds.height), healRadius);
+      if (!spot) return;
+      setHeals((list) => {
+        const next = [...list, spot];
+        saveHeals(currentId, next);
+        return next;
+      });
+      void refreshThumbnail(currentId).catch(() => {});
+    } catch (reason) {
+      setError((reason as Error).message);
+    }
+  };
+
+  const replaceHeals = async (next: HealSpot[]) => {
+    if (!currentId) return;
+    setHeals(next);
+    saveHeals(currentId, next);
+    await engineRef.current!.setHeals(next);
+    void refreshThumbnail(currentId).catch(() => {});
+  };
+
   const detectSubject = async () => {
     if (!loaded) return;
     setDetecting(true);
@@ -462,7 +561,7 @@ export function App() {
         const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
         setCurrentId(photo.id);
         setAdjustments(edit);
-        const result = await openPhoto(photo, edit);
+        const result = await openPhoto(photo, edit, loadHeals(photo.id));
         setLoaded(result);
         if (needsSubject(edit)) await engine.detectSubject(result.proxyWidth, result.proxyHeight);
         if (needsSkin(edit)) await engine.prepareSkin(result.proxyWidth, result.proxyHeight);
@@ -491,6 +590,14 @@ export function App() {
         <main
           className="stage"
           ref={stageRef}
+          style={healing ? { cursor: "none" } : undefined}
+          onClick={(event) => void healAtPointer(event)}
+          onPointerMove={(event) => {
+            if (!healing) return;
+            const bounds = event.currentTarget.getBoundingClientRect();
+            setPointer({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+          }}
+          onPointerLeave={() => setPointer(null)}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
@@ -500,6 +607,27 @@ export function App() {
           <canvas ref={canvasRef} />
           {!loaded && !busy && <p className="hint">{ready ? "拖入一组 RAW、JPEG 或 PNG" : "正在初始化 WebGPU…"}</p>}
           {busy && <p className="hint">{busy}</p>}
+          {cropEditing && loaded && (
+            <CropOverlay
+              box={displayBox}
+              crop={crop}
+              ratio={cropRatio}
+              frameWidth={imageFrame.width}
+              frameHeight={imageFrame.height}
+              onChange={updateCrop}
+            />
+          )}
+          {healing && pointer && loaded && (
+            <div
+              className="heal-cursor"
+              style={{
+                left: pointer.x,
+                top: pointer.y,
+                width: 2 * healRadius * Math.max(loaded.width, loaded.height) * (displayBox.width / (imageFrame.width * shownCrop.w)),
+                height: 2 * healRadius * Math.max(loaded.width, loaded.height) * (displayBox.width / (imageFrame.width * shownCrop.w)),
+              }}
+            />
+          )}
         </main>
 
         {photos.length > 0 && (
@@ -640,6 +768,71 @@ export function App() {
               onDoubleClick={() => setValue("backgroundExposure", 0)}
             />
           </label>
+        </section>
+
+        <section>
+          <h2>裁剪与旋转</h2>
+          <div className="row">
+            <button className={`button ${cropEditing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleCropEditing}>
+              {cropEditing ? "完成裁剪" : "裁剪"}
+            </button>
+            <select
+              aria-label="裁剪比例"
+              value={CROP_RATIOS.findIndex((item) => item.value === cropRatio)}
+              disabled={!loaded || locked}
+              onChange={(event) => chooseRatio(CROP_RATIOS[Number(event.target.value)].value)}
+            >
+              {CROP_RATIOS.map((item, index) => (
+                <option key={item.label} value={index}>{item.label}</option>
+              ))}
+            </select>
+          </div>
+          <label className="slider">
+            <span>旋转</span>
+            <output>{rotate.toFixed(1)}°</output>
+            <input
+              aria-label="旋转"
+              type="range"
+              min={-45}
+              max={45}
+              step={0.1}
+              value={rotate}
+              disabled={!loaded || locked}
+              onChange={(event) => setRotation(Number(event.target.value))}
+              onDoubleClick={() => setRotation(0)}
+            />
+          </label>
+          <div className="row">
+            <button className="button secondary" disabled={!loaded || locked} onClick={() => turn(-1)}>左转 90°</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={() => turn(1)}>右转 90°</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={resetCrop}>还原</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>污点修复</h2>
+          <div className="row">
+            <button className={`button ${healing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleHealing}>
+              {healing ? "退出修复" : "点击修复"}
+            </button>
+            <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals(heals.slice(0, -1))}>撤销一点</button>
+            <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals([])}>清除</button>
+          </div>
+          <label className="slider">
+            <span>画笔大小</span>
+            <output>{(healRadius * 100).toFixed(1)}</output>
+            <input
+              aria-label="画笔大小"
+              type="range"
+              min={0.002}
+              max={0.06}
+              step={0.001}
+              value={healRadius}
+              disabled={!loaded || locked}
+              onChange={(event) => setHealRadius(Number(event.target.value))}
+            />
+          </label>
+          <p className="progress" data-stat="heals">已修复 {heals.length} 处</p>
         </section>
 
         <section>

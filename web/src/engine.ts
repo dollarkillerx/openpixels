@@ -5,6 +5,7 @@ import type {
   EngineRequest,
   ExportResult,
   FromWorker,
+  HealSpot,
   LoadResult,
   ModelInput,
   SegmentReply,
@@ -76,8 +77,17 @@ export class EngineClient {
     });
   }
 
-  open(buffer: ArrayBuffer, adjustments: Adjustments) {
-    return this.call<LoadResult>({ type: "open", buffer, adjustments }, [buffer]);
+  open(buffer: ArrayBuffer, adjustments: Adjustments, heals: HealSpot[]) {
+    return this.call<LoadResult>({ type: "open", buffer, adjustments, heals }, [buffer]);
+  }
+
+  /** Heals at a position in 0..=1 on the stage. Resolves to null if it missed the image. */
+  healAt(x: number, y: number, stageWidth: number, stageHeight: number, radius: number) {
+    return this.call<HealSpot | null>({ type: "healAt", x, y, stageWidth, stageHeight, radius });
+  }
+
+  setHeals(heals: HealSpot[]) {
+    return this.call<void>({ type: "setHeals", heals });
   }
 
   adjust(adjustments: Adjustments) {
@@ -92,14 +102,15 @@ export class EngineClient {
     return this.call<ExportResult>({ type: "export", quality });
   }
 
-  thumbnail(maxLongEdge: number) {
-    return this.call<Thumbnail>({ type: "thumbnail", maxLongEdge });
+  /** `framed` applies the crop and rotation; analysis needs the unframed image. */
+  thumbnail(maxLongEdge: number, framed: boolean) {
+    return this.call<Thumbnail>({ type: "thumbnail", maxLongEdge, framed });
   }
 
   /** Finds faces in the open image and builds its skin corrections. */
   async prepareSkin(proxyWidth: number, proxyHeight: number): Promise<SkinStats> {
     const start = performance.now();
-    const thumbnail = await this.thumbnail(FACE_DETECTION_LONG_EDGE);
+    const thumbnail = await this.thumbnail(FACE_DETECTION_LONG_EDGE, false);
     const skin = await buildSkinMask(thumbnail, proxyWidth, proxyHeight);
     if (skin) {
       await this.call<void>({ type: "setSkinMask", mask: skin.mask, faceWidth: skin.faceWidth }, [skin.mask]);

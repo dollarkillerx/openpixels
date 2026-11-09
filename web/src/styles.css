@@ -17,6 +17,22 @@ body { background: var(--bg); color: var(--text); }
 .app { display: flex; height: 100%; }
 .workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
+.crop-layer { position: absolute; pointer-events: none; }
+.crop-rect {
+  position: absolute; box-sizing: border-box; border: 1px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55); cursor: move; pointer-events: auto; touch-action: none;
+}
+.crop-handle { position: absolute; width: 14px; height: 14px; background: #fff; border-radius: 2px; touch-action: none; }
+.crop-handle.nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.crop-handle.ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.crop-handle.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.crop-handle.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.stage { touch-action: none; }
+.heal-cursor {
+  position: absolute; box-sizing: border-box; transform: translate(-50%, -50%);
+  border: 1.5px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); pointer-events: none;
+}
+
 .strip {
   display: flex; gap: 6px; flex: none; height: 88px; padding: 8px;
   overflow-x: auto; background: var(--panel); border-top: 1px solid var(--line);
@@ -85,6 +101,6 @@ h2 {
 
 @media (max-width: 720px) {
   .app { flex-direction: column; }
-  .stage { flex: 1 1 50%; }
-  .panel { width: 100%; flex: 1 1 50%; border-left: 0; border-top: 1px solid var(--line); }
+  .workspace { flex: 1 1 55%; }
+  .panel { width: 100%; flex: 1 1 45%; min-height: 0; border-left: 0; border-top: 1px solid var(--line); }
 }

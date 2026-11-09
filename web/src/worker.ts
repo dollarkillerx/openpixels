@@ -74,6 +74,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       const proxy = JSON.parse(engine!.build_proxy(PROXY_LONG_EDGE));
       const t2 = performance.now();
       engine!.set_adjustments(engineJson(request.adjustments));
+      engine!.set_heals(JSON.stringify(request.heals));
       pendingAdjustments = null;
       hasImage = true;
       scheduleRender();
@@ -101,11 +102,24 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
     }
 
     case "thumbnail": {
-      const size = JSON.parse(engine!.thumbnail_size(request.maxLongEdge));
-      const rgb = detach(await engine!.thumbnail(request.maxLongEdge));
+      const { maxLongEdge, framed } = request;
+      const size = JSON.parse(framed ? engine!.framed_thumbnail_size(maxLongEdge) : engine!.thumbnail_size(maxLongEdge));
+      const rgb = detach(await (framed ? engine!.framed_thumbnail(maxLongEdge) : engine!.thumbnail(maxLongEdge)));
       const result: Thumbnail = { rgb, width: size.width, height: size.height };
       return [result, [rgb]];
     }
+
+    case "healAt": {
+      const { x, y, stageWidth, stageHeight, radius } = request;
+      const spot = JSON.parse(engine!.heal_at(x, y, stageWidth, stageHeight, radius));
+      scheduleRender();
+      return [spot, []];
+    }
+
+    case "setHeals":
+      engine!.set_heals(JSON.stringify(request.heals));
+      scheduleRender();
+      return [undefined, []];
 
     case "modelInput": {
       const start = performance.now();
