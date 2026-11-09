@@ -83,7 +83,8 @@ export type EngineRequest =
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
   | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }
   | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number }
-  | { type: "setLocalMask"; mask: ArrayBuffer; width: number; height: number };
+  | { type: "setLocalMask"; mask: ArrayBuffer; width: number; height: number }
+  | { type: "setLook"; size: number; data: ArrayBuffer };
 
 export type EngineCommand =
   | { type: "adjust"; adjustments: Adjustments }

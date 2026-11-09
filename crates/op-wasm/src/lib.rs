@@ -284,6 +284,11 @@ impl Engine {
         Ok(())
     }
 
+    /// Sets the creative look: `size`^3 RGB triples, or a size of 0 for none.
+    pub fn set_look(&mut self, size: u32, rgb: &[f32]) {
+        self.renderer.set_look((size > 0).then_some((size, rgb)));
+    }
+
     /// Sets the local adjustment masks, one layer per RGBA channel, covering the image.
     pub fn set_local_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
         self.renderer.set_local_mask(width, height, rgba);

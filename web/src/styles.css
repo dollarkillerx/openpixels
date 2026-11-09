@@ -17,6 +17,14 @@ body { background: var(--bg); color: var(--text); }
 .app { display: flex; height: 100%; }
 .workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
+.local-handle {
+  position: absolute; width: 16px; height: 16px; transform: translate(-50%, -50%);
+  border: 2px solid #fff; border-radius: 50%; background: rgba(50, 150, 240, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); cursor: grab; touch-action: none;
+}
+.local-handle.end { background: rgba(255, 255, 255, 0.35); }
+.restore { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--muted); }
+
 .crop-layer { position: absolute; pointer-events: none; }
 .crop-rect {
   position: absolute; box-sizing: border-box; border: 1px solid #fff;

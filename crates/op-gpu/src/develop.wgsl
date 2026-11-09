@@ -31,6 +31,7 @@ struct Adjustments {
     local: array<vec4<f32>, 4>,
     grade: array<vec4<f32>, 3>,
     local_overlay: f32,
+    lut_amount: f32,
 }
 
 struct Region {
@@ -65,6 +66,8 @@ struct Region {
 @group(0) @binding(9) var local_mask: texture_2d<f32>;
 // Output tone per channel for each input tone, in one row.
 @group(0) @binding(10) var curve_lut: texture_2d<f32>;
+// Creative look, from display colour to display colour.
+@group(0) @binding(11) var look_lut: texture_3d<f32>;
 
 // This pixel's combined local adjustments: exposure, contrast, saturation, temperature.
 var<private> local_values: vec4<f32>;
@@ -331,6 +334,15 @@ fn apply_denoise(centre: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
     return pow(max(result, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
 }
 
+fn apply_look(display: vec3<f32>) -> vec3<f32> {
+    if adj.lut_amount == 0.0 {
+        return display;
+    }
+    let size = vec3<f32>(textureDimensions(look_lut));
+    let at = (clamp(display, vec3<f32>(0.0), vec3<f32>(1.0)) * (size - 1.0) + 0.5) / size;
+    return mix(display, textureSampleLevel(look_lut, mask_sampler, at, 0.0).rgb, adj.lut_amount);
+}
+
 fn apply_vignette(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let centered = (pixel + 0.5 - region.full_size * 0.5) / (region.full_size * 0.5);
     let falloff = smoothstep(0.35, 1.45, length(centered));
@@ -376,7 +388,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = apply_vignette(rgb, pixel);
 
     let tint = vec3<f32>(0.95, 0.2, 0.35);
-    var display = mix(linear_to_srgb(rgb), tint, adj.mask_overlay * background * 0.65);
+    var display = mix(apply_look(linear_to_srgb(rgb)), tint, adj.mask_overlay * background * 0.65);
     if adj.local_overlay > 0.0 {
         let layer = u32(adj.local_overlay) - 1u;
         display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);

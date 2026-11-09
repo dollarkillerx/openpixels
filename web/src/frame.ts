@@ -91,6 +91,17 @@ export function outputToSource(s: number, t: number, edit: Adjustments, width: n
   return { x: sx / width + 0.5, y: sy / height + 0.5 };
 }
 
+/** Output position (s, t) showing source UV (u, v): the inverse of `outputToSource`. */
+export function sourceToOutput(u: number, v: number, edit: Adjustments, width: number, height: number) {
+  const origin = outputToSource(0, 0, edit, width, height);
+  const endS = outputToSource(1, 0, edit, width, height);
+  const endT = outputToSource(0, 1, edit, width, height);
+  const [ax, ay, bx, by] = [endS.x - origin.x, endS.y - origin.y, endT.x - origin.x, endT.y - origin.y];
+  const determinant = ax * by - ay * bx;
+  const [du, dv] = [u - origin.x, v - origin.y];
+  return { x: (du * by - dv * bx) / determinant, y: (dv * ax - du * ay) / determinant };
+}
+
 export type CropHandle = "move" | "nw" | "ne" | "sw" | "se";
 
 /** A crop after dragging `handle` by a fraction of the frame. `ratio` locks the shape. */

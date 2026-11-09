@@ -51,8 +51,10 @@ pub struct Adjustments {
     pub grade: [[f32; 4]; 3],
     /// 1-based local layer whose mask is tinted on screen, or 0. Never exported.
     pub local_overlay: f32,
+    /// Blend of the 3D lookup table, 0..=1.
+    pub lut_amount: f32,
     #[serde(skip)]
-    pub _padding: [f32; 3],
+    pub _padding: [f32; 2],
 }
 
 #[cfg(test)]

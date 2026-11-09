@@ -205,6 +205,11 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       scheduleRender();
       return [undefined, []];
 
+    case "setLook":
+      engine!.set_look(request.size, new Float32Array(request.data));
+      scheduleRender();
+      return [undefined, []];
+
     case "setLocalMask":
       engine!.set_local_mask(request.width, request.height, new Uint8Array(request.mask));
       scheduleRender();

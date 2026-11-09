@@ -3,7 +3,9 @@ import { CropOverlay } from "./CropOverlay";
 import { ToneCurve } from "./ToneCurve";
 import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
-import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, type Crop } from "./frame";
+import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, sourceToOutput, type Crop } from "./frame";
+import { BUILT_IN_LOOKS, builtInLut, parseCube } from "./lut";
+import { forgetHandles, getLut, listLuts, recallHandles, rememberHandle, saveLut, type StoredLut } from "./store";
 import { LOCAL_SLIDERS, MAX_LOCAL_LAYERS, removeLocalValues, renderLocalMask, type LocalKind, type LocalLayer } from "./local";
 import {
   exportName,
@@ -198,6 +200,10 @@ export function App() {
   const [liquifyStrength, setLiquifyStrength] = useState(0.7);
   const [liquifyMode, setLiquifyMode] = useState(0);
   const [ratings, setRatings] = useState<Record<string, number>>(loadRatings);
+  const [importedLuts, setImportedLuts] = useState<StoredLut[]>([]);
+  const [restorable, setRestorable] = useState<FileSystemFileHandle[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const handleDragRef = useRef<"a" | "b" | null>(null);
   const [minRating, setMinRating] = useState(0);
   const dragRef = useRef<{ x: number; y: number; strokes: WarpStroke[] } | null>(null);
   const [locals, setLocals] = useState<LocalLayer[]>([]);
@@ -242,6 +248,16 @@ export function App() {
     observer.observe(stage);
     return () => observer.disconnect();
   }, [ready]);
+
+  useEffect(() => {
+    listLuts().then(setImportedLuts).catch(() => {});
+    recallHandles().then(setRestorable).catch(() => {});
+  }, []);
+
+  const resolveLook = useCallback(async (id: number) => {
+    if (!id) return null;
+    return builtInLut(id) ?? (await getLut(id).catch(() => undefined)) ?? null;
+  }, []);
 
   const refreshThumbnail = useCallback(async (id: string) => {
     const engine = engineRef.current;
@@ -361,6 +377,19 @@ export function App() {
     },
     [selectPhoto],
   );
+
+  // The look follows the edit, whatever changed it: a slider, undo, a preset or a new photo.
+  const lookId = adjustments.lutId ?? 0;
+  useEffect(() => {
+    if (!ready || !loaded) return;
+    let cancelled = false;
+    void resolveLook(lookId).then((lut) => {
+      if (!cancelled) void engineRef.current?.setLook(lut);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, loaded, lookId, resolveLook]);
 
   // Development shortcut: /?fixture=/a.dng,/b.dng loads files without a picker.
   useEffect(() => {
@@ -536,6 +565,90 @@ export function App() {
     const t = (event.clientY - bounds.top - box.top) / box.height;
     if (!loaded || s < 0 || s > 1 || t < 0 || t > 1) return null;
     return outputToSource(s, t, adjustments, loaded.width, loaded.height);
+  };
+
+  const importLut = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const stored = await saveLut(file.name.replace(/\.cube$/i, ""), parseCube(await file.text()));
+      setImportedLuts((list) => [...list, stored]);
+      applyEdit({ ...adjustments, lutId: stored.id, lutAmount: 1 }, true);
+    } catch (reason) {
+      setError(`导入 LUT 失败：${(reason as Error).message}`);
+    }
+  };
+
+  const chooseLook = (id: number) =>
+    applyEdit({ ...adjustments, lutId: id, lutAmount: id ? (adjustments.lutAmount || 1) : 0 }, true);
+
+  /** Adds files chosen through a picker that hands back handles, so they can be reopened. */
+  const addHandles = async (handles: FileSystemFileHandle[]) => {
+    const files = await Promise.all(handles.map((handle) => handle.getFile()));
+    await Promise.all(handles.map((handle, index) => rememberHandle(fileId(files[index]), handle)));
+    addFiles(files);
+  };
+
+  const openPicker = async () => {
+    const picker = (window as unknown as { showOpenFilePicker?: (o: object) => Promise<FileSystemFileHandle[]> })
+      .showOpenFilePicker;
+    if (!picker) {
+      fileInputRef.current?.click();
+      return;
+    }
+    try {
+      await addHandles(await picker.call(window, { multiple: true }));
+    } catch (reason) {
+      if (!(reason instanceof DOMException && reason.name === "AbortError")) setError((reason as Error).message);
+    }
+  };
+
+  const restoreLibrary = async () => {
+    const granted: FileSystemFileHandle[] = [];
+    for (const handle of restorable) {
+      const access = handle as FileSystemFileHandle & {
+        requestPermission?: (d: { mode: string }) => Promise<PermissionState>;
+      };
+      if (!access.requestPermission || (await access.requestPermission({ mode: "read" })) === "granted") {
+        granted.push(handle);
+      }
+    }
+    setRestorable([]);
+    try {
+      await addHandles(granted);
+    } catch (reason) {
+      setError(`恢复图库失败：${(reason as Error).message}`);
+    }
+  };
+
+  const clearLibrary = () => {
+    void forgetHandles();
+    setRestorable([]);
+  };
+
+  const startHandle = (which: "a" | "b") => (event: React.PointerEvent<HTMLElement>) => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    handleDragRef.current = which;
+  };
+
+  const moveHandle = (event: React.PointerEvent<HTMLElement>) => {
+    const which = handleDragRef.current;
+    const stage = stageRef.current;
+    if (!which || !stage || !loaded) return;
+    const bounds = stage.getBoundingClientRect();
+    const box = fitBox((imageFrame.width * shownCrop.w) / (imageFrame.height * shownCrop.h), bounds.width, bounds.height);
+    const s = (event.clientX - bounds.left - box.left) / box.width;
+    const t = (event.clientY - bounds.top - box.top) / box.height;
+    const point = outputToSource(s, t, adjustments, loaded.width, loaded.height);
+    localsRef.current = localsRef.current.map((layer, index) => (index === activeLocal ? { ...layer, [which]: point } : layer));
+    setLocals(localsRef.current);
+    scheduleLocalMask();
+  };
+
+  const finishHandle = () => {
+    if (!handleDragRef.current) return;
+    handleDragRef.current = null;
+    commitLocals(localsRef.current);
   };
 
   const startLocal = (event: React.PointerEvent<HTMLElement>) => {
@@ -816,6 +929,7 @@ export function App() {
         setAdjustments(edit);
         const result = await openPhoto(photo, edit, loadHeals(photo.id), loadWarps(photo.id));
         setLoaded(result);
+        await engine.setLook(await resolveLook(edit.lutId ?? 0));
         const layers = loadLocals(photo.id);
         if (layers.length > 0) {
           await engine.setLocalMask(
@@ -882,6 +996,22 @@ export function App() {
           <canvas ref={canvasRef} />
           {!loaded && !busy && <p className="hint">{ready ? "拖入一组 RAW、JPEG 或 PNG" : "正在初始化 WebGPU…"}</p>}
           {busy && <p className="hint">{busy}</p>}
+          {(adjustments.localOverlay ?? 0) > 0 && loaded && locals[activeLocal] && locals[activeLocal].kind !== "brush" &&
+            (["a", "b"] as const).map((which) => {
+              const point = sourceToOutput(locals[activeLocal][which].x, locals[activeLocal][which].y, adjustments, loaded.width, loaded.height);
+              return (
+                <div
+                  key={which}
+                  className={`local-handle ${which === "b" ? "end" : ""}`}
+                  data-local-handle={which}
+                  style={{ left: displayBox.left + point.x * displayBox.width, top: displayBox.top + point.y * displayBox.height }}
+                  onPointerDown={startHandle(which)}
+                  onPointerMove={moveHandle}
+                  onPointerUp={finishHandle}
+                  onPointerCancel={finishHandle}
+                />
+              );
+            })}
           {cropEditing && loaded && (
             <CropOverlay
               box={displayBox}
@@ -925,23 +1055,30 @@ export function App() {
       <aside className="panel">
         <header>
           <h1>OpenPixels</h1>
-          <label className={`button ${ready && !locked ? "" : "disabled"}`}>
-            添加图片
-            <input
-              type="file"
-              multiple
-              hidden
-              accept={RAW_ACCEPT}
-              disabled={!ready || locked}
-              onChange={(event) => {
-                addFiles([...(event.target.files ?? [])]);
-                event.target.value = "";
-              }}
-            />
-          </label>
+          <button className="button" disabled={!ready || locked} onClick={() => void openPicker()}>添加图片</button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            accept={RAW_ACCEPT}
+            disabled={!ready || locked}
+            onChange={(event) => {
+              addFiles([...(event.target.files ?? [])]);
+              event.target.value = "";
+            }}
+          />
         </header>
 
         {error && <p className="error" role="alert">{error}</p>}
+
+        {restorable.length > 0 && photos.length === 0 && (
+          <div className="restore" data-testid="restore">
+            <span>上次有 {restorable.length} 张图片</span>
+            <button className="button" disabled={!ready} onClick={() => void restoreLibrary()}>恢复</button>
+            <button className="button secondary" onClick={clearLibrary}>忽略</button>
+          </div>
+        )}
 
         {photos.length > 0 && (
           <section>
@@ -1004,6 +1141,40 @@ export function App() {
         <section>
           <h2>曲线</h2>
           <ToneCurve adjustments={adjustments} disabled={!loaded || locked} onChange={setValue} />
+        </section>
+
+        <section>
+          <h2>滤镜</h2>
+          <div className="row">
+            <select aria-label="滤镜" value={lookId} disabled={!loaded || locked} onChange={(event) => chooseLook(Number(event.target.value))}>
+              <option value={0}>无</option>
+              {BUILT_IN_LOOKS.map((look) => (
+                <option key={look.id} value={look.id}>{look.name}</option>
+              ))}
+              {importedLuts.map((lut) => (
+                <option key={lut.id} value={lut.id}>{lut.name}</option>
+              ))}
+            </select>
+            <label className={`button secondary ${!loaded || locked ? "disabled" : ""}`}>
+              导入 .cube
+              <input
+                type="file"
+                hidden
+                accept=".cube"
+                aria-label="导入 LUT"
+                disabled={!loaded || locked}
+                onChange={(event) => {
+                  void importLut(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          <label className="slider">
+            <span>滤镜强度</span>
+            <output>{(adjustments.lutAmount ?? 0).toFixed(2)}</output>
+            <input aria-label="滤镜强度" type="range" min={0} max={1} step={0.01} value={adjustments.lutAmount ?? 0} disabled={!lookId || locked} onChange={(event) => setValue("lutAmount", Number(event.target.value))} />
+          </label>
         </section>
 
         <section>

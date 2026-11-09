@@ -69,6 +69,7 @@ pub struct Renderer {
     local_mask_view: wgpu::TextureView,
     curve_texture: wgpu::Texture,
     curve_view: wgpu::TextureView,
+    look_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     preview: Option<Preview>,
 }
@@ -107,6 +108,16 @@ impl Renderer {
                 texture_entry(8, wgpu::ShaderStages::COMPUTE, true),
                 texture_entry(9, wgpu::ShaderStages::COMPUTE, true),
                 texture_entry(10, wgpu::ShaderStages::COMPUTE, true),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let develop_pipeline_layout =
@@ -194,6 +205,7 @@ impl Renderer {
             view_formats: &[],
         });
         let curve_view = curve_texture.create_view(&Default::default());
+        let look_view = create_look_view(&device, &queue, 2, &IDENTITY_LOOK);
 
         Self {
             device,
@@ -213,6 +225,7 @@ impl Renderer {
             local_mask_view,
             curve_texture,
             curve_view,
+            look_view,
             base_exposure: None,
             preview: None,
         }
@@ -281,6 +294,16 @@ impl Renderer {
         let u = map.origin[0] + s * map.axis_s[0] + t * map.axis_t[0];
         let v = map.origin[1] + s * map.axis_s[1] + t * map.axis_t[1];
         ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((u, v))
+    }
+
+    /// Sets the creative 3D lookup table: `size`^3 RGB triples with red varying fastest.
+    /// `None` restores the identity.
+    pub fn set_look(&mut self, look: Option<(u32, &[f32])>) {
+        self.look_view = match look {
+            Some((size, rgb)) => create_look_view(&self.device, &self.queue, size, rgb),
+            None => create_look_view(&self.device, &self.queue, 2, &IDENTITY_LOOK),
+        };
+        self.rebuild_preview_bindings();
     }
 
     /// Updates the tone curve lookup table.
@@ -611,6 +634,10 @@ impl Renderer {
                     binding: 10,
                     resource: wgpu::BindingResource::TextureView(&self.curve_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&self.look_view),
+                },
             ],
         })
     }
@@ -740,6 +767,40 @@ fn create_luma_view(
             rows_per_image: Some(height),
         },
         extent(width, height),
+    );
+    texture.create_view(&Default::default())
+}
+
+const IDENTITY_LOOK: [f32; 24] = [
+    0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+];
+
+fn create_look_view(device: &wgpu::Device, queue: &wgpu::Queue, size: u32, rgb: &[f32]) -> wgpu::TextureView {
+    let dimensions = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: size };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("look"),
+        size: dimensions,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: SOURCE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let one = half::f16::from_f32(1.0).to_bits();
+    let rgba: Vec<u16> = rgb
+        .chunks_exact(3)
+        .flat_map(|c| [half::f16::from_f32(c[0]).to_bits(), half::f16::from_f32(c[1]).to_bits(), half::f16::from_f32(c[2]).to_bits(), one])
+        .collect();
+    queue.write_texture(
+        texture.as_image_copy(),
+        cast_slice(&rgba),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size * SOURCE_BYTES_PER_PIXEL),
+            rows_per_image: Some(size),
+        },
+        dimensions,
     );
     texture.create_view(&Default::default())
 }
@@ -1214,6 +1275,31 @@ mod tests {
         assert!(shadow[2] > shadow[0], "shadow should turn blue: {shadow:?}");
         let bright = LinearImage::new(1, 1, vec![f16::from_f32(0.9).to_bits(); 3]);
         assert_eq!(export(&renderer, &bright, &adj, 64), export(&renderer, &bright, &Adjustments::default(), 64));
+    }
+
+    #[test]
+    fn the_identity_look_changes_nothing() {
+        let renderer = renderer();
+        let image = ramp(64, 32);
+        let adj = Adjustments { lut_amount: 1.0, ..Default::default() };
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let looked = export(&renderer, &image, &adj, 64);
+        for (a, b) in plain.iter().zip(&looked) {
+            assert!((i32::from(*a) - i32::from(*b)).abs() <= 1, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn a_look_recolours_in_proportion_to_its_amount() {
+        let mut renderer = renderer();
+        // Every input maps to pure red.
+        let red: Vec<f32> = [1.0, 0.0, 0.0].repeat(8);
+        renderer.set_look(Some((2, &red)));
+        let image = flat_gray(2, 2);
+        let full = export(&renderer, &image, &Adjustments { lut_amount: 1.0, ..Default::default() }, 64);
+        assert_eq!((full[0], full[1]), (255, 0));
+        let half = export(&renderer, &image, &Adjustments { lut_amount: 0.5, ..Default::default() }, 64);
+        assert!(half[0] > 118 && half[0] < 255 && half[1] < 118, "{half:?}");
     }
 
     #[test]

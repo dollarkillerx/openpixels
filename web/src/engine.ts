@@ -1,4 +1,5 @@
 import { buildSkinMask } from "./face";
+import type { Lut } from "./lut";
 import { MODEL, modelInputSize } from "./model";
 import type {
   Adjustments,
@@ -116,6 +117,13 @@ export class EngineClient {
   /** `framed` applies the crop and rotation; analysis needs the unframed image. */
   thumbnail(maxLongEdge: number, framed: boolean) {
     return this.call<Thumbnail>({ type: "thumbnail", maxLongEdge, framed });
+  }
+
+  /** Applies a look, or none. */
+  setLook(lut: Lut | null) {
+    if (!lut) return this.call<void>({ type: "setLook", size: 0, data: new ArrayBuffer(0) });
+    const data = lut.data.slice().buffer;
+    return this.call<void>({ type: "setLook", size: lut.size, data }, [data]);
   }
 
   setLocalMask(mask: ArrayBuffer, width: number, height: number) {
