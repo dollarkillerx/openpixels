@@ -326,6 +326,9 @@ export function App() {
                 <dt>图像</dt><dd>{loaded.width}×{loaded.height}{loaded.isRaw ? " RAW" : ""}</dd>
                 <dt>文件</dt><dd>{loaded.fileMB.toFixed(0)} MB</dd>
                 <dt>解码</dt><dd data-stat="decode">{loaded.decodeMs.toFixed(0)} ms</dd>
+                {loaded.baseExposure !== null && (
+                  <><dt>基础曝光</dt><dd data-stat="base-exposure">{loaded.baseExposure.toFixed(2)} EV</dd></>
+                )}
                 <dt>代理图</dt><dd>{loaded.proxyWidth}×{loaded.proxyHeight}，{loaded.proxyMs.toFixed(0)} ms</dd>
               </>
             )}

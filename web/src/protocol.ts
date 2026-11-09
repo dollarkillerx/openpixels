@@ -22,6 +22,7 @@ export interface LoadResult {
   height: number;
   isRaw: boolean;
   camera: string | null;
+  baseExposure: number | null;
   proxyWidth: number;
   proxyHeight: number;
   fileMB: number;

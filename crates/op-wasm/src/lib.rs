@@ -20,6 +20,7 @@ struct ImageInfo {
     height: u32,
     is_raw: bool,
     camera: Option<String>,
+    base_exposure: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -35,7 +36,10 @@ pub struct Engine {
     config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     renderer: Renderer,
-    image: Option<LinearImage>,
+    /// The decoded image. For RAW this is only the half-size one, dropped once the
+    /// proxy is built, because export re-develops from `raw_file` at full quality.
+    working: Option<LinearImage>,
+    raw_file: Option<Vec<u8>>,
     proxy: Option<LinearImage>,
     adjustments: Adjustments,
 }
@@ -85,34 +89,44 @@ impl Engine {
             config,
             device,
             renderer,
-            image: None,
+            working: None,
+            raw_file: None,
             proxy: None,
             adjustments: Adjustments::default(),
         })
     }
 
-    /// Decodes a file into the full-resolution working image. Returns JSON metadata.
+    /// Opens a file for editing. Returns JSON metadata.
     pub fn decode(&mut self, bytes: &[u8]) -> Result<String, JsError> {
-        // Drop the previous image first so two full-size buffers never coexist.
-        self.image = None;
-        let decoded = op_core::decode(bytes).map_err(js_error)?;
+        // Drop the previous image first so two large buffers never coexist.
+        self.working = None;
+        self.raw_file = None;
+        let opened = op_core::open(bytes).map_err(js_error)?;
         let info = ImageInfo {
-            width: decoded.image.width,
-            height: decoded.image.height,
-            is_raw: decoded.is_raw,
-            camera: decoded.camera,
+            width: opened.width,
+            height: opened.height,
+            is_raw: opened.is_raw,
+            camera: opened.camera,
+            base_exposure: opened.base_exposure,
         };
-        self.image = Some(decoded.image);
+        self.renderer.set_base_exposure(opened.base_exposure);
+        self.working = Some(opened.working);
+        if opened.is_raw {
+            self.raw_file = Some(bytes.to_vec());
+        }
         serde_json::to_string(&info).map_err(js_error)
     }
 
     /// Builds and uploads the interactive proxy. Returns JSON with its size.
     pub fn build_proxy(&mut self, max_long_edge: u32) -> Result<String, JsError> {
-        let image = self.image.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let image = self.working.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
         let proxy = image.proxy(max_long_edge);
         self.renderer.set_preview(&proxy);
         let info = ProxyInfo { width: proxy.width, height: proxy.height };
         self.proxy = Some(proxy);
+        if self.raw_file.is_some() {
+            self.working = None;
+        }
         serde_json::to_string(&info).map_err(js_error)
     }
 
@@ -165,7 +179,14 @@ impl Engine {
 
     /// Develops the full-resolution image and returns JPEG bytes.
     pub async fn export_jpeg(&mut self, quality: u8) -> Result<Vec<u8>, JsError> {
-        let image = self.image.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let developed = match &self.raw_file {
+            Some(file) => Some(op_core::develop_raw_full(file).map_err(js_error)?),
+            None => None,
+        };
+        let image = developed
+            .as_ref()
+            .or(self.working.as_ref())
+            .ok_or_else(|| JsError::new("no image loaded"))?;
         let rgb = self
             .renderer
             .export_rgb8(image, &self.adjustments, EXPORT_TILE_SIZE)

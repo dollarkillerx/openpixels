@@ -29,6 +29,8 @@ struct Region {
     full_size: [f32; 2],
     offset: [f32; 2],
     extent: [f32; 2],
+    base_exposure: f32,
+    has_base_look: f32,
 }
 
 struct Preview {
@@ -54,6 +56,7 @@ pub struct Renderer {
     region_buffer: wgpu::Buffer,
     blit_buffer: wgpu::Buffer,
     mask_view: wgpu::TextureView,
+    base_exposure: Option<f32>,
     preview: Option<Preview>,
 }
 
@@ -170,8 +173,15 @@ impl Renderer {
             region_buffer,
             blit_buffer,
             mask_view,
+            base_exposure: None,
             preview: None,
         }
+    }
+
+    /// Enables the default RAW look with an exposure offset in EV, or disables it for
+    /// images that already have a tone curve.
+    pub fn set_base_exposure(&mut self, base_exposure: Option<f32>) {
+        self.base_exposure = base_exposure;
     }
 
     /// Sets the subject mask for the current image. `mask` holds `width * height`
@@ -436,6 +446,8 @@ impl Renderer {
             full_size: [full_w as f32, full_h as f32],
             offset: [x as f32, y as f32],
             extent: [w as f32, h as f32],
+            base_exposure: self.base_exposure.unwrap_or(0.0),
+            has_base_look: f32::from(u8::from(self.base_exposure.is_some())),
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
     }
@@ -683,6 +695,39 @@ mod tests {
         let plain = export(&renderer, &image, &Adjustments::default(), 64);
         let tinted = Adjustments { mask_overlay: 1.0, ..Default::default() };
         assert_eq!(plain, export(&renderer, &image, &tinted, 64));
+    }
+
+    fn export_gray(renderer: &Renderer, value: f32) -> u8 {
+        let bits = f16::from_f32(value).to_bits();
+        let image = LinearImage::new(1, 1, vec![bits; 3]);
+        export(renderer, &image, &Adjustments::default(), 64)[0]
+    }
+
+    #[test]
+    fn base_look_maps_sensor_range_to_display_range() {
+        let mut renderer = renderer();
+        renderer.set_base_exposure(Some(1.2));
+        assert_eq!(export_gray(&renderer, 0.0), 0);
+        assert_eq!(export_gray(&renderer, 1.0), 255);
+    }
+
+    #[test]
+    fn base_look_is_monotonic_and_brightens_midtones() {
+        let mut renderer = renderer();
+        let plain = export_gray(&renderer, 0.09);
+        renderer.set_base_exposure(Some(1.2));
+        let values: Vec<u8> = [0.01, 0.05, 0.09, 0.2, 0.5, 0.9].map(|v| export_gray(&renderer, v)).to_vec();
+        assert!(values.windows(2).all(|pair| pair[0] < pair[1]), "{values:?}");
+        assert!(values[2] > plain, "{} should be brighter than {plain}", values[2]);
+    }
+
+    #[test]
+    fn base_look_keeps_tiles_consistent() {
+        let mut renderer = renderer();
+        renderer.set_base_exposure(Some(0.8));
+        let image = ramp(300, 170);
+        let adj = Adjustments { exposure: 0.2, ..Default::default() };
+        assert_eq!(export(&renderer, &image, &adj, 64), export(&renderer, &image, &adj, 512));
     }
 
     #[test]

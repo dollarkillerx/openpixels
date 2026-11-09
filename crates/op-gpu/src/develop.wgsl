@@ -28,6 +28,9 @@ struct Region {
     offset: vec2<f32>,
     // Pixels to render. Can be smaller than the bound textures for edge tiles.
     extent: vec2<f32>,
+    // Default RAW look: exposure offset in EV, and whether to apply the look at all.
+    base_exposure: f32,
+    has_base_look: f32,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -41,6 +44,30 @@ struct Region {
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 const TONE_GAMMA = 2.2;
 const MID_GRAY_TONE = 0.4586; // 0.18 ^ (1 / 2.2)
+// Keep in sync with op-core/src/look.rs.
+const LOOK_CONTRAST = 1.5;
+const LOOK_KNEE = 0.348;
+
+fn look_curve(x: f32) -> f32 {
+    let toe = pow(max(x, 0.0), LOOK_CONTRAST);
+    return toe / (toe + LOOK_KNEE);
+}
+
+// Turns sensor-referred RAW data into a display-referred image.
+fn apply_base_look(rgb: vec3<f32>) -> vec3<f32> {
+    if region.has_base_look == 0.0 {
+        return rgb;
+    }
+    let boost = pow(2.0, region.base_exposure);
+    let scaled = max(rgb * boost, vec3<f32>(0.0));
+    let peak = max(max(max(scaled.r, scaled.g), scaled.b), 1e-5);
+    // Curving the peak keeps hue; curving each channel desaturates bright colours as
+    // film does. A blend of the two avoids both neon highlights and hue shifts.
+    let hue_kept = scaled * look_curve(peak) / peak;
+    let per_channel = vec3<f32>(look_curve(scaled.r), look_curve(scaled.g), look_curve(scaled.b));
+    // Normalised so that a saturated photosite reaches pure white.
+    return mix(hue_kept, per_channel, 0.5) / look_curve(boost);
+}
 
 fn white_balance(rgb: vec3<f32>) -> vec3<f32> {
     let gain = pow(vec3<f32>(2.0), vec3<f32>(
@@ -117,6 +144,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var rgb = textureLoad(source, id.xy, 0).rgb;
     rgb = white_balance(rgb);
     rgb *= pow(2.0, adj.exposure + adj.background_exposure * background);
+    rgb = apply_base_look(rgb);
     rgb = apply_tone(rgb);
     rgb = apply_color(rgb);
     rgb = apply_vignette(rgb, pixel);
