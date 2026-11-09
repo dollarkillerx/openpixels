@@ -32,6 +32,7 @@ export interface SkinStats {
 }
 
 const FACE_DETECTION_LONG_EDGE = 1024;
+const SMALL_FACE_DETECTION_LONG_EDGE = 2048;
 
 /** Promise-based front end for the engine and segmentation workers. */
 export class EngineClient {
@@ -125,11 +126,14 @@ export class EngineClient {
   async prepareSkin(proxyWidth: number, proxyHeight: number): Promise<SkinStats> {
     const start = performance.now();
     const thumbnail = await this.thumbnail(FACE_DETECTION_LONG_EDGE, false);
-    const skin = await buildSkinMask(thumbnail, proxyWidth, proxyHeight);
-    if (skin) {
-      await this.call<void>({ type: "setSkinMask", mask: skin.mask, faceWidth: skin.faceWidth }, [skin.mask]);
-    }
-    return { faces: skin?.faces ?? 0, ms: performance.now() - start };
+    const skin = await buildSkinMask(
+      thumbnail,
+      () => this.thumbnail(SMALL_FACE_DETECTION_LONG_EDGE, false),
+      proxyWidth,
+      proxyHeight,
+    );
+    await this.call<void>({ type: "setSkinMask", mask: skin.mask, faceWidth: skin.faceWidth }, [skin.mask]);
+    return { faces: skin.faces, ms: performance.now() - start };
   }
 
   /** Runs the matting model on the open image and applies the result as its mask. */

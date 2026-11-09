@@ -15,6 +15,12 @@ export interface SkinMask {
   faceWidth: number;
 }
 
+/** Window used to look for faces too small for the whole-image pass. */
+const TILE_SIZE = 512;
+const TILE_STRIDE = 256;
+/** Assumed face size when none is found, as a fraction of the short edge. */
+const CLOSE_UP_FACE_FRACTION = 0.7;
+
 /** Facial features to keep out of the skin mask, and how much to grow each outline. */
 const FEATURES = [
   { connections: FaceLandmarker.FACE_LANDMARKS_LEFT_EYE, grow: 1.4 },
@@ -106,12 +112,7 @@ function drawFace(
   return faceWidth;
 }
 
-/** Finds faces in `thumbnail` and rasterises their skin at the given proxy size. */
-export async function buildSkinMask(
-  { rgb, width, height }: Thumbnail,
-  proxyWidth: number,
-  proxyHeight: number,
-): Promise<SkinMask | null> {
+function toImageData({ rgb, width, height }: Thumbnail): ImageData {
   const pixels = new Uint8ClampedArray(width * height * 4);
   const source = new Uint8Array(rgb);
   for (let i = 0, j = 0; i < source.length; i += 3, j += 4) {
@@ -120,10 +121,79 @@ export async function buildSkinMask(
     pixels[j + 2] = source[i + 2];
     pixels[j + 3] = 255;
   }
+  return new ImageData(pixels, width, height);
+}
 
+function centerOf(landmarks: NormalizedLandmark[]): Point {
+  const total = landmarks.reduce((sum, p) => ({ x: sum.x + p.x, y: sum.y + p.y }), { x: 0, y: 0 });
+  return { x: total.x / landmarks.length, y: total.y / landmarks.length };
+}
+
+/**
+ * The detector shrinks its input to a small square, so a face in a full-length or
+ * group shot is too few pixels to see. Searching overlapping windows keeps them large.
+ */
+function detectInTiles(detector: FaceLandmarker, image: ImageData): NormalizedLandmark[][] {
+  const source = new OffscreenCanvas(image.width, image.height);
+  source.getContext("2d")!.putImageData(image, 0, 0);
+  const tile = new OffscreenCanvas(TILE_SIZE, TILE_SIZE);
+  const context = tile.getContext("2d", { willReadFrequently: true })!;
+
+  const steps = (size: number) => {
+    const last = Math.max(0, size - TILE_SIZE);
+    const positions: number[] = [];
+    for (let at = 0; at < last; at += TILE_STRIDE) positions.push(at);
+    positions.push(last);
+    return positions;
+  };
+
+  const found: NormalizedLandmark[][] = [];
+  for (const top of steps(image.height)) {
+    for (const left of steps(image.width)) {
+      context.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+      context.drawImage(source, -left, -top);
+      for (const landmarks of detector.detect(context.getImageData(0, 0, TILE_SIZE, TILE_SIZE)).faceLandmarks) {
+        const mapped = landmarks.map((p) => ({
+          ...p,
+          x: (left + p.x * TILE_SIZE) / image.width,
+          y: (top + p.y * TILE_SIZE) / image.height,
+        }));
+        const center = centerOf(mapped);
+        // Overlapping windows see the same face more than once.
+        const duplicate = found.some((other) => {
+          const c = centerOf(other);
+          return Math.hypot((c.x - center.x) * image.width, (c.y - center.y) * image.height) < TILE_STRIDE / 2;
+        });
+        if (!duplicate) found.push(mapped);
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Finds faces and rasterises their skin at the given proxy size. `detailed` supplies a
+ * larger image for faces the first pass misses. With no face at all, as in a profile
+ * or a tight close-up, the whole frame is passed on and the retouch's own colour
+ * checks decide what is skin; `faces` is then 0.
+ */
+export async function buildSkinMask(
+  thumbnail: Thumbnail,
+  detailed: () => Promise<Thumbnail>,
+  proxyWidth: number,
+  proxyHeight: number,
+): Promise<SkinMask> {
   const detector = await getLandmarker();
-  const { faceLandmarks } = detector.detect(new ImageData(pixels, width, height));
-  if (faceLandmarks.length === 0) return null;
+  let { faceLandmarks } = detector.detect(toImageData(thumbnail));
+  if (faceLandmarks.length === 0) faceLandmarks = detectInTiles(detector, toImageData(await detailed()));
+  if (faceLandmarks.length === 0) {
+    const everything = new Uint8Array(proxyWidth * proxyHeight).fill(255);
+    return {
+      mask: everything.buffer,
+      faces: 0,
+      faceWidth: Math.min(proxyWidth, proxyHeight) * CLOSE_UP_FACE_FRACTION,
+    };
+  }
 
   const canvas = new OffscreenCanvas(proxyWidth, proxyHeight);
   const context = canvas.getContext("2d", { willReadFrequently: true })!;

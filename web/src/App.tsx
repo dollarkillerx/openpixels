@@ -805,7 +805,7 @@ export function App() {
   };
 
   const backgroundExposure = adjustments.backgroundExposure ?? 0;
-  const skinReady = (skinStats?.faces ?? 0) > 0;
+  const skinReady = skinStats !== null;
   const history = currentId ? historyRef.current[currentId] : undefined;
 
   return (
@@ -1144,7 +1144,9 @@ export function App() {
           </button>
           {skinStats && (
             <p className="progress" data-stat="faces">
-              {skinStats.faces > 0 ? `检测到 ${skinStats.faces} 张人脸，${skinStats.ms.toFixed(0)} ms` : "没有检测到人脸"}
+              {skinStats.faces > 0
+                ? `检测到 ${skinStats.faces} 张人脸，${skinStats.ms.toFixed(0)} ms`
+                : "未检测到完整人脸，按画面中的肤色处理"}
             </p>
           )}
           {[
