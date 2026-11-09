@@ -16,6 +16,17 @@ export interface HealSpot {
   group?: number;
 }
 
+/** A region filled in by the inpainting model. See `ErasePatch` in op-core. */
+export interface ErasePatch {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  size: number;
+  rgb: Uint8Array;
+  alpha: Uint8Array;
+}
+
 /** A liquify brush step. See `WarpStroke` in op-core for the units. */
 export interface WarpStroke {
   x: number;
@@ -71,12 +82,14 @@ export type DevelopTileReply = { index: number; rgb: ArrayBuffer } | { index: nu
 /** Messages the engine worker answers, each paired by id with one reply. */
 export type EngineRequest =
   | { type: "init"; canvas: OffscreenCanvas }
-  | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[]; warps: WarpStroke[] }
+  | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[]; warps: WarpStroke[]; erases: ErasePatch[] }
   | { type: "export"; settings: OutputSettings }
   | { type: "thumbnail"; maxLongEdge: number; framed: boolean }
   | { type: "healAt"; x: number; y: number; stageWidth: number; stageHeight: number; radius: number }
   | { type: "setHeals"; heals: HealSpot[] }
   | { type: "addHeals"; heals: HealSpot[] }
+  | { type: "setErases"; erases: ErasePatch[] }
+  | { type: "inpaintInput"; x: number; y: number; width: number; height: number; size: number }
   | { type: "whiteBalanceAt"; x: number; y: number; stageWidth: number; stageHeight: number }
   | { type: "setWarps"; strokes: WarpStroke[] }
   | {
@@ -114,6 +127,16 @@ export interface SegmentRequest {
   width: number;
   height: number;
 }
+
+export interface InpaintRequest {
+  id: number;
+  image: ArrayBuffer;
+  mask: ArrayBuffer;
+}
+
+export type InpaintReply =
+  | { id: number; rgb: ArrayBuffer; loadMs: number; inferMs: number }
+  | { id: number; error: string };
 
 export type SegmentReply =
   | { id: number; mask: ArrayBuffer; width: number; height: number; loadMs: number; inferMs: number }

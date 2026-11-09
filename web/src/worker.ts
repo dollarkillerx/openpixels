@@ -8,6 +8,7 @@ import type {
   EngineRequest,
   DevelopTileReply,
   DevelopTileRequest,
+  ErasePatch,
   ExportResult,
   FromWorker,
   LoadResult,
@@ -112,6 +113,13 @@ async function developInParallel() {
   engine!.finish_raw_develop();
 }
 
+function pushErases(erases: ErasePatch[]) {
+  engine!.clear_erases();
+  for (const { x, y, width, height, size, rgb, alpha } of erases) {
+    engine!.push_erase(x, y, width, height, size, rgb, alpha);
+  }
+}
+
 /** Handles a request and returns its result plus any buffers to transfer. */
 async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]> {
   switch (request.type) {
@@ -140,6 +148,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       engine!.set_warp_strokes(JSON.stringify(request.warps));
       const t2 = performance.now();
       engine!.set_adjustments(engineJson(request.adjustments));
+      pushErases(request.erases);
       engine!.set_heals(JSON.stringify(request.heals));
       pendingAdjustments = null;
       hasImage = true;
@@ -216,6 +225,20 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       engine!.add_heals(JSON.stringify(request.heals));
       scheduleRender();
       return [undefined, []];
+
+    case "setErases":
+      pushErases(request.erases);
+      engine!.refresh_erases();
+      scheduleRender();
+      return [undefined, []];
+
+    case "inpaintInput": {
+      const { x, y, width, height, size } = request;
+      const start = performance.now();
+      const tensor = detach(engine!.inpaint_input(x, y, width, height, size));
+      const result: ModelInput = { tensor, ms: performance.now() - start };
+      return [result, [tensor]];
+    }
 
     case "whiteBalanceAt": {
       const { x, y, stageWidth, stageHeight } = request;

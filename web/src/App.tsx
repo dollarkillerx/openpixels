@@ -6,7 +6,8 @@ import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, sourceToOutput, type Crop } from "./frame";
 import { BUILT_IN_LOOKS, builtInLut, parseCube } from "./lut";
-import { deleteProject, forgetHandle, getLut, listLuts, listProjects, recallHandle, recallHandleEntries, rememberHandle, saveLut, saveProject, type Project, type StoredLut } from "./store";
+import { deleteProject, forgetHandle, getLut, listLuts, listProjects, loadErases, recallHandle, recallHandleEntries, rememberHandle, saveErases, saveLut, saveProject, type Project, type StoredLut } from "./store";
+import { eraseCrop, rasterizeErase, type EraseDab } from "./erase";
 import { lensToSource, lensView, sourceToLens } from "./lens";
 import { FORMAT_DETAILS, type OutputFormat, type OutputSettings, type Watermark, type WatermarkPosition } from "./output";
 import { ProjectLibrary } from "./ProjectLibrary";
@@ -33,7 +34,8 @@ import {
   savePresets,
   saveEdits,
   type Presets, loadLastProject, saveLastProject } from "./library";
-import type { Adjustments, HealSpot, LoadResult, Thumbnail, WarpStroke } from "./protocol";
+import type { Adjustments, ErasePatch, HealSpot, LoadResult, Thumbnail, WarpStroke } from "./protocol";
+import { INPAINT_MODEL } from "./model";
 
 interface SliderDef {
   key: string;
@@ -151,6 +153,7 @@ const WATERMARK_LOGO_LONG_EDGE = 512;
 const COMPARE_ALL = 1.01;
 const STAMP_SPACING = 0.35;
 const STAMP_FLUSH_MS = 40;
+const ERASE_SPACING = 0.3;
 const FLAG_PICK = 1;
 const FLAG_REJECT = -1;
 const FLAG_KEYS: Record<string, number> = { p: FLAG_PICK, x: FLAG_REJECT, u: 0 };
@@ -251,7 +254,12 @@ export function App() {
   const [pickingWhite, setPickingWhite] = useState(false);
   const [toolHint, setToolHint] = useState("");
   const [output, setOutput] = useState<OutputSettings>(loadOutput);
-  const [healMode, setHealMode] = useState<"spot" | "clone">("spot");
+  const [healMode, setHealMode] = useState<"spot" | "clone" | "erase">("spot");
+  const [eraseDabs, setEraseDabs] = useState<EraseDab[]>([]);
+  const [eraseCount, setEraseCount] = useState(0);
+  const [erasing, setErasing] = useState(false);
+  const erasesRef = useRef<ErasePatch[]>([]);
+  const eraseStrokeRef = useRef<{ drawing: boolean; last: { x: number; y: number } | null }>({ drawing: false, last: null });
   const [stampMarker, setStampMarker] = useState<{ x: number; y: number } | null>(null);
   const stampRef = useRef<{ source: { x: number; y: number } | null; offset: { x: number; y: number } | null; last: { x: number; y: number } | null; group: number; drawing: boolean }>({ source: null, offset: null, last: null, group: 0, drawing: false });
   const pendingDabsRef = useRef<HealSpot[]>([]);
@@ -283,7 +291,8 @@ export function App() {
     return flagFilter === 0 || (flagFilter === 2 ? flag !== FLAG_REJECT : flag === flagFilter);
   };
   const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating && passesFlag(photo.id));
-  const locked = batchRunning;
+  // An erase takes seconds and lands on the photo it started on.
+  const locked = batchRunning || erasing;
   const projectOfActive = projects.find((item) => item.id === activeProject) ?? null;
   const resumable = activeProject === null ? (projects.find((item) => item.id === lastProject) ?? null) : null;
   const lens = loaded ? lensView(loaded.lens, adjustments, loaded.width, loaded.height) : null;
@@ -351,8 +360,11 @@ export function App() {
     async (photo: Photo, edit: Adjustments, spots: HealSpot[], warps: WarpStroke[][]) => {
       const engine = engineRef.current!;
       const ticket = ++openTicketRef.current;
-      const result = await engine.open(await photo.file.arrayBuffer(), edit, spots, warps.flat());
+      const erases = await loadErases(photo.id);
+      const result = await engine.open(await photo.file.arrayBuffer(), edit, spots, warps.flat(), erases);
       if (ticket !== openTicketRef.current) throw new Error(STALE);
+      erasesRef.current = erases;
+      setEraseCount(erases.length);
       return result;
     },
     [],
@@ -390,6 +402,7 @@ export function App() {
       setToolHint("");
       stampRef.current = { source: null, offset: null, last: null, group: 0, drawing: false };
       setStampMarker(null);
+      setEraseDabs([]);
       setWarpGroups(warps);
       setLiquifying(false);
       const layers = loadLocals(photo.id);
@@ -826,6 +839,80 @@ export function App() {
       return list;
     });
     void refreshThumbnail(currentId).catch(() => {});
+  };
+
+  const paintErase = (point: { x: number; y: number }) => {
+    if (!loaded) return;
+    const stroke = eraseStrokeRef.current;
+    const longEdge = Math.max(loaded.width, loaded.height);
+    const previous = stroke.last ?? point;
+    const travel = Math.hypot(((point.x - previous.x) * loaded.width) / longEdge, ((point.y - previous.y) * loaded.height) / longEdge);
+    const spacing = healRadius * ERASE_SPACING;
+    if (stroke.last && travel < spacing) return;
+    const steps = Math.max(1, Math.floor(travel / spacing));
+    const dabs = Array.from({ length: steps }, (_, step) => {
+      const at = (step + 1) / steps;
+      return { x: previous.x + (point.x - previous.x) * at, y: previous.y + (point.y - previous.y) * at, radius: healRadius };
+    });
+    stroke.last = point;
+    setEraseDabs((list) => [...list, ...dabs]);
+  };
+
+  const startErase = (event: React.PointerEvent<HTMLElement>) => {
+    if (!healing || healMode !== "erase" || locked) return;
+    const point = pointerToSource(event);
+    if (!point) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    eraseStrokeRef.current = { drawing: true, last: null };
+    paintErase(point);
+  };
+
+  const continueErase = (event: React.PointerEvent<HTMLElement>) => {
+    if (!eraseStrokeRef.current.drawing) return;
+    const point = pointerToSource(event);
+    if (point) paintErase(point);
+  };
+
+  const finishErase = () => {
+    eraseStrokeRef.current.drawing = false;
+  };
+
+  const commitErases = async (next: ErasePatch[]) => {
+    if (!currentId) return;
+    erasesRef.current = next;
+    setEraseCount(next.length);
+    await saveErases(currentId, next);
+    await engineRef.current!.setErases(next);
+    void refreshThumbnail(currentId).catch(() => {});
+  };
+
+  const runErase = async () => {
+    if (!loaded || eraseDabs.length === 0 || locked) return;
+    const { proxyWidth, proxyHeight } = loaded;
+    setErasing(true);
+    setError("");
+    try {
+      const crop = eraseCrop(eraseDabs, proxyWidth, proxyHeight);
+      const { mask, alpha } = rasterizeErase(eraseDabs, crop, proxyWidth, proxyHeight);
+      const { rgb } = await engineRef.current!.inpaint(crop, mask);
+      await commitErases([
+        ...erasesRef.current,
+        {
+          x: crop.x / proxyWidth,
+          y: crop.y / proxyHeight,
+          width: crop.width / proxyWidth,
+          height: crop.height / proxyHeight,
+          size: INPAINT_MODEL.size,
+          rgb,
+          alpha,
+        },
+      ]);
+      setEraseDabs([]);
+    } catch (reason) {
+      setError(`消除失败：${(reason as Error).message}`);
+    } finally {
+      setErasing(false);
+    }
   };
 
   const addFullLocal = () => {
@@ -1363,16 +1450,19 @@ export function App() {
             startLiquify(event);
             startLocal(event);
             startStamp(event);
+            startErase(event);
           }}
           onPointerUp={() => {
             void finishLiquify();
             finishLocal();
             finishStamp();
+            finishErase();
           }}
           onPointerCancel={() => {
             void finishLiquify();
             finishLocal();
             finishStamp();
+            finishErase();
           }}
           onClick={(event) => {
             void healAtPointer(event);
@@ -1381,6 +1471,7 @@ export function App() {
           onPointerMove={(event) => {
             continueLocal(event);
             continueStamp(event);
+            continueErase(event);
             if (!healing && !liquifying) return;
             const bounds = event.currentTarget.getBoundingClientRect();
             setPointer({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
@@ -1457,6 +1548,21 @@ export function App() {
               <span className="compare-label before">修图前</span>
               <span className="compare-label after">修图后</span>
             </div>
+          )}
+          {healing && healMode === "erase" && eraseDabs.length > 0 && loaded && (
+            <svg
+              className="erase-overlay"
+              data-testid="erase-overlay"
+              style={{ left: displayBox.left, top: displayBox.top, width: displayBox.width, height: displayBox.height }}
+            >
+              <g opacity={0.55} fill="#ff3b30">
+                {eraseDabs.map((dab, index) => {
+                  const corrected = lens ? sourceToLens(lens, dab.x, dab.y) : dab;
+                  const point = sourceToOutput(corrected.x, corrected.y, adjustments, loaded.width, loaded.height);
+                  return <circle key={index} cx={point.x * displayBox.width} cy={point.y * displayBox.height} r={(brushDiameter / 2) * (dab.radius / healRadius)} />;
+                })}
+              </g>
+            </svg>
           )}
           {healing && healMode === "clone" && stampMarker && loaded && (() => {
             const corrected = lens ? sourceToLens(lens, stampMarker.x, stampMarker.y) : stampMarker;
@@ -1835,15 +1941,29 @@ export function App() {
             <button className={`button ${healing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleHealing}>
               {healing ? "退出修复" : "开始修复"}
             </button>
-            <select aria-label="修复方式" value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone")}>
+            <select aria-label="修复方式" value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone" | "erase")}>
               <option value="spot">污点修复</option>
               <option value="clone">仿制图章</option>
+              <option value="erase">AI 消除</option>
             </select>
           </div>
-          <div className="row">
-            <button className="button secondary" disabled={heals.length === 0 || locked} onClick={undoHeal}>撤销一步</button>
-            <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals([])}>清除</button>
-          </div>
+          {healMode === "erase" ? (
+            <>
+              <div className="row">
+                <button className="button" disabled={eraseDabs.length === 0 || locked} onClick={() => void runErase()}>{erasing ? "消除中…" : "消除涂抹区域"}</button>
+                <button className="button secondary" disabled={eraseDabs.length === 0 || locked} onClick={() => setEraseDabs([])}>清空涂抹</button>
+              </div>
+              <div className="row">
+                <button className="button secondary" disabled={eraseCount === 0 || locked} onClick={() => void commitErases(erasesRef.current.slice(0, -1))}>撤销一步</button>
+                <button className="button secondary" disabled={eraseCount === 0 || locked} onClick={() => void commitErases([])}>清除</button>
+              </div>
+            </>
+          ) : (
+            <div className="row">
+              <button className="button secondary" disabled={heals.length === 0 || locked} onClick={undoHeal}>撤销一步</button>
+              <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals([])}>清除</button>
+            </div>
+          )}
           <label className="slider">
             <span>画笔大小</span>
             <output>{(healRadius * 100).toFixed(1)}</output>
@@ -1859,7 +1979,8 @@ export function App() {
             />
           </label>
           {healMode === "clone" && <p className="progress">按住 Alt（Option）点击取样，再拖动涂抹。</p>}
-          <p className="progress" data-stat="heals">已修复 {heals.length} 处</p>
+          {healMode === "erase" && <p className="progress">{erasing ? "正在计算，通常需要 10–20 秒…" : "涂抹要去掉的内容，可以多涂几笔，再点“消除涂抹区域”。"}</p>}
+          <p className="progress" data-stat="heals">{healMode === "erase" ? `已消除 ${eraseCount} 处` : `已修复 ${heals.length} 处`}</p>
         </section>
 
         <section>

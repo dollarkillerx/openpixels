@@ -30,3 +30,8 @@ fetch "https://huggingface.co/Xenova/modnet/resolve/fa2fa546052fba4c08921230a26c
 fetch "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" \
   64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff \
   web/public/models/face_landmarker.task
+
+# LaMa inpainting, OpenCV's export (Apache-2.0).
+fetch "https://huggingface.co/opencv/inpainting_lama/resolve/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/inpainting_lama_2025jan.onnx" \
+  7df918ac3921d3daf0aae1d219776cf0dc4e4935f035af81841b40adcf74fdf2 \
+  web/public/models/lama.onnx

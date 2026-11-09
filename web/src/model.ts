@@ -7,6 +7,12 @@ export const MODEL = {
   std: [0.5, 0.5, 0.5],
 };
 
+/** LaMa inpainting (Apache-2.0). This export only accepts one input size. */
+export const INPAINT_MODEL = {
+  url: "/models/lama.onnx",
+  size: 512,
+};
+
 /** Scales so the shortest edge matches the model, keeping aspect ratio. */
 export function modelInputSize(width: number, height: number) {
   const scale = MODEL.shortestEdge / Math.min(width, height);

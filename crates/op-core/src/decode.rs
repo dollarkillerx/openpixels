@@ -388,7 +388,7 @@ fn decode_raster(bytes: &[u8]) -> Result<LinearImage, DecodeError> {
 }
 
 /// 8-bit sRGB code value to linear half-float bit pattern.
-fn srgb_to_linear_table() -> [u16; 256] {
+pub(crate) fn srgb_to_linear_table() -> [u16; 256] {
     std::array::from_fn(|i| {
         let c = i as f32 / 255.0;
         let linear = if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };

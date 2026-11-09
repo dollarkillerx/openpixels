@@ -145,11 +145,112 @@ pub fn apply_heals(image: &mut LinearImage, spots: &[HealSpot]) {
     }
 }
 
+/// A region filled in by the inpainting model, kept at the model's resolution so it
+/// can be placed on the preview and on the full-resolution image alike.
+#[derive(Clone, Debug)]
+pub struct ErasePatch {
+    /// The rectangle it covers, as fractions of the width and height.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Side of the square `rgb` and `alpha` rasters.
+    pub size: u32,
+    /// sRGB-encoded, interleaved.
+    pub rgb: Vec<u8>,
+    /// 255 replaces the image, 0 leaves it alone.
+    pub alpha: Vec<u8>,
+}
+
+/// Lays the patches over the image, in order, so a later one can build on an earlier one.
+pub fn apply_erases(image: &mut LinearImage, patches: &[ErasePatch]) {
+    if patches.is_empty() {
+        return;
+    }
+    let to_linear = crate::decode::srgb_to_linear_table().map(|bits| f16::from_bits(bits).to_f32());
+    let (width, height) = (image.width as usize, image.height as usize);
+
+    for patch in patches {
+        let size = patch.size as usize;
+        let last = patch.size as f32 - 1.0;
+        let (left, top) = (patch.x * width as f32, patch.y * height as f32);
+        let (span_x, span_y) = (patch.width * width as f32, patch.height * height as f32);
+        let x_range = (left.floor().max(0.0) as usize)..((left + span_x).ceil() as usize).min(width);
+        let y_range = (top.floor().max(0.0) as usize)..((top + span_y).ceil() as usize).min(height);
+
+        for y in y_range {
+            let fy = ((y as f32 + 0.5 - top) / span_y * patch.size as f32 - 0.5).clamp(0.0, last);
+            let (row0, ty) = (fy as usize, fy.fract());
+            let row1 = (row0 + 1).min(size - 1);
+            for x in x_range.clone() {
+                let fx = ((x as f32 + 0.5 - left) / span_x * patch.size as f32 - 0.5).clamp(0.0, last);
+                let (col0, tx) = (fx as usize, fx.fract());
+                let col1 = (col0 + 1).min(size - 1);
+                let corners = [
+                    (row0 * size + col0, (1.0 - tx) * (1.0 - ty)),
+                    (row0 * size + col1, tx * (1.0 - ty)),
+                    (row1 * size + col0, (1.0 - tx) * ty),
+                    (row1 * size + col1, tx * ty),
+                ];
+                let alpha: f32 = corners.iter().map(|&(at, w)| f32::from(patch.alpha[at]) * w).sum::<f32>() / 255.0;
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let start = (y * width + x) * 3;
+                for channel in 0..3 {
+                    let fill: f32 = corners.iter().map(|&(at, w)| to_linear[patch.rgb[at * 3 + channel] as usize] * w).sum();
+                    let current = f16::from_bits(image.pixels[start + channel]).to_f32();
+                    image.pixels[start + channel] = f16::from_f32(current * (1.0 - alpha) + fill * alpha).to_bits();
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const SIZE: u32 = 200;
+
+    /// Mid-grey fill over the middle of the patch only.
+    fn centre_patch() -> ErasePatch {
+        const PATCH: usize = 64;
+        let alpha = (0..PATCH * PATCH)
+            .map(|i| {
+                let (x, y) = (i % PATCH, i / PATCH);
+                if (16..48).contains(&x) && (16..48).contains(&y) { 255 } else { 0 }
+            })
+            .collect();
+        ErasePatch { x: 0.25, y: 0.25, width: 0.5, height: 0.5, size: PATCH as u32, rgb: vec![188; PATCH * PATCH * 3], alpha }
+    }
+
+    #[test]
+    fn an_erase_patch_replaces_only_where_its_alpha_allows() {
+        let mut image = image_with(|_, _| 0.05);
+        apply_erases(&mut image, &[centre_patch()]);
+        assert!((value(&image, 100, 100) - 0.503).abs() < 0.01, "got {}", value(&image, 100, 100));
+        // Inside the rectangle but outside the alpha, and outside the rectangle.
+        assert!((value(&image, 55, 55) - 0.05).abs() < 1e-3);
+        assert!((value(&image, 10, 10) - 0.05).abs() < 1e-3);
+    }
+
+    #[test]
+    fn an_erase_patch_lands_in_the_same_place_at_any_resolution() {
+        let mut large = LinearImage::new(800, 800, vec![f16::from_f32(0.05).to_bits(); 800 * 800 * 3]);
+        apply_erases(&mut large, &[centre_patch()]);
+        let at = |x: usize, y: usize| f16::from_bits(large.pixels[(y * 800 + x) * 3]).to_f32();
+        assert!(at(400, 400) > 0.45);
+        assert!((at(220, 220) - 0.05).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_crop_copies_the_requested_rectangle() {
+        let image = image_with(|x, y| (x + y) as f32 / 400.0);
+        let crop = image.crop(10, 20, 30, 40);
+        assert_eq!((crop.width, crop.height), (30, 40));
+        assert_eq!(crop.pixels[0], image.pixels[(20 * SIZE as usize + 10) * 3]);
+    }
 
     fn image_with(paint: impl Fn(u32, u32) -> f32) -> LinearImage {
         let mut pixels = Vec::new();

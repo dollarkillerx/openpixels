@@ -1,13 +1,17 @@
 import { buildSkinMask } from "./face";
 import type { Lut } from "./lut";
 import type { OutputSettings } from "./output";
-import { MODEL, modelInputSize } from "./model";
+import type { EraseCrop } from "./erase";
+import { INPAINT_MODEL, MODEL, modelInputSize } from "./model";
 import type {
   Adjustments,
   EngineRequest,
+  ErasePatch,
   ExportResult,
   FromWorker,
   HealSpot,
+  InpaintReply,
+  InpaintRequest,
   LoadResult,
   ModelInput,
   SegmentReply,
@@ -35,6 +39,8 @@ export interface SkinStats {
 
 const FACE_DETECTION_LONG_EDGE = 1024;
 const SMALL_FACE_DETECTION_LONG_EDGE = 2048;
+/** The inpainting model is large, so its worker goes away when no longer in use. */
+const INPAINT_IDLE_MS = 5 * 60 * 1000;
 
 /** Promise-based front end for the engine and segmentation workers. */
 export class EngineClient {
@@ -42,6 +48,8 @@ export class EngineClient {
   private readonly aiWorker = new Worker(new URL("./ai-worker.ts", import.meta.url), { type: "module" });
   private readonly pending = new Map<number, Pending>();
   private readonly pendingSegments = new Map<number, (reply: SegmentReply) => void>();
+  private inpaintWorker: Worker | null = null;
+  private inpaintIdleTimer = 0;
   private nextId = 1;
 
   /** Called after each frame reaches the GPU. */
@@ -81,8 +89,36 @@ export class EngineClient {
     });
   }
 
-  open(buffer: ArrayBuffer, adjustments: Adjustments, heals: HealSpot[], warps: WarpStroke[]) {
-    return this.call<LoadResult>({ type: "open", buffer, adjustments, heals, warps }, [buffer]);
+  open(buffer: ArrayBuffer, adjustments: Adjustments, heals: HealSpot[], warps: WarpStroke[], erases: ErasePatch[]) {
+    return this.call<LoadResult>({ type: "open", buffer, adjustments, heals, warps, erases }, [buffer]);
+  }
+
+  setErases(erases: ErasePatch[]) {
+    return this.call<void>({ type: "setErases", erases });
+  }
+
+  /** Fills the marked part of a proxy rectangle. Resolves to interleaved sRGB bytes. */
+  async inpaint(crop: EraseCrop, mask: Float32Array<ArrayBuffer>) {
+    const input = await this.call<ModelInput>({ type: "inpaintInput", ...crop, size: INPAINT_MODEL.size });
+    window.clearTimeout(this.inpaintIdleTimer);
+    this.inpaintWorker ??= new Worker(new URL("./inpaint-worker.ts", import.meta.url), { type: "module" });
+    const worker = this.inpaintWorker;
+    const id = this.nextId++;
+    const reply = await new Promise<InpaintReply>((resolve, reject) => {
+      worker.onmessage = ({ data }: MessageEvent<InpaintReply>) => resolve(data);
+      worker.onerror = (event) => reject(new Error(event.message));
+      const request: InpaintRequest = { id, image: input.tensor, mask: mask.buffer };
+      worker.postMessage(request, [input.tensor, mask.buffer]);
+    }).finally(() => {
+      this.inpaintIdleTimer = window.setTimeout(() => this.releaseInpaint(), INPAINT_IDLE_MS);
+    });
+    if ("error" in reply) throw new Error(reply.error);
+    return { rgb: new Uint8Array(reply.rgb), loadMs: reply.loadMs, inferMs: reply.inferMs };
+  }
+
+  private releaseInpaint() {
+    this.inpaintWorker?.terminate();
+    this.inpaintWorker = null;
   }
 
   /** Pushes the image between two positions in 0..=1 on the stage. */

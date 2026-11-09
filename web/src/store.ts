@@ -1,10 +1,12 @@
 import type { Lut } from "./lut";
+import type { ErasePatch } from "./protocol";
 
 const DB_NAME = "openpixels";
-const VERSION = 2;
+const VERSION = 3;
 const HANDLES = "handles";
 const LUTS = "luts";
 const PROJECTS = "projects";
+const ERASES = "erases";
 
 export interface StoredLut extends Lut {
   id: number;
@@ -19,6 +21,7 @@ function open(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(HANDLES)) db.createObjectStore(HANDLES);
       if (!db.objectStoreNames.contains(LUTS)) db.createObjectStore(LUTS, { keyPath: "id", autoIncrement: true });
       if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS, { keyPath: "id", autoIncrement: true });
+      if (!db.objectStoreNames.contains(ERASES)) db.createObjectStore(ERASES);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -29,6 +32,8 @@ async function run<T>(store: string, mode: IDBTransactionMode, work: (s: IDBObje
   const db = await open();
   return new Promise((resolve, reject) => {
     const request = work(db.transaction(store, mode).objectStore(store));
+    // Lets the transaction finish; an open connection would block later version upgrades.
+    db.close();
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -47,6 +52,15 @@ export async function saveLut(name: string, lut: Lut): Promise<StoredLut> {
 
 export const listLuts = () => run<StoredLut[]>(LUTS, "readonly", (s) => s.getAll());
 export const getLut = (id: number) => run<StoredLut | undefined>(LUTS, "readonly", (s) => s.get(id));
+
+/** Kept here rather than with the other edits: each patch is about a megabyte. */
+export const loadErases = async (id: string) =>
+  (await run<ErasePatch[] | undefined>(ERASES, "readonly", (s) => s.get(id))) ?? [];
+
+export const saveErases = (id: string, erases: ErasePatch[]) =>
+  erases.length > 0
+    ? run(ERASES, "readwrite", (s) => s.put(erases, id))
+    : run(ERASES, "readwrite", (s) => s.delete(id));
 
 export const rememberHandle = (id: string, handle: FileSystemFileHandle) =>
   run(HANDLES, "readwrite", (s) => s.put(handle, id));

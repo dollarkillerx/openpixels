@@ -2,7 +2,7 @@
 //! not call a method while an async one is still pending.
 
 use op_core::{
-    Adjustments, DevelopJob, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_heals,
+    Adjustments, DevelopJob, ErasePatch, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
     OutputFormat, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
     neutral_white_balance, resize_rgb8,
 };
@@ -72,6 +72,7 @@ pub struct Engine {
     geometry: Geometry,
     crop_editing: bool,
     heals: Vec<HealSpot>,
+    erases: Vec<ErasePatch>,
     healed_proxy: Option<LinearImage>,
     warp: Option<WarpField>,
     curve: ToneCurve,
@@ -144,6 +145,7 @@ impl Engine {
             geometry: Geometry::default(),
             crop_editing: false,
             heals: Vec::new(),
+            erases: Vec::new(),
             healed_proxy: None,
             warp: None,
             curve: ToneCurve::default(),
@@ -321,6 +323,36 @@ impl Engine {
         Ok(())
     }
 
+    /// A rectangle of the proxy, as it currently looks before development, as a
+    /// 0..=1 sRGB NCHW tensor for the inpainting model.
+    pub fn inpaint_input(&self, x: u32, y: u32, width: u32, height: u32, size: u32) -> Result<Vec<f32>, JsError> {
+        let proxy = self.healed_proxy.as_ref().or(self.proxy.as_ref());
+        let proxy = proxy.ok_or_else(|| JsError::new("no image loaded"))?;
+        if x + width > proxy.width || y + height > proxy.height {
+            return Err(JsError::new("erase region is outside the image"));
+        }
+        Ok(proxy.crop(x, y, width, height).srgb_nchw_tensor(size, size, [0.0; 3], [1.0; 3]))
+    }
+
+    pub fn clear_erases(&mut self) {
+        self.erases.clear();
+    }
+
+    /// Adds a patch to the list. Takes effect on the next `set_heals` or `refresh_erases`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_erase(&mut self, x: f32, y: f32, width: f32, height: f32, size: u32, rgb: Vec<u8>, alpha: Vec<u8>) -> Result<(), JsError> {
+        let pixels = size as usize * size as usize;
+        if rgb.len() != pixels * 3 || alpha.len() != pixels {
+            return Err(JsError::new("erase patch has the wrong size"));
+        }
+        self.erases.push(ErasePatch { x, y, width, height, size, rgb, alpha });
+        Ok(())
+    }
+
+    pub fn refresh_erases(&mut self) {
+        self.refresh_healed_preview();
+    }
+
     /// Sets the screen fraction, from the left, that shows the unedited image.
     pub fn set_compare(&mut self, split: f32) {
         self.compare = split;
@@ -477,10 +509,11 @@ impl Engine {
         let mut developed = match (self.developed.take(), &self.raw_file) {
             (Some(image), _) => Some(image),
             (None, Some(file)) => Some(op_core::develop_raw_full(file).map_err(js_error)?),
-            (None, None) if !self.heals.is_empty() => self.working.clone(),
+            (None, None) if !self.heals.is_empty() || !self.erases.is_empty() => self.working.clone(),
             (None, None) => None,
         };
         if let Some(image) = &mut developed {
+            apply_erases(image, &self.erases);
             apply_heals(image, &self.heals);
         }
         let image = developed
@@ -515,6 +548,7 @@ impl Engine {
         self.working = None;
         self.raw_file = None;
         self.heals.clear();
+        self.erases.clear();
         self.healed_proxy = None;
     }
 
@@ -547,12 +581,13 @@ impl Engine {
 
     fn refresh_healed_preview(&mut self) {
         let Some(proxy) = &self.proxy else { return };
-        if self.heals.is_empty() {
+        if self.heals.is_empty() && self.erases.is_empty() {
             self.renderer.update_preview_pixels(proxy);
             self.healed_proxy = None;
             return;
         }
         let mut healed = proxy.clone();
+        apply_erases(&mut healed, &self.erases);
         apply_heals(&mut healed, &self.heals);
         self.renderer.update_preview_pixels(&healed);
         self.healed_proxy = Some(healed);

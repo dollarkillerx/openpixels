@@ -83,6 +83,8 @@ body { background: var(--bg); color: var(--text); }
   border: 1.5px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); pointer-events: none;
 }
 
+.erase-overlay { position: absolute; overflow: hidden; pointer-events: none; }
+
 .compare-line {
   position: absolute; width: 2px; margin-left: -1px; background: #fff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45); cursor: ew-resize; touch-action: none;

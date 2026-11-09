@@ -19,6 +19,17 @@ impl LinearImage {
         Self { width, height, pixels }
     }
 
+    /// Copies out a rectangle, which must lie inside the image.
+    pub fn crop(&self, x: u32, y: u32, width: u32, height: u32) -> LinearImage {
+        assert!(x + width <= self.width && y + height <= self.height);
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 3);
+        for row in y..y + height {
+            let start = (row as usize * self.width as usize + x as usize) * 3;
+            pixels.extend_from_slice(&self.pixels[start..start + width as usize * 3]);
+        }
+        LinearImage::new(width, height, pixels)
+    }
+
     /// Box-filtered copy whose long edge is at most `max_long_edge`, averaged in
     /// linear light. Uses an integer factor, so the result can be up to 2x smaller
     /// than requested; the proxy only drives the on-screen preview.
