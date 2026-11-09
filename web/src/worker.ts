@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { decodeHeic, isHeic } from "./heic";
+import { renderWatermark } from "./output";
 import init, { Engine } from "./wasm-pkg/op_wasm";
 import { engineJson } from "./library";
 import type {
@@ -162,9 +163,21 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       }
       const start = performance.now();
       await developInParallel();
-      const jpeg = detach(await engine!.export_jpeg(request.quality));
-      const result: ExportResult = { jpeg, ms: performance.now() - start, heapMB: heapMB() };
-      return [result, [jpeg]];
+      const { format, quality, longEdge, watermark } = request.settings;
+      const size = JSON.parse(engine!.export_size(longEdge));
+      const overlay = await renderWatermark(watermark, size.width, size.height);
+      const bytes = detach(
+        await engine!.export_image(
+          JSON.stringify({ format, quality, longEdge }),
+          overlay?.rgba ?? new Uint8Array(0),
+          overlay?.x ?? 0,
+          overlay?.y ?? 0,
+          overlay?.width ?? 0,
+          overlay?.height ?? 0,
+        ),
+      );
+      const result: ExportResult = { bytes, ms: performance.now() - start, heapMB: heapMB() };
+      return [result, [bytes]];
     }
 
     case "thumbnail": {
@@ -198,6 +211,16 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       engine!.set_heals(JSON.stringify(request.heals));
       scheduleRender();
       return [undefined, []];
+
+    case "addHeals":
+      engine!.add_heals(JSON.stringify(request.heals));
+      scheduleRender();
+      return [undefined, []];
+
+    case "whiteBalanceAt": {
+      const { x, y, stageWidth, stageHeight } = request;
+      return [JSON.parse(engine!.white_balance_at(x, y, stageWidth, stageHeight)), []];
+    }
 
     case "modelInput": {
       const start = performance.now();
@@ -240,6 +263,13 @@ self.onmessage = ({ data }: MessageEvent<ToWorker>) => {
   if (data.type === "resize") {
     const { width, height } = data;
     enqueue(() => engine?.resize(width, height));
+    scheduleRender();
+    return;
+  }
+
+  if (data.type === "compare") {
+    const { split } = data;
+    enqueue(() => engine?.set_compare(split));
     scheduleRender();
     return;
   }

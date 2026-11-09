@@ -8,12 +8,15 @@ export const LOCAL_SLIDERS = [
   { suffix: "Temperature", label: "色温", min: -1, max: 1 },
 ];
 
+/** Per-layer tone and colour limits, stored beside the sliders in the edit. */
+export const LOCAL_RANGE_SUFFIXES = ["RangeMode", "RangeLow", "RangeHigh", "RangeHue", "RangeWidth"];
+
 export interface Point {
   x: number;
   y: number;
 }
 
-export type LocalKind = "linear" | "radial" | "brush";
+export type LocalKind = "linear" | "radial" | "brush" | "full";
 
 /** A local adjustment's shape, in source-image UV. Its values live in the edit. */
 export interface LocalLayer {
@@ -75,6 +78,9 @@ function drawLayer(context: OffscreenCanvasRenderingContext2D, layer: LocalLayer
     gradient.addColorStop(1, "black");
     context.fillStyle = gradient;
     context.fillRect(0, 0, width, height);
+  } else if (layer.kind === "full") {
+    context.fillStyle = "white";
+    context.fillRect(0, 0, width, height);
   } else {
     drawBrush(context, layer, width, height);
   }
@@ -100,7 +106,7 @@ export function renderLocalMask(layers: LocalLayer[], width: number, height: num
 export function removeLocalValues(edit: Adjustments, index: number, count: number): Adjustments {
   const next = { ...edit };
   for (let layer = index; layer < count; layer++) {
-    for (const { suffix } of LOCAL_SLIDERS) {
+    for (const suffix of [...LOCAL_SLIDERS.map((slider) => slider.suffix), ...LOCAL_RANGE_SUFFIXES]) {
       const following = edit[`local${layer + 1}${suffix}`];
       if (layer + 1 < count && following !== undefined) next[`local${layer}${suffix}`] = following;
       else delete next[`local${layer}${suffix}`];

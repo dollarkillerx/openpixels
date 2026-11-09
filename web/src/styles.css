@@ -83,6 +83,22 @@ body { background: var(--bg); color: var(--text); }
   border: 1.5px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); pointer-events: none;
 }
 
+.compare-line {
+  position: absolute; width: 2px; margin-left: -1px; background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45); cursor: ew-resize; touch-action: none;
+}
+.compare-line::before { content: ""; position: absolute; inset: 0 -8px; }
+.compare-label {
+  position: absolute; top: 8px; padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+  background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 12px; pointer-events: none;
+}
+.compare-label.before { right: 8px; }
+.compare-label.after { left: 8px; }
+.stamp-source { border-style: dashed; border-color: var(--accent); }
+.watermark-preview { position: absolute; pointer-events: none; }
+.stage canvas.watermark-preview { inset: auto; }
+.hue-slider input { accent-color: #fff; background: linear-gradient(90deg, red, yellow, lime, cyan, blue, magenta, red); border-radius: 4px; }
+
 .strip {
   display: flex; gap: 6px; flex: none; height: 88px; padding: 8px;
   overflow-x: auto; background: var(--panel); border-top: 1px solid var(--line);
@@ -93,6 +109,11 @@ body { background: var(--bg); color: var(--text); }
   background: var(--bg); color: var(--muted); font-size: 11px; cursor: pointer;
 }
 .thumb.current { border-color: var(--accent); }
+.thumb { position: relative; }
+.thumb.rejected img { opacity: 0.35; }
+.thumb-flag { position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.thumb-flag.pick { background: #5bc26a; }
+.thumb-flag.reject { background: #e0564b; }
 .thumb:disabled { cursor: default; }
 .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .thumb span { display: block; padding: 4px; overflow-wrap: anywhere; }

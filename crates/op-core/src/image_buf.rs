@@ -152,6 +152,73 @@ impl LinearImage {
         (small.width, small.height, luma)
     }
 
+    /// The haze estimate for dehazing, as `(width, height, half-float bits, airlight)`:
+    /// a smoothed dark channel and the colour of the haziest part of the image.
+    pub fn haze_map(&self, long_edge: u32) -> (u32, u32, Vec<u16>, [f32; 3]) {
+        const MIN_RADIUS: isize = 3;
+        const BLUR_RADIUS: isize = 3;
+        const HAZIEST_FRACTION: usize = 1000;
+
+        let small = self.proxy(long_edge);
+        let (width, height) = (small.width as usize, small.height as usize);
+        let colours: Vec<[f32; 3]> = small
+            .pixels
+            .chunks_exact(3)
+            .map(|rgb| [rgb[0], rgb[1], rgb[2]].map(|bits| f16::from_bits(bits).to_f32()))
+            .collect();
+        let dark: Vec<f32> = colours.iter().map(|c| c[0].min(c[1]).min(c[2])).collect();
+
+        let window = |values: &[f32], radius: isize, fold: &dyn Fn(&mut dyn Iterator<Item = f32>) -> f32| -> Vec<f32> {
+            let mut out = Vec::with_capacity(width * height);
+            for y in 0..height as isize {
+                for x in 0..width as isize {
+                    let mut around = (-radius..=radius).flat_map(|dy| {
+                        (-radius..=radius).map(move |dx| {
+                            let sx = (x + dx).clamp(0, width as isize - 1) as usize;
+                            let sy = (y + dy).clamp(0, height as isize - 1) as usize;
+                            values[sy * width + sx]
+                        })
+                    });
+                    out.push(fold(&mut around));
+                }
+            }
+            out
+        };
+        let minimum = window(&dark, MIN_RADIUS, &|items| items.fold(f32::INFINITY, f32::min));
+        let samples = ((2 * BLUR_RADIUS + 1) * (2 * BLUR_RADIUS + 1)) as f32;
+        let smooth = window(&minimum, BLUR_RADIUS, &|items| items.sum::<f32>() / samples);
+
+        let mut haziest: Vec<usize> = (0..colours.len()).collect();
+        haziest.sort_unstable_by(|&a, &b| minimum[b].total_cmp(&minimum[a]));
+        haziest.truncate((colours.len() / HAZIEST_FRACTION).max(1));
+        let mut airlight = [0.0f32; 3];
+        for &index in &haziest {
+            for channel in 0..3 {
+                airlight[channel] += colours[index][channel] / haziest.len() as f32;
+            }
+        }
+        let bits = smooth.iter().map(|&value| f16::from_f32(value).to_bits()).collect();
+        (small.width, small.height, bits, airlight)
+    }
+
+    /// The mean colour of a small square around a position in 0..=1.
+    pub fn mean_around(&self, u: f32, v: f32, radius: u32) -> [f32; 3] {
+        let (w, h) = (self.width as i64, self.height as i64);
+        let (cx, cy) = (((u * w as f32) as i64).clamp(0, w - 1), ((v * h as f32) as i64).clamp(0, h - 1));
+        let radius = i64::from(radius);
+        let (mut total, mut count) = ([0.0f32; 3], 0.0f32);
+        for y in (cy - radius).max(0)..=(cy + radius).min(h - 1) {
+            for x in (cx - radius).max(0)..=(cx + radius).min(w - 1) {
+                let start = (y * w + x) as usize * 3;
+                for (sum, &bits) in total.iter_mut().zip(&self.pixels[start..start + 3]) {
+                    *sum += f16::from_bits(bits).to_f32();
+                }
+                count += 1.0;
+            }
+        }
+        total.map(|value| value / count)
+    }
+
     /// Copies a rectangle out as tightly packed RGBA half floats, with alpha 1.
     pub fn rgba_region(&self, x: u32, y: u32, w: u32, h: u32) -> Vec<u16> {
         assert!(x + w <= self.width && y + h <= self.height, "region out of bounds");

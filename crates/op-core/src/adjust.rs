@@ -59,6 +59,38 @@ pub struct Adjustments {
     pub lens_auto: f32,
     /// Manual distortion, vignetting, red fringe and blue fringe, each -1..=1.
     pub lens_manual: [f32; 4],
+    /// Fine local contrast, -1..=1.
+    pub texture: f32,
+    /// Haze removal when positive, added haze when negative.
+    pub dehaze: f32,
+    /// Film grain strength, 0..=1.
+    pub grain: f32,
+    /// Film grain coarseness, 0..=1.
+    pub grain_size: f32,
+    /// Keystone correction, vertical then horizontal, each -1..=1.
+    pub perspective: [f32; 2],
+    #[serde(skip)]
+    pub _padding: [f32; 2],
+    /// Per local layer: lightest-to-darkest limits, then hue in degrees and hue half
+    /// width. A zero upper limit means the layer has no range.
+    pub local_range: [[f32; 4]; 4],
+}
+
+/// The white balance sliders' travel either way.
+const WHITE_BALANCE_RANGE: f32 = 2.0;
+
+/// Temperature and tint that make a scene-linear colour neutral, or `None` if it is
+/// too dark or clipped to say anything about the light.
+pub fn neutral_white_balance(rgb: [f32; 3]) -> Option<(f32, f32)> {
+    const DARKEST: f32 = 1e-3;
+    const BRIGHTEST: f32 = 0.98;
+    if rgb.iter().any(|&channel| !(DARKEST..=BRIGHTEST).contains(&channel)) {
+        return None;
+    }
+    let [red, green, blue] = rgb.map(f32::log2);
+    let temperature = blue - red;
+    let tint = 4.0 / 3.0 * (green - (red + blue) / 2.0);
+    Some((temperature.clamp(-WHITE_BALANCE_RANGE, WHITE_BALANCE_RANGE), tint.clamp(-WHITE_BALANCE_RANGE, WHITE_BALANCE_RANGE)))
 }
 
 #[cfg(test)]
@@ -73,6 +105,22 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16);
+    }
+
+    #[test]
+    fn the_neutral_balance_cancels_a_colour_cast() {
+        let rgb = [0.3f32, 0.25, 0.2];
+        let (t, tint) = neutral_white_balance(rgb).unwrap();
+        // The gains of `white_balance` in develop.wgsl.
+        let gain = [(t * 0.5 + tint * 0.25).exp2(), (-tint * 0.5).exp2(), (-t * 0.5 + tint * 0.25).exp2()];
+        let out = [rgb[0] * gain[0], rgb[1] * gain[1], rgb[2] * gain[2]];
+        assert!((out[0] - out[1]).abs() < 1e-3 && (out[1] - out[2]).abs() < 1e-3, "{out:?}");
+    }
+
+    #[test]
+    fn clipped_or_black_colours_cannot_set_the_balance() {
+        assert_eq!(neutral_white_balance([1.0, 0.5, 0.5]), None);
+        assert_eq!(neutral_white_balance([0.0, 0.5, 0.5]), None);
     }
 }

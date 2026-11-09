@@ -3,7 +3,8 @@
 
 use op_core::{
     Adjustments, DevelopJob, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_heals,
-    export_exif, find_heal_source,
+    OutputFormat, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
+    neutral_white_balance, resize_rgb8,
 };
 use op_gpu::{Renderer, encode_jpeg};
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,20 @@ struct ViewFlags {
     crop_editing: f32,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputSettings {
+    format: OutputFormat,
+    quality: u8,
+    long_edge: u32,
+}
+
+#[derive(Serialize)]
+struct WhiteBalance {
+    temperature: f32,
+    tint: f32,
+}
+
 #[wasm_bindgen]
 pub struct Engine {
     surface: wgpu::Surface<'static>,
@@ -64,6 +79,9 @@ pub struct Engine {
     job: Option<DevelopJob>,
     job_tiles: Vec<op_core::decode::DevelopTile>,
     developed: Option<LinearImage>,
+    /// Screen fraction showing the unedited image; 0 is off.
+    compare: f32,
+    full_size: (u32, u32),
 }
 
 /// Develops one tile on a worker thread. See `DevelopJob`.
@@ -133,6 +151,8 @@ impl Engine {
             job: None,
             job_tiles: Vec::new(),
             developed: None,
+            compare: 0.0,
+            full_size: (0, 0),
         })
     }
 
@@ -222,8 +242,14 @@ impl Engine {
         };
         let view = frame.texture.create_view(&Default::default());
         let shown = if self.crop_editing { self.geometry.whole_frame() } else { self.geometry };
+        if self.compare > 0.0
+            && !self.renderer.comparison_ready()
+            && let Some(proxy) = &self.proxy
+        {
+            self.renderer.prepare_comparison(proxy, self.healed_proxy.as_ref());
+        }
         self.renderer
-            .draw_preview(&self.adjustments, &shown, &view, (self.config.width, self.config.height))
+            .draw_preview(&self.adjustments, &shown, &view, (self.config.width, self.config.height), self.compare)
             .map_err(js_error)?;
         self.renderer.present(frame);
         self.renderer.wait_idle().await.map_err(js_error)
@@ -295,6 +321,43 @@ impl Engine {
         Ok(())
     }
 
+    /// Sets the screen fraction, from the left, that shows the unedited image.
+    pub fn set_compare(&mut self, split: f32) {
+        self.compare = split;
+    }
+
+    /// Adds spots to the end of the list, given as JSON, without redoing the earlier ones.
+    pub fn add_heals(&mut self, json: &str) -> Result<(), JsError> {
+        let added: Vec<HealSpot> = serde_json::from_str(json).map_err(js_error)?;
+        let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let healed = self.healed_proxy.get_or_insert_with(|| proxy.clone());
+        apply_heals(healed, &added);
+        self.renderer.update_preview_pixels(healed);
+        self.heals.extend(added);
+        Ok(())
+    }
+
+    /// The temperature and tint that make the colour at a stage position neutral, as
+    /// JSON, or `null` if the position missed the image or its colour is unusable.
+    pub fn white_balance_at(&self, stage_x: f32, stage_y: f32, stage_width: u32, stage_height: u32) -> Result<String, JsError> {
+        const SAMPLE_RADIUS: u32 = 3;
+        let size = (stage_width.max(1), stage_height.max(1));
+        let Some((u, v)) = self.renderer.canvas_to_image(&self.geometry, size, stage_x, stage_y) else {
+            return Ok("null".into());
+        };
+        let proxy = self.healed_proxy.as_ref().or(self.proxy.as_ref());
+        let proxy = proxy.ok_or_else(|| JsError::new("no image loaded"))?;
+        let (u, v) = self.renderer.lens_map(&self.adjustments, proxy.width, proxy.height).source_uv(u, v, 1);
+        let colour = proxy.mean_around(u, v, SAMPLE_RADIUS);
+        let matched = self.renderer.camera_rows(self.adjustments.camera_profile).map(|row| {
+            row[0] * colour[0] + row[1] * colour[1] + row[2] * colour[2]
+        });
+        Ok(match neutral_white_balance(matched) {
+            Some((temperature, tint)) => serde_json::to_string(&WhiteBalance { temperature, tint }).map_err(js_error)?,
+            None => "null".into(),
+        })
+    }
+
     /// Heals a spot at a position in 0..=1 on a stage of the given size, with a radius
     /// as a fraction of the long edge. Returns the spot as JSON, or `null` if the
     /// position missed the image.
@@ -340,7 +403,8 @@ impl Engine {
     pub async fn framed_thumbnail(&mut self, max_long_edge: u32) -> Result<Vec<u8>, JsError> {
         let rgb = self.thumbnail(max_long_edge).await?;
         let (width, height) = self.thumbnail_dimensions(max_long_edge)?;
-        let warped = self.warped(rgb, width, height);
+        let corrected = self.renderer.lens_map(&self.adjustments, width, height).apply_rgb8(&rgb, width, height);
+        let warped = self.warped(corrected, width, height);
         Ok(self.geometry.apply_rgb8(&warped, width, height).0)
     }
 
@@ -386,8 +450,30 @@ impl Engine {
         Ok(())
     }
 
-    /// Develops the full-resolution image and returns JPEG bytes.
-    pub async fn export_jpeg(&mut self, quality: u8) -> Result<Vec<u8>, JsError> {
+    /// The size of the file `export_image` will write, as JSON. A RAW's development
+    /// should already have finished, as it can differ from the announced size by a pixel.
+    pub fn export_size(&self, long_edge: u32) -> Result<String, JsError> {
+        let (width, height) = match (&self.developed, &self.working) {
+            (Some(image), _) | (None, Some(image)) if self.raw_file.is_none() || self.developed.is_some() => (image.width, image.height),
+            _ => self.full_size,
+        };
+        let (width, height) = self.geometry.output_size(width, height);
+        let (width, height) = fit_long_edge(width, height, long_edge);
+        serde_json::to_string(&ProxyInfo { width, height }).map_err(js_error)
+    }
+
+    /// Develops the full-resolution image and returns the encoded file. `overlay` is
+    /// straight-alpha RGBA drawn on the finished image; it can be empty.
+    pub async fn export_image(
+        &mut self,
+        settings: String,
+        overlay: Vec<u8>,
+        overlay_x: i32,
+        overlay_y: i32,
+        overlay_width: u32,
+        overlay_height: u32,
+    ) -> Result<Vec<u8>, JsError> {
+        let settings: OutputSettings = serde_json::from_str(&settings).map_err(js_error)?;
         let mut developed = match (self.developed.take(), &self.raw_file) {
             (Some(image), _) => Some(image),
             (None, Some(file)) => Some(op_core::develop_raw_full(file).map_err(js_error)?),
@@ -410,8 +496,16 @@ impl Engine {
         // In the order the blit undoes them: lens, then liquify, then framing.
         let corrected = self.renderer.lens_map(&self.adjustments, image_width, image_height).apply_rgb8(&rgb, image_width, image_height);
         let warped = self.warped(corrected, image_width, image_height);
-        let (framed, width, height) = self.geometry.apply_rgb8(&warped, image_width, image_height);
-        encode_jpeg(&framed, width, height, quality, self.source_exif.clone()).map_err(js_error)
+        let (framed, frame_width, frame_height) = self.geometry.apply_rgb8(&warped, image_width, image_height);
+        drop(warped);
+        let (width, height) = fit_long_edge(frame_width, frame_height, settings.long_edge);
+        let mut finished = resize_rgb8(framed, frame_width, frame_height, width, height);
+        composite_overlay(&mut finished, width, height, &overlay, overlay_x, overlay_y, overlay_width, overlay_height);
+        match settings.format {
+            OutputFormat::Jpeg => encode_jpeg(&finished, width, height, settings.quality.clamp(1, 100), self.source_exif.clone()).map_err(js_error),
+            OutputFormat::Png => encode_png(&finished, width, height).map_err(js_error),
+            OutputFormat::Tiff => encode_tiff(&finished, width, height).map_err(js_error),
+        }
     }
 }
 
@@ -425,6 +519,7 @@ impl Engine {
     }
 
     fn finish_open(&mut self, opened: op_core::Opened, bytes: Option<&[u8]>) -> Result<String, JsError> {
+        self.full_size = (opened.width, opened.height);
         let info = ImageInfo {
             width: opened.width,
             height: opened.height,

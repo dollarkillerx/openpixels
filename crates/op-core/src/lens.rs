@@ -14,6 +14,8 @@ use crate::Adjustments;
 const MANUAL_DISTORTION: f32 = 0.2;
 const MANUAL_VIGNETTE: f32 = 0.75;
 const MANUAL_CHROMA: f32 = 0.003;
+/// How far the perspective sliders tilt the image plane at full travel.
+const MANUAL_PERSPECTIVE: f32 = 0.3;
 
 const BOUNDARY_STEPS: usize = 64;
 const FIT_SAMPLES: usize = 64;
@@ -229,6 +231,8 @@ pub struct LensMap {
     /// Red constant and r², blue constant and r².
     pub chroma: [f32; 4],
     pub vignette: [f32; 4],
+    /// Keystone terms, vertical then horizontal.
+    pub perspective: [f32; 2],
 }
 
 impl LensMap {
@@ -251,13 +255,20 @@ impl LensMap {
         let (w, h) = (width.max(1) as f32, height.max(1) as f32);
         let diagonal = w.hypot(h);
         let aspect = [w / diagonal, h / diagonal];
-        let mut map = Self { aspect, distortion, scale: 1.0, chroma, vignette };
+        let perspective = adjustments.perspective.map(|value| value * MANUAL_PERSPECTIVE);
+        let mut map = Self { aspect, distortion, scale: 1.0, chroma, vignette, perspective };
         map.scale = map.fitting_scale();
         map
     }
 
     pub fn is_identity(&self) -> bool {
-        self.distortion == [0.0; 4] && self.chroma == [0.0; 4] && self.scale == 1.0
+        self.distortion == [0.0; 4] && self.chroma == [0.0; 4] && self.scale == 1.0 && self.perspective == [0.0; 2]
+    }
+
+    /// Takes a centred position through the keystone correction.
+    fn keystone(&self, px: f32, py: f32) -> (f32, f32) {
+        let depth = 1.0 - self.perspective[0] * py / self.aspect[1] - self.perspective[1] * px / self.aspect[0];
+        (px / depth, py / depth)
     }
 
     fn radial(&self, r2: f32) -> f32 {
@@ -267,16 +278,16 @@ impl LensMap {
 
     /// The largest zoom-out that keeps the whole output inside the source frame.
     fn fitting_scale(&self) -> f32 {
-        if self.distortion == [0.0; 4] {
+        if self.distortion == [0.0; 4] && self.perspective == [0.0; 2] {
             return 1.0;
         }
         let mut furthest = 0.0f32;
         for step in 0..=BOUNDARY_STEPS {
             let position = step as f32 / BOUNDARY_STEPS as f32 * 2.0 - 1.0;
             for (x, y) in [(position, 1.0), (1.0, position)] {
-                let (px, py) = (x * self.aspect[0], y * self.aspect[1]);
+                let (px, py) = self.keystone(x * self.aspect[0], y * self.aspect[1]);
                 let stretch = self.radial(px * px + py * py);
-                furthest = furthest.max(x.abs() * stretch).max(y.abs() * stretch);
+                furthest = furthest.max((px / self.aspect[0]).abs() * stretch).max((py / self.aspect[1]).abs() * stretch);
             }
         }
         1.0 / furthest
@@ -284,7 +295,7 @@ impl LensMap {
 
     /// Where a corrected position reads from, for `channel` (0 red, 1 green, 2 blue).
     pub fn source_uv(&self, u: f32, v: f32, channel: usize) -> (f32, f32) {
-        let (px, py) = ((u - 0.5) * 2.0 * self.aspect[0], (v - 0.5) * 2.0 * self.aspect[1]);
+        let (px, py) = self.keystone((u - 0.5) * 2.0 * self.aspect[0], (v - 0.5) * 2.0 * self.aspect[1]);
         let r2 = px * px + py * py;
         let fringe = match channel {
             0 => 1.0 + self.chroma[0] + self.chroma[1] * r2,
@@ -451,6 +462,29 @@ impl<'a> Tiff<'a> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn perspective_keeps_the_output_inside_the_source() {
+        let adjustments = Adjustments { perspective: [0.8, -0.5], ..Default::default() };
+        let map = LensMap::new(None, &adjustments, 300, 200);
+        assert!(!map.is_identity());
+        for step in 0..=16 {
+            let along = step as f32 / 16.0;
+            for (u, v) in [(along, 0.0), (along, 1.0), (0.0, along), (1.0, along)] {
+                let (x, y) = map.source_uv(u, v, 1);
+                assert!((-1e-4..=1.0001).contains(&x) && (-1e-4..=1.0001).contains(&y), "({u}, {v}) -> ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_perspective_widens_one_end_of_the_frame() {
+        let adjustments = Adjustments { perspective: [1.0, 0.0], ..Default::default() };
+        let map = LensMap::new(None, &adjustments, 300, 200);
+        let width_at = |v: f32| map.source_uv(1.0, v, 1).0 - map.source_uv(0.0, v, 1).0;
+        assert!(width_at(0.0) < width_at(1.0), "{} vs {}", width_at(0.0), width_at(1.0));
+    }
+
     use super::*;
 
     fn map_with(distortion: f32) -> LensMap {

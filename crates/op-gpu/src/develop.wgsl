@@ -35,6 +35,13 @@ struct Adjustments {
     camera_profile: f32,
     lens_auto: f32,
     lens_manual: vec4<f32>,
+    texture_amount: f32,
+    dehaze: f32,
+    grain: f32,
+    grain_size: f32,
+    perspective: vec2<f32>,
+    padding: vec2<f32>,
+    local_range: array<vec4<f32>, 4>,
 }
 
 struct Region {
@@ -59,6 +66,8 @@ struct Region {
     camera_red: vec4<f32>,
     camera_green: vec4<f32>,
     camera_blue: vec4<f32>,
+    // Scene-linear colour of the haze, for dehazing.
+    airlight: vec4<f32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -79,6 +88,10 @@ struct Region {
 @group(0) @binding(10) var curve_lut: texture_2d<f32>;
 // Creative look, from display colour to display colour.
 @group(0) @binding(11) var look_lut: texture_3d<f32>;
+// Lightly blurred scene-linear luminance of the whole image, for texture.
+@group(0) @binding(12) var detail_luma: texture_2d<f32>;
+// Smoothed dark channel of the whole image, for dehazing.
+@group(0) @binding(13) var haze_map: texture_2d<f32>;
 
 // This pixel's combined local adjustments: exposure, contrast, saturation, temperature.
 var<private> local_values: vec4<f32>;
@@ -210,6 +223,68 @@ fn apply_clarity(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
     let midtones = 1.0 - pow(abs(tone * 2.0 - 1.0), 2.0);
     let shaped = max(tone + (tone - around) * adj.clarity * midtones, 0.0);
     return rgb * pow(shaped / tone, TONE_GAMMA);
+}
+
+// Boosts fine detail. The difference is limited so that strong edges do not halo.
+fn apply_texture(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
+    if adj.texture_amount == 0.0 {
+        return rgb;
+    }
+    let luma = max(dot(rgb, LUMA), 1e-5);
+    let surround = max(textureSampleLevel(detail_luma, mask_sampler, uv, 0.0).r, 0.0) * scene_gain;
+    let tone = pow(luma, 1.0 / TONE_GAMMA);
+    let around = pow(max(apply_base_look(vec3<f32>(surround)).g, 1e-5), 1.0 / TONE_GAMMA);
+    let detail = clamp(tone - around, -0.12, 0.12);
+    let amount = adj.texture_amount * select(0.75, 1.4, adj.texture_amount > 0.0);
+    let shaped = max(tone + detail * amount, 0.0);
+    return rgb * pow(shaped / tone, TONE_GAMMA);
+}
+
+// The haze model: seen = scene * transmission + air * (1 - transmission).
+fn apply_dehaze(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
+    if adj.dehaze == 0.0 {
+        return rgb;
+    }
+    let exponent = vec3<f32>(1.0 / TONE_GAMMA);
+    let tone = pow(max(rgb, vec3<f32>(0.0)), exponent);
+    let air = pow(max(apply_base_look(white_balance(region.airlight.rgb) * scene_gain), vec3<f32>(0.0)), exponent);
+    var out: vec3<f32>;
+    if adj.dehaze > 0.0 {
+        let scene_dark = max(textureSampleLevel(haze_map, mask_sampler, uv, 0.0).r, 0.0) * scene_gain;
+        let dark = pow(max(apply_base_look(vec3<f32>(scene_dark)).g, 1e-5), 1.0 / TONE_GAMMA);
+        let transmission = clamp(1.0 - adj.dehaze * 0.9 * dark / max(max(air.r, max(air.g, air.b)), 1e-3), 0.25, 1.0);
+        out = (tone - air) / transmission + air;
+    } else {
+        out = mix(tone, air, -adj.dehaze * 0.6);
+    }
+    return pow(max(out, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+}
+
+// How far a pixel falls inside a layer's tone and colour limits, judged on the
+// unedited image so that editing the layer does not change what it selects.
+fn range_weight(limits: vec4<f32>, source_rgb: vec3<f32>) -> f32 {
+    const SOFTNESS = 0.08;
+    const NEUTRAL_START = 0.04;
+    const NEUTRAL_END = 0.15;
+    if limits.y == 0.0 {
+        return 1.0;
+    }
+    var weight = 1.0;
+    if limits.x > 0.0 || limits.y < 1.0 {
+        let tone = pow(max(dot(apply_base_look(source_rgb), LUMA), 1e-5), 1.0 / TONE_GAMMA);
+        if limits.x > 0.0 {
+            weight *= smoothstep(limits.x - SOFTNESS, limits.x + SOFTNESS, tone);
+        }
+        if limits.y < 1.0 {
+            weight *= 1.0 - smoothstep(limits.y - SOFTNESS, limits.y + SOFTNESS, tone);
+        }
+    }
+    if limits.w > 0.0 {
+        let hsv = rgb_to_hsv(max(source_rgb, vec3<f32>(0.0)));
+        let away = abs(fract((hsv.x - limits.z) / 360.0 + 0.5) - 0.5) * 360.0;
+        weight *= (1.0 - smoothstep(limits.w * 0.6, limits.w, away)) * smoothstep(NEUTRAL_START, NEUTRAL_END, hsv.y);
+    }
+    return weight;
 }
 
 const HSL_CENTERS = array<f32, 8>(0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0);
@@ -371,6 +446,42 @@ fn apply_vignette(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     return rgb * pow(2.0, adj.vignette * 2.0 * falloff);
 }
 
+// A 2D hash of integer cell coordinates, the same on every tile.
+fn cell_hash(cell: vec2<i32>) -> f32 {
+    var v = vec2<u32>(cell) * vec2<u32>(1664525u, 22695477u) + vec2<u32>(1013904223u, 2531011u);
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> vec2<u32>(16u);
+    v.x += v.y * 1664525u;
+    return f32(v.x >> 8u) / 16777215.0 * 2.0 - 1.0;
+}
+
+fn value_noise(position: vec2<f32>) -> f32 {
+    let cell = floor(position);
+    let blend = smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), position - cell);
+    let at = vec2<i32>(cell);
+    let top = mix(cell_hash(at), cell_hash(at + vec2<i32>(1, 0)), blend.x);
+    let bottom = mix(cell_hash(at + vec2<i32>(0, 1)), cell_hash(at + vec2<i32>(1, 1)), blend.x);
+    return mix(top, bottom, blend.y);
+}
+
+// Film grain in display space, strongest in the midtones. Its cells grow with the
+// image, so the full-size file looks like the smaller preview.
+fn apply_grain(display: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    const REFERENCE_LONG_EDGE = 2048.0;
+    const STRENGTH = 0.16;
+    if adj.grain == 0.0 {
+        return display;
+    }
+    let cell = mix(1.0, 3.0, adj.grain_size) * max(region.full_size.x, region.full_size.y) / REFERENCE_LONG_EDGE;
+    let position = (pixel + 0.5) / max(cell, 1.0);
+    let noise = value_noise(position) * 0.75 + value_noise(position * 1.7 + vec2<f32>(37.0, 11.0)) * 0.25;
+    let tone = dot(display, LUMA);
+    let weight = 0.35 + 0.65 * (1.0 - pow(abs(tone * 2.0 - 1.0), 2.0));
+    // Cells smaller than a pixel average out, as they would in a downscaled scan.
+    return display + vec3<f32>(noise * adj.grain * STRENGTH * weight * min(cell, 1.0));
+}
+
 fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
     let c = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
     let low = c * 12.92;
@@ -389,12 +500,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let uv = (pixel + 0.5) / region.full_size;
     let background = 1.0 - textureSampleLevel(subject_mask, mask_sampler, uv, 0.0).r;
 
-    let weights = textureSampleLevel(local_mask, mask_sampler, uv, 0.0);
+    let source_pixel = vec2<i32>(id.xy) + vec2<i32>(region.source_offset);
+    let unedited = source_at(source_pixel);
+    var weights = textureSampleLevel(local_mask, mask_sampler, uv, 0.0);
+    for (var layer = 0u; layer < 4u; layer++) {
+        weights[layer] *= range_weight(adj.local_range[layer], unedited);
+    }
     local_values = adj.local[0] * weights.r + adj.local[1] * weights.g
         + adj.local[2] * weights.b + adj.local[3] * weights.a;
 
-    let source_pixel = vec2<i32>(id.xy) + vec2<i32>(region.source_offset);
-    var rgb = apply_denoise(source_at(source_pixel), source_pixel);
+    var rgb = apply_denoise(unedited, source_pixel);
     rgb = apply_sharpen(rgb, source_pixel);
     rgb = apply_skin(rgb, uv);
     rgb = apply_lens_light(rgb, pixel);
@@ -403,7 +518,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background + local_values.x);
     rgb *= scene_gain;
     rgb = apply_base_look(rgb);
+    rgb = apply_dehaze(rgb, uv, scene_gain);
     rgb = apply_clarity(rgb, uv, scene_gain);
+    rgb = apply_texture(rgb, uv, scene_gain);
     rgb = apply_tone(rgb);
     rgb = apply_curve(rgb);
     rgb = apply_grading(rgb);
@@ -412,7 +529,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = apply_vignette(rgb, pixel);
 
     let tint = vec3<f32>(0.95, 0.2, 0.35);
-    var display = mix(apply_look(linear_to_srgb(rgb)), tint, adj.mask_overlay * background * 0.65);
+    var display = mix(apply_grain(apply_look(linear_to_srgb(rgb)), pixel), tint, adj.mask_overlay * background * 0.65);
     if adj.local_overlay > 0.0 {
         let layer = u32(adj.local_overlay) - 1u;
         display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);

@@ -1,4 +1,5 @@
 import type { LocalLayer } from "./local";
+import { DEFAULT_OUTPUT, type OutputSettings } from "./output";
 import type { Adjustments, HealSpot, WarpStroke } from "./protocol";
 
 const EDITS_KEY = "openpixels.edits.v1";
@@ -7,6 +8,8 @@ const HEALS_KEY = "openpixels.heals.v1";
 const WARPS_KEY = "openpixels.warps.v1";
 const LOCALS_KEY = "openpixels.locals.v1";
 const RATINGS_KEY = "openpixels.ratings.v1";
+const FLAGS_KEY = "openpixels.flags.v1";
+const OUTPUT_KEY = "openpixels.output.v1";
 const LAST_PROJECT_KEY = "openpixels.lastProject.v1";
 
 /** Editing aids that belong to the session, never to a saved edit. */
@@ -42,6 +45,14 @@ export function engineJson(adjustments: Adjustments): string {
     hslLuminance: bands("hslLum"),
     curve: ["M", "R", "G", "B"].map((channel) => [0, 1, 2, 3, 4].map((i) => adjustments[`curve${channel}${i}`] ?? 0)),
     lensManual: [adjustments.lensDistortion ?? 0, adjustments.lensVignette ?? 0, adjustments.lensCaRed ?? 0, adjustments.lensCaBlue ?? 0],
+    perspective: [adjustments.perspectiveV ?? 0, adjustments.perspectiveH ?? 0],
+    localRange: [0, 1, 2, 3].map((layer) => {
+      const value = (name: string, fallback: number) => adjustments[`local${layer}Range${name}`] ?? fallback;
+      const mode = value("Mode", 0);
+      if (mode === 1) return [value("Low", 0), value("High", 1), 0, 0];
+      if (mode === 2) return [0, 1, value("Hue", 0), value("Width", 30)];
+      return [0, 1, 0, 0];
+    }),
     grade: ["Shadow", "Mid", "High"].map((range) => [
       adjustments[`grade${range}Hue`] ?? 0,
       adjustments[`grade${range}Amount`] ?? 0,
@@ -117,14 +128,41 @@ export function saveRating(id: string, rating: number) {
   write(RATINGS_KEY, all);
 }
 
+/** 1 for a picked photo, -1 for a rejected one. */
+export const loadFlags = (): Record<string, number> => read<Record<string, number>>(FLAGS_KEY, {});
+
+export function saveFlag(id: string, flag: number) {
+  const all = loadFlags();
+  if (flag !== 0) all[id] = flag;
+  else delete all[id];
+  write(FLAGS_KEY, all);
+}
+
+export const loadOutput = (): OutputSettings => {
+  const stored = read<Partial<OutputSettings>>(OUTPUT_KEY, {});
+  return { ...DEFAULT_OUTPUT, ...stored, watermark: { ...DEFAULT_OUTPUT.watermark, ...stored.watermark } };
+};
+export const saveOutput = (settings: OutputSettings) => write(OUTPUT_KEY, settings);
+
 export const loadPresets = (): Presets => read<Presets>(PRESETS_KEY, {});
 export const savePresets = (presets: Presets) => write(PRESETS_KEY, presets);
 
-/** Output name for `sourceName`, made unique among names already in `used`. */
-export function exportName(sourceName: string, used: Set<string>): string {
-  const base = sourceName.replace(/\.[^.]*$/, "") || "photo";
-  let name = `${base}.jpg`;
-  for (let copy = 2; used.has(name.toLowerCase()); copy++) name = `${base}-${copy}.jpg`;
+const FORBIDDEN_IN_NAMES = /[\\/:*?"<>|]/g;
+
+/** Output name from a template, made unique among names already in `used`. */
+export function exportName(sourceName: string, used: Set<string>, template = "{name}", index = 1, extension = "jpg"): string {
+  const stem = sourceName.replace(/\.[^.]*$/, "") || "photo";
+  const today = new Date();
+  const date = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+  const filled = template
+    .replaceAll("{name}", stem)
+    .replaceAll("{n}", String(index).padStart(3, "0"))
+    .replaceAll("{date}", date)
+    .replace(FORBIDDEN_IN_NAMES, "_")
+    .trim();
+  const base = filled || stem;
+  let name = `${base}.${extension}`;
+  for (let copy = 2; used.has(name.toLowerCase()); copy++) name = `${base}-${copy}.${extension}`;
   used.add(name.toLowerCase());
   return name;
 }

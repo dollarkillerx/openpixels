@@ -8,20 +8,26 @@ import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, output
 import { BUILT_IN_LOOKS, builtInLut, parseCube } from "./lut";
 import { deleteProject, forgetHandle, getLut, listLuts, listProjects, recallHandle, recallHandleEntries, rememberHandle, saveLut, saveProject, type Project, type StoredLut } from "./store";
 import { lensToSource, lensView, sourceToLens } from "./lens";
+import { FORMAT_DETAILS, type OutputFormat, type OutputSettings, type Watermark, type WatermarkPosition } from "./output";
 import { ProjectLibrary } from "./ProjectLibrary";
+import { WatermarkPreview } from "./WatermarkPreview";
 import { LOCAL_SLIDERS, MAX_LOCAL_LAYERS, removeLocalValues, renderLocalMask, type LocalKind, type LocalLayer } from "./local";
 import {
   exportName,
   fileId,
   loadEdit,
+  loadFlags,
   loadHeals,
   loadLocals,
+  loadOutput,
   loadPresets,
   loadRatings,
   loadWarps,
   persistable,
   saveHeals,
+  saveFlag,
   saveLocals,
+  saveOutput,
   saveRating,
   saveWarps,
   savePresets,
@@ -40,8 +46,8 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
   {
     title: "白平衡",
     sliders: [
-      { key: "temperature", label: "色温", min: -1, max: 1 },
-      { key: "tint", label: "色调", min: -1, max: 1 },
+      { key: "temperature", label: "色温", min: -2, max: 2 },
+      { key: "tint", label: "色调", min: -2, max: 2 },
     ],
   },
   {
@@ -60,11 +66,15 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
     sliders: [
       { key: "vibrance", label: "自然饱和度", min: -1, max: 1 },
       { key: "saturation", label: "饱和度", min: -1, max: 1 },
+      { key: "dehaze", label: "去雾", min: -1, max: 1 },
       { key: "clarity", label: "清晰度", min: -1, max: 1 },
+      { key: "texture", label: "纹理", min: -1, max: 1 },
       { key: "sharpen", label: "锐化", min: 0, max: 1 },
       { key: "denoiseLuma", label: "明度降噪", min: 0, max: 1 },
       { key: "denoiseChroma", label: "色彩降噪", min: 0, max: 1 },
       { key: "vignette", label: "暗角", min: -1, max: 1 },
+      { key: "grain", label: "颗粒", min: 0, max: 1 },
+      { key: "grainSize", label: "颗粒大小", min: 0, max: 1 },
     ],
   },
   {
@@ -74,6 +84,13 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
       { key: "lensVignette", label: "暗角补偿", min: -1, max: 1 },
       { key: "lensCaRed", label: "红/青边", min: -1, max: 1 },
       { key: "lensCaBlue", label: "蓝/黄边", min: -1, max: 1 },
+    ],
+  },
+  {
+    title: "透视矫正",
+    sliders: [
+      { key: "perspectiveV", label: "垂直透视", min: -1, max: 1 },
+      { key: "perspectiveH", label: "水平透视", min: -1, max: 1 },
     ],
   },
 ];
@@ -121,7 +138,22 @@ const CROP_RATIOS: { label: string; value: number | null }[] = [
 const LOCAL_MASK_INTERVAL_MS = 33;
 const MIN_LIQUIFY_STEP = 2;
 const LIQUIFY_SETTLE_MS = 120;
-const JPEG_QUALITY = 92;
+const LONG_EDGE_CHOICES = [0, 6000, 4096, 3000, 2048, 1600, 1080];
+const WATERMARK_POSITIONS: { value: WatermarkPosition; label: string }[] = [
+  { value: "bottomRight", label: "右下" },
+  { value: "bottomLeft", label: "左下" },
+  { value: "topRight", label: "右上" },
+  { value: "topLeft", label: "左上" },
+  { value: "center", label: "居中" },
+];
+const WATERMARK_LOGO_LONG_EDGE = 512;
+/** Past the right edge, so the whole frame shows the unedited image. */
+const COMPARE_ALL = 1.01;
+const STAMP_SPACING = 0.35;
+const STAMP_FLUSH_MS = 40;
+const FLAG_PICK = 1;
+const FLAG_REJECT = -1;
+const FLAG_KEYS: Record<string, number> = { p: FLAG_PICK, x: FLAG_REJECT, u: 0 };
 const FRAME_WINDOW = 30;
 const THUMBNAIL_LONG_EDGE = 200;
 const SETTLE_MS = 400;
@@ -211,6 +243,19 @@ export function App() {
   const [liquifyStrength, setLiquifyStrength] = useState(0.7);
   const [liquifyMode, setLiquifyMode] = useState(0);
   const [ratings, setRatings] = useState<Record<string, number>>(loadRatings);
+  const [flags, setFlags] = useState<Record<string, number>>(loadFlags);
+  const [flagFilter, setFlagFilter] = useState(0);
+  const [compare, setCompare] = useState(0);
+  const compareHeldRef = useRef<number | null>(null);
+  const compareDragRef = useRef(false);
+  const [pickingWhite, setPickingWhite] = useState(false);
+  const [toolHint, setToolHint] = useState("");
+  const [output, setOutput] = useState<OutputSettings>(loadOutput);
+  const [healMode, setHealMode] = useState<"spot" | "clone">("spot");
+  const [stampMarker, setStampMarker] = useState<{ x: number; y: number } | null>(null);
+  const stampRef = useRef<{ source: { x: number; y: number } | null; offset: { x: number; y: number } | null; last: { x: number; y: number } | null; group: number; drawing: boolean }>({ source: null, offset: null, last: null, group: 0, drawing: false });
+  const pendingDabsRef = useRef<HealSpot[]>([]);
+  const dabTimerRef = useRef<number | null>(null);
   const [importedLuts, setImportedLuts] = useState<StoredLut[]>([]);
   const [restorable, setRestorable] = useState<{ id: string; handle: FileSystemFileHandle }[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -233,7 +278,11 @@ export function App() {
   const localDragRef = useRef(false);
 
   const current = photos.find((photo) => photo.id === currentId) ?? null;
-  const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating);
+  const passesFlag = (id: string) => {
+    const flag = flags[id] ?? 0;
+    return flagFilter === 0 || (flagFilter === 2 ? flag !== FLAG_REJECT : flag === flagFilter);
+  };
+  const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating && passesFlag(photo.id));
   const locked = batchRunning;
   const projectOfActive = projects.find((item) => item.id === activeProject) ?? null;
   const resumable = activeProject === null ? (projects.find((item) => item.id === lastProject) ?? null) : null;
@@ -337,6 +386,10 @@ export function App() {
       editsRef.current[photo.id] = edit;
       setHeals(spots);
       setHealing(false);
+      setPickingWhite(false);
+      setToolHint("");
+      stampRef.current = { source: null, offset: null, last: null, group: 0, drawing: false };
+      setStampMarker(null);
       setWarpGroups(warps);
       setLiquifying(false);
       const layers = loadLocals(photo.id);
@@ -502,6 +555,11 @@ export function App() {
     setRatings((all) => ({ ...all, [id]: rating }));
   }, []);
 
+  const flag = useCallback((id: string, value: number) => {
+    saveFlag(id, value);
+    setFlags((all) => ({ ...all, [id]: value }));
+  }, []);
+
   const stepHistory = useCallback(
     (direction: "undo" | "redo") => {
       if (!currentId) return;
@@ -534,13 +592,36 @@ export function App() {
       const tag = (event.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "SELECT" || event.metaKey || event.ctrlKey) return;
       if (/^[0-5]$/.test(event.key) && currentId) rate(currentId, Number(event.key));
+      const flagValue = FLAG_KEYS[event.key.toLowerCase()];
+      if (flagValue !== undefined && currentId) flag(currentId, flagValue);
     };
     window.addEventListener("keydown", onRate);
+    const isTyping = (event: KeyboardEvent) => ["INPUT", "SELECT", "TEXTAREA"].includes((event.target as HTMLElement).tagName);
+    const holdCompare = (event: KeyboardEvent) => {
+      if (event.key !== "\\" || event.repeat || isTyping(event)) return;
+      setCompare((split) => {
+        compareHeldRef.current = split;
+        return COMPARE_ALL;
+      });
+    };
+    const releaseCompare = (event: KeyboardEvent) => {
+      if (event.key !== "\\" || compareHeldRef.current === null) return;
+      setCompare(compareHeldRef.current);
+      compareHeldRef.current = null;
+    };
+    window.addEventListener("keydown", holdCompare);
+    window.addEventListener("keyup", releaseCompare);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keydown", onRate);
+      window.removeEventListener("keydown", holdCompare);
+      window.removeEventListener("keyup", releaseCompare);
     };
-  }, [stepHistory, currentId, rate]);
+  }, [stepHistory, currentId, rate, flag]);
+
+  useEffect(() => {
+    engineRef.current?.compare(compare);
+  }, [compare]);
 
   const quarter = adjustments.quarter ?? 0;
   const rotate = adjustments.rotate ?? 0;
@@ -558,6 +639,7 @@ export function App() {
     applyEdit({ ...adjustments, ...cropFields(shrinkToImage(next, rotate, imageFrame.width, imageFrame.height)) });
 
   const toggleCropEditing = () => {
+    setPickingWhite(false);
     setHealing(false);
     setLiquifying(false);
     setLocalTool(null);
@@ -588,6 +670,7 @@ export function App() {
 
   const toggleHealing = () => {
     if (cropEditing) setValue("cropEditing", 0);
+    setPickingWhite(false);
     setLiquifying(false);
     setLocalTool(null);
     setHealing((on) => !on);
@@ -595,6 +678,7 @@ export function App() {
 
   const toggleLiquify = () => {
     if (cropEditing) setValue("cropEditing", 0);
+    setPickingWhite(false);
     setHealing(false);
     setLocalTool(null);
     setLiquifying((on) => !on);
@@ -602,9 +686,157 @@ export function App() {
 
   const chooseLocalTool = (kind: LocalKind) => {
     if (cropEditing) setValue("cropEditing", 0);
+    setPickingWhite(false);
     setHealing(false);
     setLiquifying(false);
     setLocalTool((current) => (current === kind ? null : kind));
+  };
+
+  const togglePickingWhite = () => {
+    if (cropEditing) setValue("cropEditing", 0);
+    setHealing(false);
+    setLiquifying(false);
+    setLocalTool(null);
+    setToolHint("");
+    setPickingWhite((on) => !on);
+  };
+
+  const pickWhite = async (event: React.MouseEvent<HTMLElement>) => {
+    if (!pickingWhite) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const u = (event.clientX - bounds.left) / bounds.width;
+    const v = (event.clientY - bounds.top) / bounds.height;
+    try {
+      const balance = await engineRef.current!.whiteBalanceAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
+      if (!balance) {
+        setToolHint("这里太暗或已过曝，请点一处中性灰。");
+        return;
+      }
+      setToolHint("");
+      setPickingWhite(false);
+      applyEdit({ ...adjustments, ...balance }, true);
+    } catch (reason) {
+      setError((reason as Error).message);
+    }
+  };
+
+  const updateOutput = (patch: Partial<OutputSettings>) => {
+    const next = { ...output, ...patch };
+    setOutput(next);
+    saveOutput(next);
+  };
+
+  const updateWatermark = (patch: Partial<Watermark>) => updateOutput({ watermark: { ...output.watermark, ...patch } });
+
+  const chooseLogo = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, WATERMARK_LOGO_LONG_EDGE / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      updateWatermark({ logo: canvas.toDataURL("image/png") });
+    } catch {
+      setError("无法读取这张水印图片");
+    }
+  };
+
+  const moveCompare = (event: React.PointerEvent<HTMLElement>) => {
+    const stage = stageRef.current;
+    if (!compareDragRef.current || !stage) return;
+    const bounds = stage.getBoundingClientRect();
+    const box = fitBox((imageFrame.width * shownCrop.w) / (imageFrame.height * shownCrop.h), bounds.width, bounds.height);
+    setCompare(Math.min(0.99, Math.max(0.01, (event.clientX - bounds.left - box.left) / box.width)));
+  };
+
+  const flushDabs = () => {
+    if (dabTimerRef.current !== null) window.clearTimeout(dabTimerRef.current);
+    dabTimerRef.current = null;
+    const dabs = pendingDabsRef.current;
+    pendingDabsRef.current = [];
+    if (dabs.length > 0) void engineRef.current?.addHeals(dabs).catch((reason: Error) => setError(reason.message));
+  };
+
+  const stampAlong = (point: { x: number; y: number }) => {
+    const stamp = stampRef.current;
+    if (!stamp.offset || !stamp.source || !loaded) return;
+    const longEdge = Math.max(loaded.width, loaded.height);
+    const toLong = (dx: number, dy: number) => [(dx * loaded.width) / longEdge, (dy * loaded.height) / longEdge];
+    const previous = stamp.last ?? point;
+    const [travelX, travelY] = toLong(point.x - previous.x, point.y - previous.y);
+    const travel = Math.hypot(travelX, travelY);
+    const spacing = healRadius * STAMP_SPACING;
+    if (stamp.last && travel < spacing) return;
+    const steps = Math.max(1, Math.floor(travel / spacing));
+    const [sourceDx, sourceDy] = toLong(stamp.offset.x, stamp.offset.y);
+    const dabs: HealSpot[] = [];
+    for (let step = 1; step <= steps; step++) {
+      const at = stamp.last ? step / steps : 1;
+      dabs.push({ x: previous.x + (point.x - previous.x) * at, y: previous.y + (point.y - previous.y) * at, radius: healRadius, sourceDx, sourceDy, clone: true, group: stamp.group });
+    }
+    stamp.last = point;
+    stamp.source = { x: point.x + stamp.offset.x, y: point.y + stamp.offset.y };
+    setStampMarker(stamp.source);
+    setHeals((list) => [...list, ...dabs]);
+    pendingDabsRef.current.push(...dabs);
+    if (dabTimerRef.current === null) dabTimerRef.current = window.setTimeout(flushDabs, STAMP_FLUSH_MS);
+  };
+
+  const startStamp = (event: React.PointerEvent<HTMLElement>) => {
+    if (!healing || healMode !== "clone") return;
+    const point = pointerToSource(event);
+    if (!point) return;
+    const stamp = stampRef.current;
+    if (event.altKey) {
+      stamp.source = point;
+      stamp.offset = null;
+      setStampMarker(point);
+      setToolHint("");
+      return;
+    }
+    if (!stamp.source) {
+      setToolHint("先按住 Alt（Option）点击要取样的位置。");
+      return;
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    // The offset stays until a new sample point is set, so strokes line up.
+    stamp.offset ??= { x: stamp.source.x - point.x, y: stamp.source.y - point.y };
+    stamp.group = Date.now();
+    stamp.last = null;
+    stamp.drawing = true;
+    stampAlong(point);
+  };
+
+  const continueStamp = (event: React.PointerEvent<HTMLElement>) => {
+    if (!stampRef.current.drawing) return;
+    const point = pointerToSource(event);
+    if (point) stampAlong(point);
+  };
+
+  const finishStamp = () => {
+    const stamp = stampRef.current;
+    if (!stamp.drawing || !currentId) return;
+    stamp.drawing = false;
+    flushDabs();
+    setHeals((list) => {
+      saveHeals(currentId, list);
+      return list;
+    });
+    void refreshThumbnail(currentId).catch(() => {});
+  };
+
+  const addFullLocal = () => {
+    const layers = localsRef.current;
+    if (layers.length >= MAX_LOCAL_LAYERS) return;
+    const centre = { x: 0.5, y: 0.5 };
+    const index = layers.length;
+    commitLocals([...layers, { kind: "full", a: centre, b: centre, strokes: [], radius: localBrush, invert: false }]);
+    setActiveLocal(index);
+    setLocalTool(null);
+    applyEdit({ ...adjustments, [`local${index}Exposure`]: 0.5, [`local${index}RangeMode`]: 1 }, true);
   };
 
   const commitLocals = (next: LocalLayer[]) => {
@@ -934,7 +1166,7 @@ export function App() {
   };
 
   const healAtPointer = async (event: React.MouseEvent<HTMLElement>) => {
-    if (!healing || !currentId) return;
+    if (!healing || healMode !== "spot" || !currentId) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const u = (event.clientX - bounds.left) / bounds.width;
     const v = (event.clientY - bounds.top) / bounds.height;
@@ -950,6 +1182,12 @@ export function App() {
     } catch (reason) {
       setError((reason as Error).message);
     }
+  };
+
+  /** Removes the last spot, or the whole of the last stamp drag. */
+  const undoHeal = () => {
+    const group = heals[heals.length - 1]?.group;
+    void replaceHeals(group === undefined ? heals.slice(0, -1) : heals.filter((spot) => spot.group !== group));
   };
 
   const replaceHeals = async (next: HealSpot[]) => {
@@ -1001,11 +1239,12 @@ export function App() {
     setBusy("导出中…");
     setExported(null);
     try {
-      const result = await engineRef.current!.exportJpeg(JPEG_QUALITY);
-      const blob = new Blob([result.jpeg], { type: "image/jpeg" });
+      const result = await engineRef.current!.exportImage(output);
+      const details = FORMAT_DETAILS[output.format];
+      const blob = new Blob([result.bytes], { type: details.mime });
       setExported({
         url: URL.createObjectURL(blob),
-        name: exportName(current.file.name, new Set()),
+        name: exportName(current.file.name, new Set(), output.template, 1, details.extension),
         ms: result.ms,
         sizeMB: blob.size / 1048576,
       });
@@ -1094,8 +1333,8 @@ export function App() {
         }
         if (needsSubject(edit)) await engine.detectSubject(result.proxyWidth, result.proxyHeight);
         if (needsSkin(edit)) await engine.prepareSkin(result.proxyWidth, result.proxyHeight);
-        const { jpeg, heapMB: heap } = await engine.exportJpeg(JPEG_QUALITY);
-        await target.write(exportName(photo.file.name, used), new Uint8Array(jpeg));
+        const { bytes, heapMB: heap } = await engine.exportImage(output);
+        await target.write(exportName(photo.file.name, used, output.template, index + 1, FORMAT_DETAILS[output.format].extension), new Uint8Array(bytes));
         setHeapMB(heap);
         await refreshThumbnail(photo.id);
         setBatch({ done: index + 1, total: shownPhotos.length, ms: performance.now() - started });
@@ -1119,22 +1358,29 @@ export function App() {
         <main
           className="stage"
           ref={stageRef}
-          style={healing || liquifying ? { cursor: "none" } : localTool ? { cursor: "crosshair" } : undefined}
+          style={healing || liquifying ? { cursor: "none" } : localTool || pickingWhite ? { cursor: "crosshair" } : undefined}
           onPointerDown={(event) => {
             startLiquify(event);
             startLocal(event);
+            startStamp(event);
           }}
           onPointerUp={() => {
             void finishLiquify();
             finishLocal();
+            finishStamp();
           }}
           onPointerCancel={() => {
             void finishLiquify();
             finishLocal();
+            finishStamp();
           }}
-          onClick={(event) => void healAtPointer(event)}
+          onClick={(event) => {
+            void healAtPointer(event);
+            void pickWhite(event);
+          }}
           onPointerMove={(event) => {
             continueLocal(event);
+            continueStamp(event);
             if (!healing && !liquifying) return;
             const bounds = event.currentTarget.getBoundingClientRect();
             setPointer({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
@@ -1164,7 +1410,7 @@ export function App() {
           <canvas ref={canvasRef} style={{ visibility: loaded ? undefined : "hidden" }} />
           {!loaded && !busy && <p className="hint">{ready ? "拖入一组 RAW、JPEG、PNG 或 HEIC" : "正在初始化 WebGPU…"}</p>}
           {busy && <p className="hint">{busy}</p>}
-          {(adjustments.localOverlay ?? 0) > 0 && loaded && locals[activeLocal] && locals[activeLocal].kind !== "brush" &&
+          {(adjustments.localOverlay ?? 0) > 0 && loaded && locals[activeLocal] && locals[activeLocal].kind !== "brush" && locals[activeLocal].kind !== "full" &&
             (["a", "b"] as const).map((which) => {
               const handle = locals[activeLocal][which];
               const corrected = lens ? sourceToLens(lens, handle.x, handle.y) : handle;
@@ -1192,6 +1438,37 @@ export function App() {
               onChange={updateCrop}
             />
           )}
+          {loaded && output.watermark.enabled && <WatermarkPreview mark={output.watermark} box={displayBox} />}
+          {loaded && compare > 0 && compare <= 1 && (
+            <div
+              className="compare-line"
+              data-testid="compare-line"
+              style={{ left: displayBox.left + compare * displayBox.width, top: displayBox.top, height: displayBox.height }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                compareDragRef.current = true;
+              }}
+              onPointerMove={moveCompare}
+              onPointerUp={() => { compareDragRef.current = false; }}
+              onPointerCancel={() => { compareDragRef.current = false; }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <span className="compare-label before">修图前</span>
+              <span className="compare-label after">修图后</span>
+            </div>
+          )}
+          {healing && healMode === "clone" && stampMarker && loaded && (() => {
+            const corrected = lens ? sourceToLens(lens, stampMarker.x, stampMarker.y) : stampMarker;
+            const point = sourceToOutput(corrected.x, corrected.y, adjustments, loaded.width, loaded.height);
+            return (
+              <div
+                className="heal-cursor stamp-source"
+                data-testid="stamp-source"
+                style={{ left: displayBox.left + point.x * displayBox.width, top: displayBox.top + point.y * displayBox.height, width: brushDiameter, height: brushDiameter }}
+              />
+            );
+          })()}
           {(healing || liquifying) && pointer && loaded && (
             <div
               className="heal-cursor"
@@ -1210,12 +1487,14 @@ export function App() {
             {shownPhotos.map((photo) => (
               <button
                 key={photo.id}
-                className={`thumb ${photo.id === currentId ? "current" : ""}`}
+                className={`thumb ${photo.id === currentId ? "current" : ""} ${flags[photo.id] === FLAG_REJECT ? "rejected" : ""}`}
                 disabled={locked}
                 title={photo.file.name}
                 onClick={() => void selectPhoto(photo)}
               >
                 {photo.thumbnail ? <img src={photo.thumbnail} alt={photo.file.name} /> : <span>{photo.file.name}</span>}
+                {flags[photo.id] === FLAG_PICK && <i className="thumb-flag pick" aria-label="已选中" />}
+                {flags[photo.id] === FLAG_REJECT && <i className="thumb-flag reject" aria-label="已淘汰" />}
               </button>
             ))}
           </nav>
@@ -1300,6 +1579,16 @@ export function App() {
                 ))}
               </select>
             </div>
+            <div className="row">
+              <button className={`button ${current && flags[current.id] === FLAG_PICK ? "" : "secondary"}`} aria-label="选中" disabled={!current || locked} onClick={() => current && flag(current.id, flags[current.id] === FLAG_PICK ? 0 : FLAG_PICK)}>选中</button>
+              <button className={`button ${current && flags[current.id] === FLAG_REJECT ? "" : "secondary"}`} aria-label="淘汰" disabled={!current || locked} onClick={() => current && flag(current.id, flags[current.id] === FLAG_REJECT ? 0 : FLAG_REJECT)}>淘汰</button>
+              <select aria-label="旗标筛选" value={flagFilter} disabled={locked} onChange={(event) => setFlagFilter(Number(event.target.value))}>
+                <option value={0}>全部旗标</option>
+                <option value={FLAG_PICK}>只看选中</option>
+                <option value={2}>隐藏淘汰</option>
+                <option value={FLAG_REJECT}>只看淘汰</option>
+              </select>
+            </div>
           </section>
         )}
 
@@ -1307,11 +1596,20 @@ export function App() {
           <button className="button secondary" disabled={!history?.past.length || locked} onClick={() => stepHistory("undo")}>撤销</button>
           <button className="button secondary" disabled={!history?.future.length || locked} onClick={() => stepHistory("redo")}>重做</button>
           <button className="button secondary" disabled={!loaded || locked} onClick={reset}>重置</button>
+          <button className={`button ${compare > 0 ? "" : "secondary"}`} title="按住 \\ 键可查看整张修图前" disabled={!loaded || locked} onClick={() => setCompare((split) => (split > 0 ? 0 : 0.5))}>对比</button>
         </section>
+        {toolHint && <p className="progress" data-testid="tool-hint">{toolHint}</p>}
 
         {GROUPS.map((group) => (
           <section key={group.title}>
             <h2>{group.title}</h2>
+            {group.title === "白平衡" && (
+              <div className="row">
+                <button className={`button ${pickingWhite ? "" : "secondary"}`} disabled={!loaded || locked} onClick={togglePickingWhite}>
+                  {pickingWhite ? "点击画面中性灰处…" : "吸管"}
+                </button>
+              </div>
+            )}
             {group.sliders.map((slider) => {
               const value = adjustments[slider.key] ?? 0;
               return (
@@ -1535,9 +1833,15 @@ export function App() {
           <h2>污点修复</h2>
           <div className="row">
             <button className={`button ${healing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleHealing}>
-              {healing ? "退出修复" : "点击修复"}
+              {healing ? "退出修复" : "开始修复"}
             </button>
-            <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals(heals.slice(0, -1))}>撤销一点</button>
+            <select aria-label="修复方式" value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone")}>
+              <option value="spot">污点修复</option>
+              <option value="clone">仿制图章</option>
+            </select>
+          </div>
+          <div className="row">
+            <button className="button secondary" disabled={heals.length === 0 || locked} onClick={undoHeal}>撤销一步</button>
             <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals([])}>清除</button>
           </div>
           <label className="slider">
@@ -1554,6 +1858,7 @@ export function App() {
               onChange={(event) => setHealRadius(Number(event.target.value))}
             />
           </label>
+          {healMode === "clone" && <p className="progress">按住 Alt（Option）点击取样，再拖动涂抹。</p>}
           <p className="progress" data-stat="heals">已修复 {heals.length} 处</p>
         </section>
 
@@ -1563,6 +1868,7 @@ export function App() {
             {([["linear", "线性"], ["radial", "径向"], ["brush", "画笔"]] as [LocalKind, string][]).map(([kind, label]) => (
               <button key={kind} className={`button ${localTool === kind ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => chooseLocalTool(kind)}>{label}</button>
             ))}
+            <button className="button secondary" disabled={!loaded || locked || locals.length >= MAX_LOCAL_LAYERS} onClick={addFullLocal}>全图</button>
           </div>
           {localTool === "brush" && (
             <label className="slider">
@@ -1576,7 +1882,7 @@ export function App() {
               <div className="row" role="group" aria-label="局部图层">
                 {locals.map((layer, index) => (
                   <button key={index} className={`button ${index === activeLocal ? "" : "secondary"}`} disabled={locked} onClick={() => setActiveLocal(index)}>
-                    {layer.kind === "linear" ? "线" : layer.kind === "radial" ? "圆" : "笔"}{index + 1}
+                    {{ linear: "线", radial: "圆", brush: "笔", full: "全" }[layer.kind]}{index + 1}
                   </button>
                 ))}
               </div>
@@ -1588,6 +1894,36 @@ export function App() {
                     <span>{label}</span>
                     <output>{value.toFixed(2)}</output>
                     <input aria-label={`局部${label}`} type="range" min={min} max={max} step={0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} onDoubleClick={() => setValue(key, 0)} />
+                  </label>
+                );
+              })}
+              <label className="field">
+                <span>范围</span>
+                <select aria-label="局部范围" value={adjustments[`local${activeLocal}RangeMode`] ?? 0} disabled={locked} onChange={(event) => setValue(`local${activeLocal}RangeMode`, Number(event.target.value))}>
+                  <option value={0}>无</option>
+                  <option value={1}>亮度范围</option>
+                  <option value={2}>色彩范围</option>
+                </select>
+              </label>
+              {(adjustments[`local${activeLocal}RangeMode`] === 1
+                ? [
+                    { suffix: "RangeLow", label: "最暗", min: 0, max: 1, fallback: 0 },
+                    { suffix: "RangeHigh", label: "最亮", min: 0.02, max: 1, fallback: 1 },
+                  ]
+                : adjustments[`local${activeLocal}RangeMode`] === 2
+                  ? [
+                      { suffix: "RangeHue", label: "色相", min: 0, max: 360, fallback: 0 },
+                      { suffix: "RangeWidth", label: "色相宽度", min: 5, max: 90, fallback: 30 },
+                    ]
+                  : []
+              ).map(({ suffix, label, min, max, fallback }) => {
+                const key = `local${activeLocal}${suffix}`;
+                const value = adjustments[key] ?? fallback;
+                return (
+                  <label className={`slider ${suffix === "RangeHue" ? "hue-slider" : ""}`} key={suffix}>
+                    <span>{label}</span>
+                    <output>{value.toFixed(max > 1 ? 0 : 2)}</output>
+                    <input aria-label={`局部${label}`} type="range" min={min} max={max} step={max > 1 ? 1 : 0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} />
                   </label>
                 );
               })}
@@ -1714,6 +2050,76 @@ export function App() {
           {batchUrl && <a className="download" data-stat="batch-zip" href={batchUrl} download="openpixels-export.zip">下载 ZIP</a>}
         </section>
 
+        <section>
+          <h2>导出设置</h2>
+          <div className="row">
+            <select aria-label="导出格式" value={output.format} disabled={locked} onChange={(event) => updateOutput({ format: event.target.value as OutputFormat })}>
+              {(Object.keys(FORMAT_DETAILS) as OutputFormat[]).map((format) => (
+                <option key={format} value={format}>{FORMAT_DETAILS[format].label}</option>
+              ))}
+            </select>
+            <select aria-label="导出尺寸" value={output.longEdge} disabled={locked} onChange={(event) => updateOutput({ longEdge: Number(event.target.value) })}>
+              {LONG_EDGE_CHOICES.map((edge) => (
+                <option key={edge} value={edge}>{edge === 0 ? "原尺寸" : `长边 ${edge}`}</option>
+              ))}
+            </select>
+          </div>
+          {output.format === "jpeg" && (
+            <label className="slider">
+              <span>质量</span>
+              <output>{output.quality}</output>
+              <input aria-label="导出质量" type="range" min={40} max={100} step={1} value={output.quality} disabled={locked} onChange={(event) => updateOutput({ quality: Number(event.target.value) })} />
+            </label>
+          )}
+          <div className="row">
+            <input aria-label="文件名规则" title="可用 {name}（原文件名）、{n}（序号）、{date}（日期）" value={output.template} disabled={locked} onChange={(event) => updateOutput({ template: event.target.value })} />
+          </div>
+          <p className="progress">文件名可用 {"{name}"}、{"{n}"}、{"{date}"}</p>
+          <label className="check">
+            <input type="checkbox" aria-label="添加水印" checked={output.watermark.enabled} disabled={locked} onChange={(event) => updateWatermark({ enabled: event.target.checked })} />
+            添加水印
+          </label>
+          {output.watermark.enabled && (
+            <>
+              <div className="row">
+                <input aria-label="水印文字" placeholder="水印文字" value={output.watermark.text} disabled={locked} onChange={(event) => updateWatermark({ text: event.target.value })} />
+              </div>
+              <div className="row">
+                <label className={`button secondary ${locked ? "disabled" : ""}`}>
+                  {output.watermark.logo ? "更换 Logo" : "选择 Logo"}
+                  <input
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    aria-label="水印图片"
+                    disabled={locked}
+                    onChange={(event) => {
+                      void chooseLogo(event.target.files?.[0]);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                {output.watermark.logo && <button className="button secondary" disabled={locked} onClick={() => updateWatermark({ logo: null })}>移除</button>}
+                <select aria-label="水印位置" value={output.watermark.position} disabled={locked} onChange={(event) => updateWatermark({ position: event.target.value as WatermarkPosition })}>
+                  {WATERMARK_POSITIONS.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              </div>
+              <label className="slider">
+                <span>水印大小</span>
+                <output>{(output.watermark.size * 100).toFixed(1)}</output>
+                <input aria-label="水印大小" type="range" min={0.01} max={0.12} step={0.001} value={output.watermark.size} disabled={locked} onChange={(event) => updateWatermark({ size: Number(event.target.value) })} />
+              </label>
+              <label className="slider">
+                <span>水印不透明度</span>
+                <output>{output.watermark.opacity.toFixed(2)}</output>
+                <input aria-label="水印不透明度" type="range" min={0.1} max={1} step={0.01} value={output.watermark.opacity} disabled={locked} onChange={(event) => updateWatermark({ opacity: Number(event.target.value) })} />
+              </label>
+            </>
+          )}
+        </section>
+
         <section className="actions">
           <button className="button" disabled={!loaded || !!busy || locked} onClick={() => void startExport()}>导出当前</button>
         </section>
@@ -1739,7 +2145,7 @@ export function App() {
             {exported && (
               <>
                 <dt>导出</dt><dd data-stat="export">{exported.ms.toFixed(0)} ms</dd>
-                <dt>JPEG</dt><dd>{exported.sizeMB.toFixed(1)} MB</dd>
+                <dt>文件</dt><dd data-stat="export-size">{exported.sizeMB.toFixed(1)} MB</dd>
               </>
             )}
             {maskStats && (

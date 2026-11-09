@@ -1,5 +1,6 @@
 import { buildSkinMask } from "./face";
 import type { Lut } from "./lut";
+import type { OutputSettings } from "./output";
 import { MODEL, modelInputSize } from "./model";
 import type {
   Adjustments,
@@ -102,6 +103,10 @@ export class EngineClient {
     return this.call<void>({ type: "setHeals", heals });
   }
 
+  addHeals(heals: HealSpot[]) {
+    return this.call<void>({ type: "addHeals", heals });
+  }
+
   adjust(adjustments: Adjustments) {
     this.worker.postMessage({ type: "adjust", adjustments } satisfies ToWorker);
   }
@@ -110,8 +115,18 @@ export class EngineClient {
     this.worker.postMessage({ type: "resize", width, height } satisfies ToWorker);
   }
 
-  exportJpeg(quality: number) {
-    return this.call<ExportResult>({ type: "export", quality });
+  exportImage(settings: OutputSettings) {
+    return this.call<ExportResult>({ type: "export", settings });
+  }
+
+  /** Shows the unedited image on this fraction of the frame, from the left. 0 is off. */
+  compare(split: number) {
+    this.worker.postMessage({ type: "compare", split } satisfies ToWorker);
+  }
+
+  /** Finds the white balance making a stage position neutral. Null if it cannot. */
+  whiteBalanceAt(x: number, y: number, stageWidth: number, stageHeight: number) {
+    return this.call<{ temperature: number; tint: number } | null>({ type: "whiteBalanceAt", x, y, stageWidth, stageHeight });
   }
 
   /** `framed` applies the crop and rotation; analysis needs the unframed image. */

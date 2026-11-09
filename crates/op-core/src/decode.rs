@@ -371,6 +371,15 @@ fn decode_raster(bytes: &[u8]) -> Result<LinearImage, DecodeError> {
     let mut decoded = DynamicImage::from_decoder(decoder)?;
     decoded.apply_orientation(orientation);
 
+    // 16-bit files keep their precision, which matters once tones are pushed around.
+    if decoded.color().bytes_per_pixel() / decoded.color().channel_count() == 2 {
+        let rgb = decoded.into_rgb16();
+        let (width, height) = rgb.dimensions();
+        let table = srgb16_to_linear_table();
+        let pixels = rgb.as_raw().iter().map(|&v| table[v as usize]).collect();
+        return Ok(LinearImage::new(width, height, pixels));
+    }
+
     let rgb = decoded.into_rgb8();
     let (width, height) = rgb.dimensions();
     let table = srgb_to_linear_table();
@@ -385,6 +394,17 @@ fn srgb_to_linear_table() -> [u16; 256] {
         let linear = if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
         f16::from_f32(linear).to_bits()
     })
+}
+
+/// 16-bit sRGB code value to linear half-float bit pattern.
+fn srgb16_to_linear_table() -> Vec<u16> {
+    (0..=u16::MAX)
+        .map(|code| {
+            let c = f32::from(code) / 65535.0;
+            let linear = if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+            f16::from_f32(linear).to_bits()
+        })
+        .collect()
 }
 
 /// Applies the EXIF orientation by mapping each output pixel back to its source.
@@ -418,6 +438,20 @@ fn orient(image: LinearImage, orientation: Orientation) -> LinearImage {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sixteen_bit_files_keep_values_between_eight_bit_steps() {
+        // One 8-bit step is 257 here, so these two would be the same in 8 bits.
+        let raw: Vec<u16> = [30000u16, 30000, 30000, 30100, 30100, 30100].to_vec();
+        let image = image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(2, 1, raw).unwrap();
+        for format in [image::ImageFormat::Png, image::ImageFormat::Tiff] {
+            let mut file = Cursor::new(Vec::new());
+            image.write_to(&mut file, format).unwrap();
+            let decoded = open(file.get_ref()).unwrap().working;
+            assert_ne!(decoded.pixels[0], decoded.pixels[3], "{format:?}");
+        }
+    }
+
     use super::*;
 
     /// 2x1 image whose red channel holds the source index of each pixel.

@@ -11,6 +11,10 @@ const WORKGROUP_SIZE: u32 = 16;
 /// Source pixels each export tile can see beyond its own area, for sharpening and denoising.
 const TILE_MARGIN: u32 = 5;
 const BLURRED_LUMA_LONG_EDGE: u32 = 128;
+const DETAIL_LUMA_LONG_EDGE: u32 = 512;
+/// The detail map is at least this much smaller than the image, or it would hold no less detail.
+const DETAIL_LUMA_REDUCTION: u32 = 4;
+const HAZE_LONG_EDGE: u32 = 256;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GpuError {
@@ -40,6 +44,7 @@ struct Region {
     lens_aspect: [f32; 2],
     _padding: [f32; 2],
     camera: [[f32; 4]; 3],
+    airlight: [f32; 4],
 }
 
 #[repr(C)]
@@ -51,9 +56,10 @@ struct BlitParams {
     uv_axis_t: [f32; 2],
     lens_aspect: [f32; 2],
     lens_scale: f32,
-    _padding: f32,
+    compare: f32,
     distortion: [f32; 4],
     chroma: [f32; 4],
+    perspective: [f32; 4],
 }
 
 struct Preview {
@@ -62,6 +68,8 @@ struct Preview {
     source: wgpu::Texture,
     source_view: wgpu::TextureView,
     output_view: wgpu::TextureView,
+    before_view: wgpu::TextureView,
+    before_ready: bool,
     warp: wgpu::Texture,
     develop: wgpu::BindGroup,
     blit: wgpu::BindGroup,
@@ -82,6 +90,9 @@ pub struct Renderer {
     blit_buffer: wgpu::Buffer,
     mask_view: wgpu::TextureView,
     blurred_luma_view: wgpu::TextureView,
+    detail_luma_view: wgpu::TextureView,
+    haze_view: wgpu::TextureView,
+    airlight: [f32; 3],
     skin_smooth_view: wgpu::TextureView,
     skin_blemish_view: wgpu::TextureView,
     local_mask_view: wgpu::TextureView,
@@ -138,6 +149,8 @@ impl Renderer {
                     },
                     count: None,
                 },
+                texture_entry(12, wgpu::ShaderStages::COMPUTE, true),
+                texture_entry(13, wgpu::ShaderStages::COMPUTE, true),
             ],
         });
         let develop_pipeline_layout =
@@ -167,6 +180,7 @@ impl Renderer {
                 },
                 uniform_entry(2, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 texture_entry(3, wgpu::ShaderStages::FRAGMENT, true),
+                texture_entry(4, wgpu::ShaderStages::FRAGMENT, true),
             ],
         });
         let blit_pipeline_layout =
@@ -211,6 +225,8 @@ impl Renderer {
         let blit_buffer = uniform_buffer(&device, "blit", size_of::<BlitParams>());
         let mask_view = create_mask_view(&device, &queue, 1, 1, &[255]);
         let blurred_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
+        let detail_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
+        let haze_view = create_luma_view(&device, &queue, 1, 1, &[0]);
         let skin_smooth_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
         let skin_blemish_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
         let local_mask_view = create_local_mask_view(&device, &queue, 1, 1, &[0; 4]);
@@ -240,6 +256,9 @@ impl Renderer {
             blit_buffer,
             mask_view,
             blurred_luma_view,
+            detail_luma_view,
+            haze_view,
+            airlight: [1.0; 3],
             skin_smooth_view,
             skin_blemish_view,
             local_mask_view,
@@ -383,10 +402,18 @@ impl Renderer {
         self.local_mask_view = create_local_mask_view(&self.device, &self.queue, 1, 1, &[0; 4]);
         let (luma_width, luma_height, luma) = proxy.blurred_luma(BLURRED_LUMA_LONG_EDGE);
         self.blurred_luma_view = create_luma_view(&self.device, &self.queue, luma_width, luma_height, &luma);
+        let detail_long_edge = (proxy.width.max(proxy.height) / DETAIL_LUMA_REDUCTION).clamp(1, DETAIL_LUMA_LONG_EDGE);
+        let (detail_width, detail_height, detail) = proxy.blurred_luma(detail_long_edge);
+        self.detail_luma_view = create_luma_view(&self.device, &self.queue, detail_width, detail_height, &detail);
+        let (haze_width, haze_height, haze, airlight) = proxy.haze_map(HAZE_LONG_EDGE);
+        self.haze_view = create_luma_view(&self.device, &self.queue, haze_width, haze_height, &haze);
+        self.airlight = airlight;
         let (width, height) = (proxy.width, proxy.height);
         let source = self.create_source_texture(width, height);
         self.upload_source(&source, &proxy.rgba_region(0, 0, width, height), width, height);
         let output = self.create_output_texture(width, height);
+        let before = self.create_output_texture(width, height);
+        let before_view = before.create_view(&Default::default());
 
         let source_view = source.create_view(&Default::default());
         let output_view = output.create_view(&Default::default());
@@ -424,9 +451,39 @@ impl Renderer {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&warp_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&before_view),
+                },
             ],
         });
-        self.preview = Some(Preview { width, height, source, source_view, output_view, warp, develop, blit });
+        self.preview =
+            Some(Preview { width, height, source, source_view, output_view, before_view, before_ready: false, warp, develop, blit });
+    }
+
+    /// Whether the comparison image has been developed for the current proxy.
+    pub fn comparison_ready(&self) -> bool {
+        self.preview.as_ref().is_some_and(|preview| preview.before_ready)
+    }
+
+    /// Develops the comparison image from the untouched proxy. `current` is what the
+    /// source texture should go back to holding, when that is not the same image.
+    pub fn prepare_comparison(&mut self, original: &LinearImage, current: Option<&LinearImage>) {
+        let Some(preview) = &self.preview else { return };
+        let (width, height) = (preview.width, preview.height);
+        let (w, h) = (width as f32, height as f32);
+        if current.is_some() {
+            self.upload_source(&preview.source, &original.rgba_region(0, 0, width, height), width, height);
+        }
+        self.write_params(&Adjustments::default(), [w, h], [0.0; 2], [w, h], [0.0; 2], [w, h]);
+        let bind_group = self.develop_bind_group(&preview.source_view, &preview.before_view);
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.dispatch(&mut encoder, &bind_group, width, height);
+        self.queue.submit([encoder.finish()]);
+        if let Some(image) = current {
+            self.upload_source(&preview.source, &image.rgba_region(0, 0, width, height), width, height);
+        }
+        self.preview.as_mut().expect("checked above").before_ready = true;
     }
 
     /// Develops the proxy with `adjustments` and draws it, letterboxed, into `target`.
@@ -436,6 +493,7 @@ impl Renderer {
         geometry: &Geometry,
         target: &wgpu::TextureView,
         target_size: (u32, u32),
+        compare: f32,
     ) -> Result<(), GpuError> {
         let preview = self.preview.as_ref().ok_or(GpuError::NoImage)?;
         let (width, height) = (preview.width as f32, preview.height as f32);
@@ -450,9 +508,10 @@ impl Renderer {
             uv_axis_t: map.axis_t,
             lens_aspect: lens.aspect,
             lens_scale: lens.scale,
-            _padding: 0.0,
+            compare,
             distortion: lens.distortion,
             chroma: lens.chroma,
+            perspective: [lens.perspective[0], lens.perspective[1], 0.0, 0.0],
         };
         self.queue.write_buffer(&self.blit_buffer, 0, bytes_of(&blit));
 
@@ -682,6 +741,14 @@ impl Renderer {
                     binding: 11,
                     resource: wgpu::BindingResource::TextureView(&self.look_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView(&self.detail_luma_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&self.haze_view),
+                },
             ],
         })
     }
@@ -709,12 +776,13 @@ impl Renderer {
             lens_aspect: lens.aspect,
             _padding: [0.0; 2],
             camera: self.camera_rows(adjustments.camera_profile),
+            airlight: [self.airlight[0], self.airlight[1], self.airlight[2], 0.0],
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
     }
 
     /// The camera matrix blended from the identity by `strength`.
-    fn camera_rows(&self, strength: f32) -> [[f32; 4]; 3] {
+    pub fn camera_rows(&self, strength: f32) -> [[f32; 4]; 3] {
         std::array::from_fn(|row| {
             std::array::from_fn(|col| {
                 let identity = f32::from(u8::from(row == col));
@@ -1395,6 +1463,101 @@ mod tests {
         assert_eq!((full[0], full[1]), (255, 0));
         let half = export(&renderer, &image, &Adjustments { lut_amount: 0.5, ..Default::default() }, 64);
         assert!(half[0] > 118 && half[0] < 255 && half[1] < 118, "{half:?}");
+    }
+
+    /// Bright blocks on a darker field, with fine stripes on top.
+    fn detailed(width: u32, height: u32) -> LinearImage {
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let block = if (x / 40 + y / 40) % 2 == 0 { 0.4 } else { 0.25 };
+                let stripe = if (x / 3) % 2 == 0 { 0.03 } else { -0.03 };
+                pixels.extend([f16::from_f32(block + stripe).to_bits(); 3]);
+            }
+        }
+        LinearImage::new(width, height, pixels)
+    }
+
+    #[test]
+    fn texture_raises_fine_detail_and_negative_texture_lowers_it() {
+        let mut renderer = renderer();
+        let image = detailed(256, 256);
+        renderer.set_preview(&image);
+        let plain = export(&renderer, &image, &Adjustments::default(), 512);
+        let up = export(&renderer, &image, &Adjustments { texture: 1.0, ..Default::default() }, 512);
+        let down = export(&renderer, &image, &Adjustments { texture: -1.0, ..Default::default() }, 512);
+        assert!(spread(&up) > spread(&plain), "{} vs {}", spread(&up), spread(&plain));
+        assert!(spread(&down) < spread(&plain), "{} vs {}", spread(&down), spread(&plain));
+    }
+
+    #[test]
+    fn a_hazy_image_gains_contrast_from_dehazing() {
+        let mut renderer = renderer();
+        // A scene seen through bright haze: everything is lifted towards 0.6.
+        let mut pixels = Vec::new();
+        for y in 0..128u32 {
+            for x in 0..128u32 {
+                let scene = if (x / 16 + y / 16) % 2 == 0 { 0.05 } else { 0.4 };
+                pixels.extend([f16::from_f32(scene * 0.4 + 0.6 * 0.6).to_bits(); 3]);
+            }
+        }
+        let image = LinearImage::new(128, 128, pixels);
+        renderer.set_preview(&image);
+        let plain = export(&renderer, &image, &Adjustments::default(), 256);
+        let clear = export(&renderer, &image, &Adjustments { dehaze: 0.8, ..Default::default() }, 256);
+        let hazier = export(&renderer, &image, &Adjustments { dehaze: -0.8, ..Default::default() }, 256);
+        assert!(spread(&clear) > spread(&plain) * 1.3, "{} vs {}", spread(&clear), spread(&plain));
+        assert!(spread(&hazier) < spread(&plain), "{} vs {}", spread(&hazier), spread(&plain));
+    }
+
+    #[test]
+    fn grain_adds_variation_to_a_flat_image() {
+        let renderer = renderer();
+        let image = flat_gray(2048, 64);
+        let plain = export(&renderer, &image, &Adjustments::default(), 2048);
+        let grainy = export(&renderer, &image, &Adjustments { grain: 1.0, ..Default::default() }, 2048);
+        assert!(plain.iter().all(|&value| value == plain[0]));
+        // A part of it: `spread` sums in single precision, which drifts over a long image.
+        assert!(spread(&grainy[..3 * 256 * 64]) > 1.5, "{}", spread(&grainy[..3 * 256 * 64]));
+    }
+
+    #[test]
+    fn tiles_stay_identical_with_texture_dehaze_and_grain() {
+        let mut renderer = renderer();
+        let image = detailed(300, 170);
+        renderer.set_preview(&image);
+        let adj = Adjustments { texture: 0.7, dehaze: 0.5, grain: 0.6, grain_size: 0.5, ..Default::default() };
+        assert_eq!(export(&renderer, &image, &adj, 64), export(&renderer, &image, &adj, 512));
+    }
+
+    #[test]
+    fn a_luminance_range_limits_a_layer_to_the_bright_pixels() {
+        let mut renderer = renderer();
+        renderer.set_local_mask(1, 1, &[255, 0, 0, 0]);
+        let levels = [0.02f32, 0.02, 0.02, 0.7, 0.7, 0.7];
+        let image = LinearImage::new(2, 1, levels.map(|v| f16::from_f32(v).to_bits()).to_vec());
+        let mut adj = Adjustments::default();
+        adj.local[0][0] = -1.0;
+        adj.local_range[0] = [0.5, 1.0, 0.0, 0.0];
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let out = export(&renderer, &image, &adj, 64);
+        assert_eq!(out[0], plain[0], "dark pixel is outside the range");
+        assert!(out[3] < plain[3] - 20, "bright pixel {} -> {}", plain[3], out[3]);
+    }
+
+    #[test]
+    fn a_colour_range_limits_a_layer_to_its_hue() {
+        let mut renderer = renderer();
+        renderer.set_local_mask(1, 1, &[255, 0, 0, 0]);
+        let values = [0.5f32, 0.05, 0.05, 0.05, 0.05, 0.5];
+        let image = LinearImage::new(2, 1, values.map(|v| f16::from_f32(v).to_bits()).to_vec());
+        let mut adj = Adjustments::default();
+        adj.local[0][0] = 1.0;
+        adj.local_range[0] = [0.0, 1.0, 0.0, 30.0];
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let out = export(&renderer, &image, &adj, 64);
+        assert!(out[0] > plain[0] + 20, "red {} -> {}", plain[0], out[0]);
+        assert_eq!(&out[3..6], &plain[3..6], "blue is outside the hue range");
     }
 
     #[test]

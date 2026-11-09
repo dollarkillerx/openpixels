@@ -1,4 +1,5 @@
 import type { LensProfile } from "./lens";
+import type { OutputSettings } from "./output";
 
 export type Adjustments = Record<string, number>;
 
@@ -9,6 +10,10 @@ export interface HealSpot {
   radius: number;
   sourceDx: number;
   sourceDy: number;
+  /** Copies the source exactly, as the clone stamp does. */
+  clone?: boolean;
+  /** Spots of one stamp drag, which are undone together. */
+  group?: number;
 }
 
 /** A liquify brush step. See `WarpStroke` in op-core for the units. */
@@ -38,7 +43,7 @@ export interface LoadResult {
 }
 
 export interface ExportResult {
-  jpeg: ArrayBuffer;
+  bytes: ArrayBuffer;
   ms: number;
   heapMB: number;
 }
@@ -67,10 +72,12 @@ export type DevelopTileReply = { index: number; rgb: ArrayBuffer } | { index: nu
 export type EngineRequest =
   | { type: "init"; canvas: OffscreenCanvas }
   | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[]; warps: WarpStroke[] }
-  | { type: "export"; quality: number }
+  | { type: "export"; settings: OutputSettings }
   | { type: "thumbnail"; maxLongEdge: number; framed: boolean }
   | { type: "healAt"; x: number; y: number; stageWidth: number; stageHeight: number; radius: number }
   | { type: "setHeals"; heals: HealSpot[] }
+  | { type: "addHeals"; heals: HealSpot[] }
+  | { type: "whiteBalanceAt"; x: number; y: number; stageWidth: number; stageHeight: number }
   | { type: "setWarps"; strokes: WarpStroke[] }
   | {
       type: "liquify";
@@ -92,7 +99,8 @@ export type EngineRequest =
 
 export type EngineCommand =
   | { type: "adjust"; adjustments: Adjustments }
-  | { type: "resize"; width: number; height: number };
+  | { type: "resize"; width: number; height: number }
+  | { type: "compare"; split: number };
 
 export type ToWorker = (EngineRequest & { id: number }) | EngineCommand;
 

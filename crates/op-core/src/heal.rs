@@ -26,6 +26,9 @@ pub struct HealSpot {
     /// Offset to the source patch, as a fraction of the long edge.
     pub source_dx: f32,
     pub source_dy: f32,
+    /// Copies the source exactly instead of matching it to its new surroundings.
+    #[serde(default)]
+    pub clone: bool,
 }
 
 fn pixel(image: &LinearImage, x: isize, y: isize) -> [f32; 3] {
@@ -96,7 +99,7 @@ pub fn find_heal_source(image: &LinearImage, x: f32, y: f32, radius: f32) -> Opt
     }
 
     let (_, dx, dy) = best?;
-    Some(HealSpot { x, y, radius, source_dx: dx / long_edge, source_dy: dy / long_edge })
+    Some(HealSpot { x, y, radius, source_dx: dx / long_edge, source_dy: dy / long_edge, clone: false })
 }
 
 /// Applies spots in order, so a later spot can build on an earlier one.
@@ -112,8 +115,9 @@ pub fn apply_heals(image: &mut LinearImage, spots: &[HealSpot]) {
         // Match the patch to the colour around the target, per channel.
         let around_target = ring_mean(image, cx, cy, ring);
         let around_source = ring_mean(image, cx + dx as f32, cy + dy as f32, ring);
-        let gain: [f32; 3] =
-            std::array::from_fn(|c| if around_source[c] > 1e-5 { around_target[c] / around_source[c] } else { 1.0 });
+        let gain: [f32; 3] = std::array::from_fn(|c| {
+            if !spot.clone && around_source[c] > 1e-5 { around_target[c] / around_source[c] } else { 1.0 }
+        });
 
         let (x0, x1) = (((cx - r).floor() as isize).max(0), ((cx + r).ceil() as isize + 1).min(width));
         let (y0, y1) = (((cy - r).floor() as isize).max(0), ((cy + r).ceil() as isize + 1).min(height));
@@ -195,6 +199,15 @@ mod tests {
         let spot = find_heal_source(&image, 0.5, 0.5, 0.04).unwrap();
         apply_heals(&mut image, &[spot]);
         assert!((value(&image, 100, 100) - 0.4).abs() < 0.05, "got {}", value(&image, 100, 100));
+    }
+
+    #[test]
+    fn a_cloned_spot_copies_the_source_without_matching_it() {
+        let halves = |x: u32, _y: u32| if x < 100 { 0.8 } else { 0.2 };
+        let mut image = image_with(halves);
+        let spot = HealSpot { x: 0.75, y: 0.5, radius: 0.05, source_dx: -0.5, source_dy: 0.0, clone: true };
+        apply_heals(&mut image, &[spot]);
+        assert!((value(&image, 150, 100) - 0.8).abs() < 0.01, "got {}", value(&image, 150, 100));
     }
 
     #[test]
