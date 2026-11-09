@@ -6,9 +6,10 @@ const PRESETS_KEY = "openpixels.presets.v1";
 const HEALS_KEY = "openpixels.heals.v1";
 const WARPS_KEY = "openpixels.warps.v1";
 const LOCALS_KEY = "openpixels.locals.v1";
+const RATINGS_KEY = "openpixels.ratings.v1";
 
 /** Editing aids that belong to the session, never to a saved edit. */
-const SESSION_ONLY = new Set(["maskOverlay", "cropEditing"]);
+const SESSION_ONLY = new Set(["maskOverlay", "cropEditing", "localOverlay"]);
 
 export type Presets = Record<string, Adjustments>;
 
@@ -38,6 +39,13 @@ export function engineJson(adjustments: Adjustments): string {
     hslHue: bands("hslHue"),
     hslSaturation: bands("hslSat"),
     hslLuminance: bands("hslLum"),
+    curve: ["M", "R", "G", "B"].map((channel) => [0, 1, 2, 3, 4].map((i) => adjustments[`curve${channel}${i}`] ?? 0)),
+    grade: ["Shadow", "Mid", "High"].map((range) => [
+      adjustments[`grade${range}Hue`] ?? 0,
+      adjustments[`grade${range}Amount`] ?? 0,
+      0,
+      0,
+    ]),
     local: [0, 1, 2, 3].map((layer) =>
       ["Exposure", "Contrast", "Saturation", "Temperature"].map((name) => adjustments[`local${layer}${name}`] ?? 0),
     ),
@@ -92,6 +100,15 @@ export function saveLocals(id: string, layers: LocalLayer[]) {
   if (layers.length > 0) all[id] = layers;
   else delete all[id];
   write(LOCALS_KEY, all);
+}
+
+export const loadRatings = (): Record<string, number> => read<Record<string, number>>(RATINGS_KEY, {});
+
+export function saveRating(id: string, rating: number) {
+  const all = loadRatings();
+  if (rating > 0) all[id] = rating;
+  else delete all[id];
+  write(RATINGS_KEY, all);
 }
 
 export const loadPresets = (): Presets => read<Presets>(PRESETS_KEY, {});

@@ -9,6 +9,8 @@ use half::f16;
 use serde::{Deserialize, Serialize};
 
 const FIELD_LONG_EDGE: u32 = 512;
+/// How far one bloat or pucker step moves content, relative to its distance from the centre.
+const RADIAL_RATE: f32 = 0.08;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +25,9 @@ pub struct WarpStroke {
     pub radius: f32,
     /// 0..=1.
     pub strength: f32,
+    /// 0 pushes with the brush, 1 bloats, 2 puckers.
+    #[serde(default)]
+    pub mode: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +97,11 @@ impl WarpField {
                     continue;
                 }
                 let amount = falloff * falloff * stroke.strength;
-                let (push_u, push_v) = (-stroke.dx * amount, -stroke.dy * amount);
+                let (push_u, push_v) = match stroke.mode {
+                    1 => (-(u - stroke.x) * amount * RADIAL_RATE, -(v - stroke.y) * amount * RADIAL_RATE),
+                    2 => ((u - stroke.x) * amount * RADIAL_RATE, (v - stroke.y) * amount * RADIAL_RATE),
+                    _ => (-stroke.dx * amount, -stroke.dy * amount),
+                };
                 let (old_u, old_v) = sample(&previous, width, height, u + push_u, v + push_v);
                 let index = (y * width + x) * 2;
                 self.offsets[index] = old_u + push_u;
@@ -159,7 +168,7 @@ mod tests {
     const SIZE: u32 = 256;
 
     fn stroke(dx: f32) -> WarpStroke {
-        WarpStroke { x: 0.5, y: 0.5, dx, dy: 0.0, radius: 0.2, strength: 1.0 }
+        WarpStroke { x: 0.5, y: 0.5, dx, dy: 0.0, radius: 0.2, strength: 1.0, mode: 0 }
     }
 
     /// A vertical bright bar at x = 128.
@@ -220,9 +229,23 @@ mod tests {
     }
 
     #[test]
+    fn bloat_reads_from_closer_to_the_centre() {
+        let mut field = WarpField::new(SIZE, SIZE);
+        field.apply(&WarpStroke { mode: 1, ..stroke(0.0) });
+        assert!(field.offset_at(0.6, 0.5).0 < 0.0, "content right of centre spreads outward");
+    }
+
+    #[test]
+    fn pucker_is_the_opposite_of_bloat() {
+        let mut field = WarpField::new(SIZE, SIZE);
+        field.apply(&WarpStroke { mode: 2, ..stroke(0.0) });
+        assert!(field.offset_at(0.6, 0.5).0 > 0.0);
+    }
+
+    #[test]
     fn the_brush_is_round_on_a_wide_image() {
         let mut field = WarpField::new(1000, 500);
-        field.apply(&WarpStroke { x: 0.5, y: 0.5, dx: 0.05, dy: 0.0, radius: 0.1, strength: 1.0 });
+        field.apply(&WarpStroke { x: 0.5, y: 0.5, dx: 0.05, dy: 0.0, radius: 0.1, strength: 1.0, mode: 0 });
         // 0.05 of the long edge away: u changes by 0.05, v by 0.1.
         let horizontal = field.offset_at(0.55, 0.5).0;
         let vertical = field.offset_at(0.5, 0.6).0;

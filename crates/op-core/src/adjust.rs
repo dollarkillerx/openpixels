@@ -33,8 +33,13 @@ pub struct Adjustments {
     pub skin_smooth: f32,
     /// Strength of blemish removal, 0..=1.
     pub skin_blemish: f32,
+    /// Luminance noise reduction, 0..=1.
+    pub denoise_luma: f32,
+    /// Colour noise reduction, 0..=1.
+    pub denoise_chroma: f32,
+    /// Set by the engine: non-zero when a tone curve is in effect.
     #[serde(skip)]
-    pub _padding: [f32; 3],
+    pub curve_active: f32,
     /// Hue, saturation and luminance shift per colour band (red, orange, yellow,
     /// green, aqua, blue, purple, magenta), in two groups of four for the GPU.
     pub hsl_hue: [[f32; 4]; 2],
@@ -42,6 +47,12 @@ pub struct Adjustments {
     pub hsl_luminance: [[f32; 4]; 2],
     /// Per local layer: exposure in EV, contrast, saturation and temperature.
     pub local: [[f32; 4]; 4],
+    /// Colour toning for shadows, midtones and highlights: hue in degrees, then amount.
+    pub grade: [[f32; 4]; 3],
+    /// 1-based local layer whose mask is tinted on screen, or 0. Never exported.
+    pub local_overlay: f32,
+    #[serde(skip)]
+    pub _padding: [f32; 3],
 }
 
 #[cfg(test)]
@@ -56,6 +67,6 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16);
     }
 }

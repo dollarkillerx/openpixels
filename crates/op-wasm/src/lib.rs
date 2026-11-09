@@ -2,7 +2,8 @@
 //! not call a method while an async one is still pending.
 
 use op_core::{
-    Adjustments, Geometry, HealSpot, LinearImage, WarpField, WarpStroke, apply_heals, find_heal_source,
+    Adjustments, Geometry, HealSpot, LinearImage, ToneCurve, WarpField, WarpStroke, apply_heals, export_exif,
+    find_heal_source,
 };
 use op_gpu::{Renderer, encode_jpeg};
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,8 @@ pub struct Engine {
     heals: Vec<HealSpot>,
     healed_proxy: Option<LinearImage>,
     warp: Option<WarpField>,
+    curve: ToneCurve,
+    source_exif: Option<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -112,6 +115,8 @@ impl Engine {
             heals: Vec::new(),
             healed_proxy: None,
             warp: None,
+            curve: ToneCurve::default(),
+            source_exif: None,
         })
     }
 
@@ -123,6 +128,7 @@ impl Engine {
         self.heals.clear();
         self.healed_proxy = None;
         let opened = op_core::open(bytes).map_err(js_error)?;
+        self.source_exif = Some(export_exif(bytes));
         let info = ImageInfo {
             width: opened.width,
             height: opened.height,
@@ -186,6 +192,12 @@ impl Engine {
 
     pub fn set_adjustments(&mut self, json: &str) -> Result<(), JsError> {
         self.adjustments = serde_json::from_str(json).map_err(js_error)?;
+        let curve: ToneCurve = serde_json::from_str(json).map_err(js_error)?;
+        if curve != self.curve {
+            self.renderer.set_curve(&curve);
+            self.curve = curve;
+        }
+        self.adjustments.curve_active = f32::from(u8::from(!self.curve.is_identity()));
         self.geometry = serde_json::from_str(json).map_err(js_error)?;
         let flags: ViewFlags = serde_json::from_str(json).map_err(js_error)?;
         self.crop_editing = flags.crop_editing != 0.0;
@@ -230,6 +242,7 @@ impl Engine {
         stage_height: u32,
         radius: f32,
         strength: f32,
+        mode: u8,
     ) -> Result<String, JsError> {
         let size = (stage_width.max(1), stage_height.max(1));
         let from = self.renderer.canvas_to_image(&self.geometry, size, from_x, from_y);
@@ -238,7 +251,7 @@ impl Engine {
             return Ok("null".into());
         };
         let stroke =
-            WarpStroke { x: from.0, y: from.1, dx: to.0 - from.0, dy: to.1 - from.1, radius, strength };
+            WarpStroke { x: from.0, y: from.1, dx: to.0 - from.0, dy: to.1 - from.1, radius, strength, mode };
         field.apply(&stroke);
         self.renderer.update_warp(field);
         serde_json::to_string(&stroke).map_err(js_error)
@@ -350,7 +363,7 @@ impl Engine {
         let (image_width, image_height) = (image.width, image.height);
         let warped = self.warped(rgb, image_width, image_height);
         let (framed, width, height) = self.geometry.apply_rgb8(&warped, image_width, image_height);
-        encode_jpeg(&framed, width, height, quality).map_err(js_error)
+        encode_jpeg(&framed, width, height, quality, self.source_exif.clone()).map_err(js_error)
     }
 }
 

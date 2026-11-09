@@ -22,13 +22,15 @@ struct Adjustments {
     sharpen: f32,
     skin_smooth: f32,
     skin_blemish: f32,
-    padding0: f32,
-    padding1: f32,
-    padding2: f32,
+    denoise_luma: f32,
+    denoise_chroma: f32,
+    curve_active: f32,
     hsl_hue: array<vec4<f32>, 2>,
     hsl_saturation: array<vec4<f32>, 2>,
     hsl_luminance: array<vec4<f32>, 2>,
     local: array<vec4<f32>, 4>,
+    grade: array<vec4<f32>, 3>,
+    local_overlay: f32,
 }
 
 struct Region {
@@ -61,6 +63,8 @@ struct Region {
 @group(0) @binding(8) var skin_blemish_map: texture_2d<f32>;
 // One channel per local adjustment layer.
 @group(0) @binding(9) var local_mask: texture_2d<f32>;
+// Output tone per channel for each input tone, in one row.
+@group(0) @binding(10) var curve_lut: texture_2d<f32>;
 
 // This pixel's combined local adjustments: exposure, contrast, saturation, temperature.
 var<private> local_values: vec4<f32>;
@@ -245,6 +249,88 @@ fn apply_hsl(rgb: vec3<f32>) -> vec3<f32> {
     return hsv_to_rgb(out);
 }
 
+const CURVE_SIZE = 256.0;
+
+fn apply_curve(rgb: vec3<f32>) -> vec3<f32> {
+    if adj.curve_active == 0.0 {
+        return rgb;
+    }
+    let tone = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / TONE_GAMMA));
+    let at = (tone * (CURVE_SIZE - 1.0) + 0.5) / CURVE_SIZE;
+    let mapped = vec3<f32>(
+        textureSampleLevel(curve_lut, mask_sampler, vec2<f32>(at.r, 0.5), 0.0).r,
+        textureSampleLevel(curve_lut, mask_sampler, vec2<f32>(at.g, 0.5), 0.0).g,
+        textureSampleLevel(curve_lut, mask_sampler, vec2<f32>(at.b, 0.5), 0.0).b,
+    );
+    return pow(max(mapped, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+}
+
+const GRADE_STRENGTH = 0.15;
+
+fn tint_of(setting: vec4<f32>) -> vec3<f32> {
+    let colour = hsv_to_rgb(vec3<f32>(setting.x, 1.0, 1.0));
+    return (colour - vec3<f32>(dot(colour, LUMA))) * setting.y * GRADE_STRENGTH;
+}
+
+// Tints each tonal range without changing its brightness.
+fn apply_grading(rgb: vec3<f32>) -> vec3<f32> {
+    if adj.grade[0].y == 0.0 && adj.grade[1].y == 0.0 && adj.grade[2].y == 0.0 {
+        return rgb;
+    }
+    let display = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / TONE_GAMMA));
+    let tone = dot(display, LUMA);
+    let shadows = 1.0 - smoothstep(0.0, 0.5, tone);
+    let highlights = smoothstep(0.5, 1.0, tone);
+    let midtones = 1.0 - shadows - highlights;
+    let tinted = display + tint_of(adj.grade[0]) * shadows + tint_of(adj.grade[1]) * midtones
+        + tint_of(adj.grade[2]) * highlights;
+    return pow(max(tinted, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+}
+
+const DENOISE_OFFSETS = array<vec2<i32>, 24>(
+    vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1),
+    vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1),
+    vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2),
+    vec2<i32>(2, 2), vec2<i32>(-2, 2), vec2<i32>(2, -2), vec2<i32>(-2, -2),
+    vec2<i32>(3, 1), vec2<i32>(-3, -1), vec2<i32>(1, -3), vec2<i32>(-1, 3),
+    vec2<i32>(4, 0), vec2<i32>(-4, 0), vec2<i32>(0, 4), vec2<i32>(0, -4),
+);
+
+// Edge-aware averaging in display-like space. Colour noise is smoothed further than
+// luminance noise, because the eye forgives lost colour detail far more readily.
+fn apply_denoise(centre: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
+    if adj.denoise_luma == 0.0 && adj.denoise_chroma == 0.0 {
+        return centre;
+    }
+    let exponent = vec3<f32>(1.0 / TONE_GAMMA);
+    let toned = pow(max(centre, vec3<f32>(0.0)), exponent);
+    let luma = dot(toned, LUMA);
+    let sigma_luma = max(adj.denoise_luma * 0.12, 1e-3);
+    let sigma_chroma = max(adj.denoise_chroma * 0.25, 1e-3);
+
+    var offsets = DENOISE_OFFSETS;
+    var luma_total = luma;
+    var luma_weight = 1.0;
+    var chroma_total = toned;
+    var chroma_weight = 1.0;
+    for (var i = 0u; i < 24u; i++) {
+        let sample_tone = pow(max(source_at(pixel + offsets[i]), vec3<f32>(0.0)), exponent);
+        let sample_luma = dot(sample_tone, LUMA);
+        let difference = sample_luma - luma;
+        let for_luma = exp(-difference * difference / (2.0 * sigma_luma * sigma_luma));
+        let for_chroma = exp(-difference * difference / (2.0 * sigma_chroma * sigma_chroma));
+        luma_total += sample_luma * for_luma;
+        luma_weight += for_luma;
+        chroma_total += sample_tone * for_chroma;
+        chroma_weight += for_chroma;
+    }
+
+    let smoothed_luma = mix(luma, luma_total / luma_weight, min(adj.denoise_luma * 1.5, 1.0));
+    let smoothed_colour = mix(toned, chroma_total / chroma_weight, min(adj.denoise_chroma * 1.5, 1.0));
+    let result = smoothed_colour + vec3<f32>(smoothed_luma - dot(smoothed_colour, LUMA));
+    return pow(max(result, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+}
+
 fn apply_vignette(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let centered = (pixel + 0.5 - region.full_size * 0.5) / (region.full_size * 0.5);
     let falloff = smoothstep(0.35, 1.45, length(centered));
@@ -274,7 +360,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         + adj.local[2] * weights.b + adj.local[3] * weights.a;
 
     let source_pixel = vec2<i32>(id.xy) + vec2<i32>(region.source_offset);
-    var rgb = apply_sharpen(source_at(source_pixel), source_pixel);
+    var rgb = apply_denoise(source_at(source_pixel), source_pixel);
+    rgb = apply_sharpen(rgb, source_pixel);
     rgb = apply_skin(rgb, uv);
     rgb = white_balance(rgb);
     let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background + local_values.x);
@@ -282,11 +369,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = apply_base_look(rgb);
     rgb = apply_clarity(rgb, uv, scene_gain);
     rgb = apply_tone(rgb);
+    rgb = apply_curve(rgb);
+    rgb = apply_grading(rgb);
     rgb = apply_hsl(rgb);
     rgb = apply_color(rgb);
     rgb = apply_vignette(rgb, pixel);
 
     let tint = vec3<f32>(0.95, 0.2, 0.35);
-    let display = mix(linear_to_srgb(rgb), tint, adj.mask_overlay * background * 0.65);
+    var display = mix(linear_to_srgb(rgb), tint, adj.mask_overlay * background * 0.65);
+    if adj.local_overlay > 0.0 {
+        let layer = u32(adj.local_overlay) - 1u;
+        display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);
+    }
     textureStore(target_image, id.xy, vec4<f32>(display, 1.0));
 }

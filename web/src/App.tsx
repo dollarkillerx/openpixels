@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CropOverlay } from "./CropOverlay";
+import { ToneCurve } from "./ToneCurve";
 import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, type Crop } from "./frame";
@@ -11,10 +12,12 @@ import {
   loadHeals,
   loadLocals,
   loadPresets,
+  loadRatings,
   loadWarps,
   persistable,
   saveHeals,
   saveLocals,
+  saveRating,
   saveWarps,
   savePresets,
   saveEdits,
@@ -55,6 +58,8 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
       { key: "saturation", label: "饱和度", min: -1, max: 1 },
       { key: "clarity", label: "清晰度", min: -1, max: 1 },
       { key: "sharpen", label: "锐化", min: 0, max: 1 },
+      { key: "denoiseLuma", label: "明度降噪", min: 0, max: 1 },
+      { key: "denoiseChroma", label: "色彩降噪", min: 0, max: 1 },
       { key: "vignette", label: "暗角", min: -1, max: 1 },
     ],
   },
@@ -77,6 +82,18 @@ const HSL_CHANNELS = [
   { prefix: "hslLum", label: "明度" },
 ];
 
+const GRADE_RANGES = [
+  { key: "Shadow", label: "阴影" },
+  { key: "Mid", label: "中间调" },
+  { key: "High", label: "高光" },
+];
+
+const LIQUIFY_MODES = [
+  { value: 0, label: "推动" },
+  { value: 1, label: "膨胀" },
+  { value: 2, label: "收缩" },
+];
+
 const CROP_RATIOS: { label: string; value: number | null }[] = [
   { label: "自由", value: null },
   { label: "1:1", value: 1 },
@@ -96,7 +113,7 @@ const FRAME_WINDOW = 30;
 const THUMBNAIL_LONG_EDGE = 200;
 const SETTLE_MS = 400;
 const HISTORY_LIMIT = 100;
-const RAW_ACCEPT = ".arw,.cr2,.cr3,.nef,.nrw,.raf,.rw2,.orf,.dng,.pef,.srw,.iiq,.3fr,.jpg,.jpeg,.png";
+const RAW_ACCEPT = ".arw,.cr2,.cr3,.nef,.nrw,.raf,.rw2,.orf,.dng,.pef,.srw,.iiq,.3fr,.jpg,.jpeg,.png,.tif,.tiff";
 
 interface Photo {
   id: string;
@@ -179,6 +196,9 @@ export function App() {
   const [liquifying, setLiquifying] = useState(false);
   const [liquifyRadius, setLiquifyRadius] = useState(0.06);
   const [liquifyStrength, setLiquifyStrength] = useState(0.7);
+  const [liquifyMode, setLiquifyMode] = useState(0);
+  const [ratings, setRatings] = useState<Record<string, number>>(loadRatings);
+  const [minRating, setMinRating] = useState(0);
   const dragRef = useRef<{ x: number; y: number; strokes: WarpStroke[] } | null>(null);
   const [locals, setLocals] = useState<LocalLayer[]>([]);
   const [activeLocal, setActiveLocal] = useState(0);
@@ -189,6 +209,7 @@ export function App() {
   const localDragRef = useRef(false);
 
   const current = photos.find((photo) => photo.id === currentId) ?? null;
+  const shownPhotos = photos.filter((photo) => (ratings[photo.id] ?? 0) >= minRating);
   const locked = batchRunning;
 
   useEffect(() => {
@@ -389,6 +410,11 @@ export function App() {
   const setValue = (key: string, value: number) => applyEdit({ ...adjustments, [key]: value });
   const reset = () => applyEdit({ maskOverlay: adjustments.maskOverlay ?? 0 }, true);
 
+  const rate = useCallback((id: string, rating: number) => {
+    saveRating(id, rating);
+    setRatings((all) => ({ ...all, [id]: rating }));
+  }, []);
+
   const stepHistory = useCallback(
     (direction: "undo" | "redo") => {
       if (!currentId) return;
@@ -417,8 +443,17 @@ export function App() {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [stepHistory]);
+    const onRate = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "SELECT" || event.metaKey || event.ctrlKey) return;
+      if (/^[0-5]$/.test(event.key) && currentId) rate(currentId, Number(event.key));
+    };
+    window.addEventListener("keydown", onRate);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onRate);
+    };
+  }, [stepHistory, currentId, rate]);
 
   const quarter = adjustments.quarter ?? 0;
   const rotate = adjustments.rotate ?? 0;
@@ -565,6 +600,7 @@ export function App() {
     applyEdit(removeLocalValues(adjustments, activeLocal, layers.length), true);
     commitLocals(layers.filter((_, index) => index !== activeLocal));
     setActiveLocal(0);
+    if ((adjustments.localOverlay ?? 0) > 0) setValue("localOverlay", 0);
   };
 
   const invertLocal = () =>
@@ -599,6 +635,7 @@ export function App() {
         stageHeight: Math.round(bounds.height),
         radius: liquifyRadius,
         strength: liquifyStrength,
+        mode: liquifyMode,
       })
       .then((stroke) => {
         if (stroke) strokes.push(stroke);
@@ -752,7 +789,7 @@ export function App() {
   };
 
   const runBatch = async () => {
-    if (photos.length === 0 || !current) return;
+    if (shownPhotos.length === 0 || !current) return;
     let target;
     try {
       target = await chooseBatchTarget();
@@ -769,11 +806,11 @@ export function App() {
     setBatchRunning(true);
     setBatchUrl(null);
     setError("");
-    setBatch({ done: 0, total: photos.length, ms: 0 });
+    setBatch({ done: 0, total: shownPhotos.length, ms: 0 });
     flushPendingEdit();
 
     try {
-      for (const [index, photo] of photos.entries()) {
+      for (const [index, photo] of shownPhotos.entries()) {
         const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
         setCurrentId(photo.id);
         setAdjustments(edit);
@@ -793,7 +830,7 @@ export function App() {
         await target.write(exportName(photo.file.name, used), new Uint8Array(jpeg));
         setHeapMB(heap);
         await refreshThumbnail(photo.id);
-        setBatch({ done: index + 1, total: photos.length, ms: performance.now() - started });
+        setBatch({ done: index + 1, total: shownPhotos.length, ms: performance.now() - started });
       }
       setBatchUrl(await target.finish());
     } catch (reason) {
@@ -870,7 +907,7 @@ export function App() {
 
         {photos.length > 0 && (
           <nav className="strip" aria-label="图库">
-            {photos.map((photo) => (
+            {shownPhotos.map((photo) => (
               <button
                 key={photo.id}
                 className={`thumb ${photo.id === currentId ? "current" : ""}`}
@@ -906,6 +943,32 @@ export function App() {
 
         {error && <p className="error" role="alert">{error}</p>}
 
+        {photos.length > 0 && (
+          <section>
+            <div className="row">
+              <div className="stars" role="group" aria-label="星标">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    className={`star ${(current ? (ratings[current.id] ?? 0) : 0) >= star ? "on" : ""}`}
+                    aria-label={`${star} 星`}
+                    disabled={!current || locked}
+                    onClick={() => current && rate(current.id, ratings[current.id] === star ? 0 : star)}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
+              <select aria-label="星标筛选" value={minRating} disabled={locked} onChange={(event) => setMinRating(Number(event.target.value))}>
+                <option value={0}>全部</option>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <option key={star} value={star}>{star} 星及以上</option>
+                ))}
+              </select>
+            </div>
+          </section>
+        )}
+
         <section className="history">
           <button className="button secondary" disabled={!history?.past.length || locked} onClick={() => stepHistory("undo")}>撤销</button>
           <button className="button secondary" disabled={!history?.future.length || locked} onClick={() => stepHistory("redo")}>重做</button>
@@ -937,6 +1000,33 @@ export function App() {
             })}
           </section>
         ))}
+
+        <section>
+          <h2>曲线</h2>
+          <ToneCurve adjustments={adjustments} disabled={!loaded || locked} onChange={setValue} />
+        </section>
+
+        <section>
+          <h2>色调分离</h2>
+          {GRADE_RANGES.map(({ key, label }) => (
+            <div key={key}>
+              {[
+                { suffix: "Hue", name: "色相", max: 360, step: 1 },
+                { suffix: "Amount", name: "强度", max: 1, step: 0.01 },
+              ].map(({ suffix, name, max, step }) => {
+                const field = `grade${key}${suffix}`;
+                const value = adjustments[field] ?? 0;
+                return (
+                  <label className="slider" key={suffix}>
+                    <span>{label}{name}</span>
+                    <output>{suffix === "Hue" ? value.toFixed(0) : value.toFixed(2)}</output>
+                    <input aria-label={`${label}${name}`} type="range" min={0} max={max} step={step} value={value} disabled={!loaded || locked} onChange={(event) => setValue(field, Number(event.target.value))} onDoubleClick={() => setValue(field, 0)} />
+                  </label>
+                );
+              })}
+            </div>
+          ))}
+        </section>
 
         <section>
           <h2>HSL</h2>
@@ -1108,6 +1198,13 @@ export function App() {
                 );
               })}
               <div className="row">
+                <button
+                  className={`button ${(adjustments.localOverlay ?? 0) > 0 ? "" : "secondary"}`}
+                  disabled={locked}
+                  onClick={() => setValue("localOverlay", (adjustments.localOverlay ?? 0) > 0 ? 0 : activeLocal + 1)}
+                >
+                  显示蒙版
+                </button>
                 <button className="button secondary" disabled={locked} onClick={invertLocal}>反转</button>
                 <button className="button secondary" disabled={locked} onClick={deleteLocal}>删除图层</button>
               </div>
@@ -1121,6 +1218,11 @@ export function App() {
             <button className={`button ${liquifying ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleLiquify}>
               {liquifying ? "退出液化" : "推动变形"}
             </button>
+            <select aria-label="液化模式" value={liquifyMode} disabled={!loaded || locked} onChange={(event) => setLiquifyMode(Number(event.target.value))}>
+              {LIQUIFY_MODES.map((mode) => (
+                <option key={mode.value} value={mode.value}>{mode.label}</option>
+              ))}
+            </select>
             <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps(warpGroups.slice(0, -1))}>撤销一笔</button>
             <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps([])}>清除</button>
           </div>
@@ -1205,10 +1307,10 @@ export function App() {
         </section>
 
         <section>
-          <h2>批量（{photos.length} 张）</h2>
+          <h2>批量（{shownPhotos.length} 张）</h2>
           <div className="row">
             <button className="button secondary" disabled={photos.length < 2 || locked} onClick={syncToAll}>同步到全部</button>
-            <button className="button" disabled={photos.length === 0 || locked} onClick={() => void runBatch()}>批量导出</button>
+            <button className="button" disabled={shownPhotos.length === 0 || locked} onClick={() => void runBatch()}>批量导出</button>
           </div>
           {batch && (
             <p className="progress" data-stat="batch">

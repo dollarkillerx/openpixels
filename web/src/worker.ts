@@ -118,8 +118,8 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
     }
 
     case "liquify": {
-      const { fromX, fromY, toX, toY, stageWidth, stageHeight, radius, strength } = request;
-      const stroke = JSON.parse(engine!.liquify(fromX, fromY, toX, toY, stageWidth, stageHeight, radius, strength));
+      const { fromX, fromY, toX, toY, stageWidth, stageHeight, radius, strength, mode } = request;
+      const stroke = JSON.parse(engine!.liquify(fromX, fromY, toX, toY, stageWidth, stageHeight, radius, strength, mode));
       scheduleRender();
       return [stroke, []];
     }

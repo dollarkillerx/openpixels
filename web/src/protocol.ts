@@ -69,6 +69,7 @@ export type EngineRequest =
       stageHeight: number;
       radius: number;
       strength: number;
+      mode: number;
     }
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
   | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }

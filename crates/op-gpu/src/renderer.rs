@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use futures_channel::oneshot;
-use op_core::{Adjustments, Geometry, LinearImage, SkinRetouch, WarpField};
+use op_core::{Adjustments, CURVE_LUT_SIZE, Geometry, LinearImage, SkinRetouch, ToneCurve, WarpField};
 use wgpu::util::align_to;
 
 const SOURCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -8,8 +8,8 @@ const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const SOURCE_BYTES_PER_PIXEL: u32 = 8;
 const OUTPUT_BYTES_PER_PIXEL: u32 = 4;
 const WORKGROUP_SIZE: u32 = 16;
-/// Source pixels each export tile can see beyond its own area, for sharpening.
-const TILE_MARGIN: u32 = 2;
+/// Source pixels each export tile can see beyond its own area, for sharpening and denoising.
+const TILE_MARGIN: u32 = 5;
 const BLURRED_LUMA_LONG_EDGE: u32 = 128;
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +67,8 @@ pub struct Renderer {
     skin_smooth_view: wgpu::TextureView,
     skin_blemish_view: wgpu::TextureView,
     local_mask_view: wgpu::TextureView,
+    curve_texture: wgpu::Texture,
+    curve_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     preview: Option<Preview>,
 }
@@ -104,6 +106,7 @@ impl Renderer {
                 texture_entry(7, wgpu::ShaderStages::COMPUTE, true),
                 texture_entry(8, wgpu::ShaderStages::COMPUTE, true),
                 texture_entry(9, wgpu::ShaderStages::COMPUTE, true),
+                texture_entry(10, wgpu::ShaderStages::COMPUTE, true),
             ],
         });
         let develop_pipeline_layout =
@@ -180,6 +183,17 @@ impl Renderer {
         let skin_smooth_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
         let skin_blemish_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
         let local_mask_view = create_local_mask_view(&device, &queue, 1, 1, &[0; 4]);
+        let curve_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tone curve"),
+            size: extent(CURVE_LUT_SIZE as u32, 1),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SOURCE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let curve_view = curve_texture.create_view(&Default::default());
 
         Self {
             device,
@@ -197,6 +211,8 @@ impl Renderer {
             skin_smooth_view,
             skin_blemish_view,
             local_mask_view,
+            curve_texture,
+            curve_view,
             base_exposure: None,
             preview: None,
         }
@@ -265,6 +281,20 @@ impl Renderer {
         let u = map.origin[0] + s * map.axis_s[0] + t * map.axis_t[0];
         let v = map.origin[1] + s * map.axis_s[1] + t * map.axis_t[1];
         ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((u, v))
+    }
+
+    /// Updates the tone curve lookup table.
+    pub fn set_curve(&self, curve: &ToneCurve) {
+        self.queue.write_texture(
+            self.curve_texture.as_image_copy(),
+            cast_slice(&curve.lut()),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(CURVE_LUT_SIZE as u32 * SOURCE_BYTES_PER_PIXEL),
+                rows_per_image: Some(1),
+            },
+            extent(CURVE_LUT_SIZE as u32, 1),
+        );
     }
 
     /// Sets the local adjustment masks, one layer per RGBA channel, covering the image.
@@ -410,7 +440,7 @@ impl Renderer {
         tile_size: u32,
     ) -> Result<Vec<u8>, GpuError> {
         // The tint is an on-screen editing aid and must never reach a delivered file.
-        let adjustments = &Adjustments { mask_overlay: 0.0, ..*adjustments };
+        let adjustments = &Adjustments { mask_overlay: 0.0, local_overlay: 0.0, ..*adjustments };
         // Small images, like thumbnails, do not need full-size tile textures.
         let tile_size = tile_size
             .min(image.width.max(image.height))
@@ -577,6 +607,10 @@ impl Renderer {
                     binding: 9,
                     resource: wgpu::BindingResource::TextureView(&self.local_mask_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&self.curve_view),
+                },
             ],
         })
     }
@@ -635,9 +669,13 @@ impl Renderer {
 }
 
 /// Encodes tightly packed RGB8 as a baseline JPEG. `quality` is 1..=100.
-pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> Result<Vec<u8>, GpuError> {
+pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8, exif: Option<Vec<u8>>) -> Result<Vec<u8>, GpuError> {
     let mut out = Vec::new();
-    jpeg_encoder::Encoder::new(&mut out, quality).encode(
+    let mut encoder = jpeg_encoder::Encoder::new(&mut out, quality);
+    if let Some(exif) = exif {
+        encoder.add_app_segment(1, exif)?;
+    }
+    encoder.encode(
         rgb,
         width as u16,
         height as u16,
@@ -1103,6 +1141,81 @@ mod tests {
         assert_eq!(renderer.canvas_to_image(&Geometry::default(), (200, 100), 0.05, 0.5), None);
     }
 
+    fn noisy(width: u32, height: u32) -> LinearImage {
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let wave = ((x * 7 + y * 13) % 11) as f32 / 11.0 - 0.5;
+                pixels.extend([0.2 + wave * 0.05, 0.2 - wave * 0.05, 0.2 + wave * 0.03].map(|v| f16::from_f32(v).to_bits()));
+            }
+        }
+        LinearImage::new(width, height, pixels)
+    }
+
+    fn spread(rgb: &[u8]) -> f32 {
+        let mean = rgb.iter().map(|&v| f32::from(v)).sum::<f32>() / rgb.len() as f32;
+        (rgb.iter().map(|&v| (f32::from(v) - mean).powi(2)).sum::<f32>() / rgb.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn denoising_reduces_variation() {
+        let renderer = renderer();
+        let image = noisy(64, 64);
+        let plain = export(&renderer, &image, &Adjustments::default(), 128);
+        let adj = Adjustments { denoise_luma: 1.0, denoise_chroma: 1.0, ..Default::default() };
+        let clean = export(&renderer, &image, &adj, 128);
+        assert!(spread(&clean) < spread(&plain) * 0.7, "{} vs {}", spread(&clean), spread(&plain));
+    }
+
+    #[test]
+    fn denoising_keeps_strong_edges() {
+        let renderer = renderer();
+        let (dark, bright) = (f16::from_f32(0.02).to_bits(), f16::from_f32(0.8).to_bits());
+        let mut pixels = Vec::new();
+        for _ in 0..32 {
+            for x in 0..64 {
+                pixels.extend([if x < 32 { dark } else { bright }; 3]);
+            }
+        }
+        let image = LinearImage::new(64, 32, pixels);
+        let adj = Adjustments { denoise_luma: 0.5, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 128);
+        let at = |x: usize| i32::from(out[(16 * 64 + x) * 3]);
+        assert!(at(34) - at(29) > 150, "edge blurred: {} to {}", at(29), at(34));
+    }
+
+    #[test]
+    fn tiles_stay_identical_when_denoising() {
+        let mut renderer = renderer();
+        let image = noisy(300, 170);
+        renderer.set_preview(&image);
+        let adj = Adjustments { denoise_luma: 0.7, denoise_chroma: 0.7, sharpen: 0.3, ..Default::default() };
+        assert_eq!(export(&renderer, &image, &adj, 64), export(&renderer, &image, &adj, 512));
+    }
+
+    #[test]
+    fn a_curve_changes_the_output() {
+        let renderer = renderer();
+        let image = flat_gray(4, 4);
+        let mut curve = ToneCurve::default();
+        curve.curve[0][2] = 0.2;
+        renderer.set_curve(&curve);
+        let adj = Adjustments { curve_active: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        assert!(i32::from(out[0]) > 135, "got {}", out[0]);
+    }
+
+    #[test]
+    fn grading_tints_shadows_without_touching_highlights() {
+        let renderer = renderer();
+        let mut adj = Adjustments::default();
+        adj.grade[0] = [240.0, 1.0, 0.0, 0.0];
+        let shadow = export(&renderer, &LinearImage::new(1, 1, vec![f16::from_f32(0.02).to_bits(); 3]), &adj, 64);
+        assert!(shadow[2] > shadow[0], "shadow should turn blue: {shadow:?}");
+        let bright = LinearImage::new(1, 1, vec![f16::from_f32(0.9).to_bits(); 3]);
+        assert_eq!(export(&renderer, &bright, &adj, 64), export(&renderer, &bright, &Adjustments::default(), 64));
+    }
+
     #[test]
     fn letterbox_fits_inside_the_target() {
         assert_eq!(letterbox((100, 100), (200, 100)), [0.5, 1.0]);
@@ -1111,7 +1224,7 @@ mod tests {
 
     #[test]
     fn jpeg_output_has_a_valid_header() {
-        let jpeg = encode_jpeg(&[128; 3 * 16 * 16], 16, 16, 90).unwrap();
+        let jpeg = encode_jpeg(&[128; 3 * 16 * 16], 16, 16, 90, None).unwrap();
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
     }
 }

@@ -18,6 +18,8 @@ export interface SkinMask {
 /** Window used to look for faces too small for the whole-image pass. */
 const TILE_SIZE = 512;
 const TILE_STRIDE = 256;
+const TILE_CONFIDENCE = 0.8;
+const DEFAULT_CONFIDENCE = 0.5;
 /** Assumed face size when none is found, as a fraction of the short edge. */
 const CLOSE_UP_FACE_FRACTION = 0.7;
 
@@ -133,7 +135,9 @@ function centerOf(landmarks: NormalizedLandmark[]): Point {
  * The detector shrinks its input to a small square, so a face in a full-length or
  * group shot is too few pixels to see. Searching overlapping windows keeps them large.
  */
-function detectInTiles(detector: FaceLandmarker, image: ImageData): NormalizedLandmark[][] {
+async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promise<NormalizedLandmark[][]> {
+  // Many windows mean many chances of a false match, so demand more certainty.
+  await detector.setOptions({ minFaceDetectionConfidence: TILE_CONFIDENCE });
   const source = new OffscreenCanvas(image.width, image.height);
   source.getContext("2d")!.putImageData(image, 0, 0);
   const tile = new OffscreenCanvas(TILE_SIZE, TILE_SIZE);
@@ -168,6 +172,7 @@ function detectInTiles(detector: FaceLandmarker, image: ImageData): NormalizedLa
       }
     }
   }
+  await detector.setOptions({ minFaceDetectionConfidence: DEFAULT_CONFIDENCE });
   return found;
 }
 
@@ -185,7 +190,7 @@ export async function buildSkinMask(
 ): Promise<SkinMask> {
   const detector = await getLandmarker();
   let { faceLandmarks } = detector.detect(toImageData(thumbnail));
-  if (faceLandmarks.length === 0) faceLandmarks = detectInTiles(detector, toImageData(await detailed()));
+  if (faceLandmarks.length === 0) faceLandmarks = await detectInTiles(detector, toImageData(await detailed()));
   if (faceLandmarks.length === 0) {
     const everything = new Uint8Array(proxyWidth * proxyHeight).fill(255);
     return {
