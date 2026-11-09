@@ -1,0 +1,18 @@
+[package]
+name = "op-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+futures-channel.workspace = true
+half.workspace = true
+jpeg-encoder.workspace = true
+op-core = { path = "../op-core" }
+thiserror.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true

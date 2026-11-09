@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/op-core", "crates/op-gpu", "crates/op-wasm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.87"
+
+[workspace.dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
+flashraw = { version = "0.1", default-features = false, features = ["simd", "icc"] }
+half = { version = "2.7", features = ["bytemuck"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+jpeg-encoder = "0.7"
+pollster = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+futures-channel = "0.3"
+# No `gles`: the browser target only goes through WebGPU, which also keeps naga out of the wasm.
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "webgpu", "metal", "vulkan", "dx12"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4

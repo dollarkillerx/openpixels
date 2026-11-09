@@ -1,0 +1,9 @@
+target/
+.tools/
+node_modules/
+dist/
+web/src/wasm-pkg/
+web/public/fixtures/
+web/public/models/
+web/public/ort/
+.DS_Store
