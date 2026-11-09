@@ -50,6 +50,15 @@ export interface Thumbnail {
   height: number;
 }
 
+export interface DevelopTileRequest {
+  index: number;
+  input: ArrayBuffer;
+  tileJson: string;
+  recipeJson: string;
+}
+
+export type DevelopTileReply = { index: number; rgb: ArrayBuffer } | { index: number; error: string };
+
 /** Messages the engine worker answers, each paired by id with one reply. */
 export type EngineRequest =
   | { type: "init"; canvas: OffscreenCanvas }

@@ -7,12 +7,16 @@
 //!
 //! Runs in overlapping tiles so memory use stays independent of the image size.
 
+use serde::{Deserialize, Serialize};
+
+use crate::xtrans::demosaic_xtrans_block;
+
 const RED: u8 = 0;
 const GREEN: u8 = 1;
 const BLUE: u8 = 2;
 
 /// Pixels of context a tile needs around the area it outputs.
-const TILE_MARGIN: usize = 8;
+pub(crate) const TILE_MARGIN: usize = 8;
 
 /// Offsets and weights of the causal window that accumulates colour-difference
 /// gradients, as (dx, dy, weight) for the horizontal case.
@@ -29,8 +33,15 @@ const DECISION_WINDOW: [(isize, isize, f32); 8] = [
 
 /// Channel of each photosite in the repeating 2x2 tile, indexed `[y & 1][x & 1]`.
 /// 0 is red, 1 green, 2 blue.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BayerPattern(pub [[u8; 2]; 2]);
+
+/// A sensor's colour filter layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Cfa {
+    Bayer(BayerPattern),
+    XTrans([[u8; 6]; 6]),
+}
 
 impl BayerPattern {
     #[inline]
@@ -204,6 +215,23 @@ fn demosaic_tile(mosaic: &Plane, pattern: BayerPattern, origin: (usize, usize)) 
     }
 
     [red, green, blue]
+}
+
+/// Demosaics a block whose first sample is at `origin` in the sensor, returning R, G, B.
+pub(crate) fn demosaic_block(
+    input: &[f32],
+    width: usize,
+    height: usize,
+    cfa: &Cfa,
+    origin: (usize, usize),
+) -> [Vec<f32>; 3] {
+    match cfa {
+        Cfa::Bayer(pattern) => {
+            let plane = Plane { width, height, data: input.to_vec() };
+            demosaic_tile(&plane, *pattern, origin).map(|plane| plane.data)
+        }
+        Cfa::XTrans(pattern) => demosaic_xtrans_block(input, width, height, pattern, origin),
+    }
 }
 
 /// Demosaics the `window` (x, y, width, height) of a `width` x `height` mosaic and

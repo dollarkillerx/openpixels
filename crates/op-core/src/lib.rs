@@ -9,10 +9,14 @@ pub mod image_buf;
 pub mod look;
 pub mod retouch;
 pub mod warp;
+mod xtrans;
 
 pub use adjust::Adjustments;
 pub use curve::{CURVE_LUT_SIZE, ToneCurve};
-pub use decode::{DecodeError, Opened, camera_matched_exposure, decode_linear, develop_raw_full, open};
+pub use decode::{
+    DecodeError, DevelopJob, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
+    process_tile,
+};
 pub use exif::export_exif;
 pub use geometry::Geometry;
 pub use heal::{HealSpot, apply_heals, find_heal_source};

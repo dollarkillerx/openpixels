@@ -4,6 +4,8 @@ import { engineJson } from "./library";
 import type {
   Adjustments,
   EngineRequest,
+  DevelopTileReply,
+  DevelopTileRequest,
   ExportResult,
   FromWorker,
   LoadResult,
@@ -13,6 +15,7 @@ import type {
 } from "./protocol";
 
 const PROXY_LONG_EDGE = 2048;
+const MAX_DEVELOP_WORKERS = 8;
 
 let engine: Engine | null = null;
 let memory: WebAssembly.Memory | null = null;
@@ -31,7 +34,7 @@ function enqueue(task: () => Promise<void> | void) {
 const heapMB = () => (memory ? memory.buffer.byteLength / 1048576 : 0);
 
 /** Copies a wasm-owned array out so its buffer can be transferred. */
-function detach(view: Uint8Array | Float32Array): ArrayBuffer {
+function detach(view: Uint8Array | Float32Array | Uint16Array): ArrayBuffer {
   return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer;
 }
 
@@ -53,6 +56,58 @@ function scheduleRender() {
     await engine!.render();
     post({ type: "frame", ms: performance.now() - start });
   });
+}
+
+let developers: Worker[] | null = null;
+
+function developerPool(): Worker[] {
+  if (!developers) {
+    const count = Math.max(1, Math.min((navigator.hardwareConcurrency || 2) - 1, MAX_DEVELOP_WORKERS));
+    developers = Array.from(
+      { length: count },
+      () => new Worker(new URL("./develop-worker.ts", import.meta.url), { type: "module" }),
+    );
+  }
+  return developers;
+}
+
+/** Develops the open RAW's tiles across the worker pool, if it has any to split up. */
+async function developInParallel() {
+  const plan = JSON.parse(engine!.begin_raw_develop());
+  if (!plan) return;
+  const recipeJson = JSON.stringify(plan.recipe);
+  const tiles: unknown[] = plan.tiles;
+  let next = 0;
+
+  const runOn = (worker: Worker) =>
+    new Promise<void>((resolve, reject) => {
+      const sendNext = () => {
+        if (next >= tiles.length) {
+          worker.onmessage = null;
+          resolve();
+          return;
+        }
+        const index = next++;
+        const values = engine!.raw_tile_input(index);
+        const input = detach(values);
+        const request: DevelopTileRequest = { index, input, tileJson: JSON.stringify(tiles[index]), recipeJson };
+        worker.postMessage(request, [input]);
+      };
+      worker.onmessage = ({ data }: MessageEvent<DevelopTileReply>) => {
+        if ("error" in data) {
+          worker.onmessage = null;
+          reject(new Error(data.error));
+          return;
+        }
+        engine!.store_raw_tile(data.index, new Uint16Array(data.rgb));
+        sendNext();
+      };
+      worker.onerror = (event) => reject(new Error(event.message));
+      sendNext();
+    });
+
+  await Promise.all(developerPool().map(runOn));
+  engine!.finish_raw_develop();
 }
 
 /** Handles a request and returns its result plus any buffers to transfer. */
@@ -97,6 +152,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
         pendingAdjustments = null;
       }
       const start = performance.now();
+      await developInParallel();
       const jpeg = detach(await engine!.export_jpeg(request.quality));
       const result: ExportResult = { jpeg, ms: performance.now() - start, heapMB: heapMB() };
       return [result, [jpeg]];

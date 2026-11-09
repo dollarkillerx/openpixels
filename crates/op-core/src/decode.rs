@@ -3,12 +3,13 @@ use flashraw::{
     RawFrame,
 };
 use half::f16;
+use serde::{Deserialize, Serialize};
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
 use crate::LinearImage;
-use crate::demosaic::{BayerPattern, demosaic};
+use crate::demosaic::{BayerPattern, Cfa, TILE_MARGIN, demosaic_block};
 use crate::look::{DEFAULT_BASE_EXPOSURE, estimate_base_exposure};
 
 const DEMOSAIC_TILE_SIZE: usize = 1024;
@@ -95,16 +96,151 @@ pub fn camera_matched_exposure(raw: &FlashRaw<'_>, working: &LinearImage) -> Opt
 /// Develops a RAW file at full resolution for export, with the highest-quality
 /// demosaicing available for its sensor.
 pub fn develop_raw_full(bytes: &[u8]) -> Result<LinearImage, DecodeError> {
-    let raw = FlashRaw::open(bytes)?;
-    let frame = raw.decode(DecodeOptions {
-        output: OutputFormat::NormalizedF32,
-        ..Default::default()
-    })?;
-    match bayer_pattern(&frame) {
-        Some(pattern) => develop_bayer(frame, pattern),
-        // X-Trans and other layouts use the decoder's own interpolation for now.
-        None => decode_linear(&raw, Demosaic::Bilinear),
+    let Some(mut job) = DevelopJob::start(bytes)? else {
+        // Unusual layouts use the decoder's own interpolation.
+        return decode_linear(&FlashRaw::open(bytes)?, Demosaic::Bilinear);
+    };
+    for tile in job.tiles() {
+        let input = job.tile_input(&tile);
+        let rgb = process_tile(&input, &tile, &job.recipe);
+        job.store_tile(&tile, &rgb);
     }
+    Ok(job.finish())
+}
+
+/// What a worker needs to develop any tile of a job.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TileRecipe {
+    pub cfa: Cfa,
+    pub matrix: [[f32; 3]; 3],
+}
+
+/// One piece of a job, with the larger block of sensor data it needs as context.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevelopTile {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+    pub block_x: usize,
+    pub block_y: usize,
+    pub block_width: usize,
+    pub block_height: usize,
+}
+
+/// A full-resolution RAW development, split so its tiles can run anywhere.
+pub struct DevelopJob {
+    pub recipe: TileRecipe,
+    mosaic: Vec<f32>,
+    sensor_width: usize,
+    sensor_height: usize,
+    crop: flashraw::Rect,
+    orientation: Orientation,
+    output: Vec<u16>,
+}
+
+impl DevelopJob {
+    /// `None` if the sensor layout has no dedicated demosaicing.
+    pub fn start(bytes: &[u8]) -> Result<Option<Self>, DecodeError> {
+        let raw = FlashRaw::open(bytes)?;
+        let frame = raw.decode(DecodeOptions { output: OutputFormat::NormalizedF32, ..Default::default() })?;
+        let Some(cfa) = cfa_of(&frame) else { return Ok(None) };
+
+        let (width, height) = (frame.width() as usize, frame.height() as usize);
+        let crop = frame.crop;
+        let matrix = camera_to_srgb(&frame.color_matrices);
+        let orientation = frame.orientation;
+        let gains = match frame.white_balance {
+            Some(balance) if !frame.white_balance_applied => balance.coeffs,
+            _ => [1.0; 4],
+        };
+
+        let flashraw::RawPixelData::F32(mut mosaic) = frame.data else {
+            return Err(DecodeError::UnexpectedRawLayout);
+        };
+        // Balancing first gives the colour-difference gradients neutral greys to work on.
+        for (y, row) in mosaic.chunks_exact_mut(width).enumerate() {
+            for (x, sample) in row.iter_mut().enumerate() {
+                let channel = match &cfa {
+                    Cfa::Bayer(pattern) => pattern.0[y & 1][x & 1],
+                    Cfa::XTrans(pattern) => pattern[y % 6][x % 6],
+                };
+                *sample *= gains[channel as usize];
+            }
+        }
+
+        let output = vec![0u16; crop.width as usize * crop.height as usize * 3];
+        Ok(Some(Self {
+            recipe: TileRecipe { cfa, matrix },
+            mosaic,
+            sensor_width: width,
+            sensor_height: height,
+            crop,
+            orientation,
+            output,
+        }))
+    }
+
+    pub fn tiles(&self) -> Vec<DevelopTile> {
+        let (crop_x, crop_y) = (self.crop.x as usize, self.crop.y as usize);
+        let (crop_w, crop_h) = (self.crop.width as usize, self.crop.height as usize);
+        let mut tiles = Vec::new();
+        for y in (crop_y..crop_y + crop_h).step_by(DEMOSAIC_TILE_SIZE) {
+            for x in (crop_x..crop_x + crop_w).step_by(DEMOSAIC_TILE_SIZE) {
+                let width = DEMOSAIC_TILE_SIZE.min(crop_x + crop_w - x);
+                let height = DEMOSAIC_TILE_SIZE.min(crop_y + crop_h - y);
+                let (block_x, block_y) = (x.saturating_sub(TILE_MARGIN), y.saturating_sub(TILE_MARGIN));
+                let block_width = (x + width + TILE_MARGIN).min(self.sensor_width) - block_x;
+                let block_height = (y + height + TILE_MARGIN).min(self.sensor_height) - block_y;
+                tiles.push(DevelopTile { x, y, width, height, block_x, block_y, block_width, block_height });
+            }
+        }
+        tiles
+    }
+
+    /// The sensor samples a tile's block needs, tightly packed.
+    pub fn tile_input(&self, tile: &DevelopTile) -> Vec<f32> {
+        let mut input = Vec::with_capacity(tile.block_width * tile.block_height);
+        for row in 0..tile.block_height {
+            let start = (tile.block_y + row) * self.sensor_width + tile.block_x;
+            input.extend_from_slice(&self.mosaic[start..start + tile.block_width]);
+        }
+        input
+    }
+
+    /// Stores a finished tile: interleaved RGB half-float bits, `width * height * 3` long.
+    pub fn store_tile(&mut self, tile: &DevelopTile, rgb: &[u16]) {
+        let crop_width = self.crop.width as usize;
+        for row in 0..tile.height {
+            let source = row * tile.width * 3;
+            let target = ((tile.y - self.crop.y as usize + row) * crop_width + tile.x - self.crop.x as usize) * 3;
+            self.output[target..target + tile.width * 3].copy_from_slice(&rgb[source..source + tile.width * 3]);
+        }
+    }
+
+    pub fn finish(self) -> LinearImage {
+        orient(LinearImage::new(self.crop.width, self.crop.height, self.output), self.orientation)
+    }
+}
+
+/// Develops one tile from its block of sensor samples. Runs without the job, so it can
+/// be sent to another thread.
+pub fn process_tile(input: &[f32], tile: &DevelopTile, recipe: &TileRecipe) -> Vec<u16> {
+    let (width, height) = (tile.block_width, tile.block_height);
+    let [red, green, blue] = demosaic_block(input, width, height, &recipe.cfa, (tile.block_x, tile.block_y));
+    let mut out = Vec::with_capacity(tile.width * tile.height * 3);
+    for y in 0..tile.height {
+        let row = (tile.y - tile.block_y + y) * width + tile.x - tile.block_x;
+        for x in 0..tile.width {
+            // Clipping here lets saturated photosites render as white, not tinted.
+            let [r, g, b] = [red[row + x], green[row + x], blue[row + x]].map(|v| v.clamp(0.0, 1.0));
+            for matrix_row in recipe.matrix {
+                out.push(f16::from_f32(matrix_row[0] * r + matrix_row[1] * g + matrix_row[2] * b).to_bits());
+            }
+        }
+    }
+    out
 }
 
 /// Decoder-developed linear RGB, oriented for display.
@@ -124,8 +260,9 @@ pub fn decode_linear(raw: &FlashRaw<'_>, demosaic: Demosaic) -> Result<LinearIma
     Ok(orient(LinearImage::new(width, height, pixels), orientation))
 }
 
-fn bayer_pattern(frame: &RawFrame) -> Option<BayerPattern> {
-    if !frame.cfa?.is_bayer() || frame.cpp != 1 {
+fn cfa_of(frame: &RawFrame) -> Option<Cfa> {
+    let pattern = frame.cfa?;
+    if frame.cpp != 1 {
         return None;
     }
     let channel = |x: u32, y: u32| match frame.color_at(x, y) {
@@ -134,43 +271,19 @@ fn bayer_pattern(frame: &RawFrame) -> Option<BayerPattern> {
         Some(CfaColor::Blue) => Some(2),
         _ => None,
     };
-    Some(BayerPattern([[channel(0, 0)?, channel(1, 0)?], [channel(0, 1)?, channel(1, 1)?]]))
-}
-
-fn develop_bayer(frame: RawFrame, pattern: BayerPattern) -> Result<LinearImage, DecodeError> {
-    let (width, height) = (frame.width() as usize, frame.height() as usize);
-    let crop = frame.crop;
-    let matrix = camera_to_srgb(&frame.color_matrices);
-    let orientation = frame.orientation;
-    let gains = match frame.white_balance {
-        Some(balance) if !frame.white_balance_applied => balance.coeffs,
-        _ => [1.0; 4],
-    };
-
-    let flashraw::RawPixelData::F32(mut mosaic) = frame.data else {
-        return Err(DecodeError::UnexpectedRawLayout);
-    };
-    // Balancing first gives the colour-difference gradients neutral greys to work on.
-    for (y, row) in mosaic.chunks_exact_mut(width).enumerate() {
-        let phase = pattern.0[y & 1];
-        for (x, sample) in row.iter_mut().enumerate() {
-            *sample *= gains[phase[x & 1] as usize];
-        }
+    if pattern.is_bayer() {
+        return Some(Cfa::Bayer(BayerPattern([[channel(0, 0)?, channel(1, 0)?], [channel(0, 1)?, channel(1, 1)?]])));
     }
-
-    let window = (crop.x as usize, crop.y as usize, crop.width as usize, crop.height as usize);
-    let rgb = demosaic(&mosaic, width, height, pattern, window, DEMOSAIC_TILE_SIZE);
-    drop(mosaic);
-
-    let mut pixels = Vec::with_capacity(rgb.len());
-    for px in rgb.chunks_exact(3) {
-        // Clipping here lets saturated photosites render as white, not tinted.
-        let [r, g, b] = [px[0].clamp(0.0, 1.0), px[1].clamp(0.0, 1.0), px[2].clamp(0.0, 1.0)];
-        for row in matrix {
-            pixels.push(f16::from_f32(row[0] * r + row[1] * g + row[2] * b).to_bits());
+    if pattern.width() == 6 && pattern.height() == 6 {
+        let mut cells = [[0u8; 6]; 6];
+        for (y, row) in cells.iter_mut().enumerate() {
+            for (x, cell) in row.iter_mut().enumerate() {
+                *cell = channel(x as u32, y as u32)?;
+            }
         }
+        return Some(Cfa::XTrans(cells));
     }
-    Ok(orient(LinearImage::new(crop.width, crop.height, pixels), orientation))
+    None
 }
 
 fn matrix_product(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {

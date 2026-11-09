@@ -2,8 +2,8 @@
 //! not call a method while an async one is still pending.
 
 use op_core::{
-    Adjustments, Geometry, HealSpot, LinearImage, ToneCurve, WarpField, WarpStroke, apply_heals, export_exif,
-    find_heal_source,
+    Adjustments, DevelopJob, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_heals,
+    export_exif, find_heal_source,
 };
 use op_gpu::{Renderer, encode_jpeg};
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,17 @@ pub struct Engine {
     warp: Option<WarpField>,
     curve: ToneCurve,
     source_exif: Option<Vec<u8>>,
+    job: Option<DevelopJob>,
+    job_tiles: Vec<op_core::decode::DevelopTile>,
+    developed: Option<LinearImage>,
+}
+
+/// Develops one tile on a worker thread. See `DevelopJob`.
+#[wasm_bindgen]
+pub fn process_develop_tile(input: &[f32], tile_json: &str, recipe_json: &str) -> Result<Vec<u16>, JsError> {
+    let tile = serde_json::from_str(tile_json).map_err(js_error)?;
+    let recipe: TileRecipe = serde_json::from_str(recipe_json).map_err(js_error)?;
+    Ok(op_core::process_tile(input, &tile, &recipe))
 }
 
 #[wasm_bindgen]
@@ -117,6 +128,9 @@ impl Engine {
             warp: None,
             curve: ToneCurve::default(),
             source_exif: None,
+            job: None,
+            job_tiles: Vec::new(),
+            developed: None,
         })
     }
 
@@ -341,12 +355,42 @@ impl Engine {
         serde_json::to_string(&ProxyInfo { width, height }).map_err(js_error)
     }
 
+    /// Starts developing the open RAW at full quality. Returns JSON with the recipe and
+    /// tiles for `process_develop_tile`, or `null` if there is nothing to split up.
+    pub fn begin_raw_develop(&mut self) -> Result<String, JsError> {
+        let Some(file) = &self.raw_file else { return Ok("null".into()) };
+        let Some(job) = DevelopJob::start(file).map_err(js_error)? else { return Ok("null".into()) };
+        self.job_tiles = job.tiles();
+        let plan = serde_json::json!({ "recipe": job.recipe, "tiles": self.job_tiles });
+        self.job = Some(job);
+        Ok(plan.to_string())
+    }
+
+    /// The sensor samples for a tile of the job in progress.
+    pub fn raw_tile_input(&self, index: usize) -> Result<Vec<f32>, JsError> {
+        let job = self.job.as_ref().ok_or_else(|| JsError::new("no develop in progress"))?;
+        Ok(job.tile_input(&self.job_tiles[index]))
+    }
+
+    pub fn store_raw_tile(&mut self, index: usize, rgb: &[u16]) -> Result<(), JsError> {
+        let job = self.job.as_mut().ok_or_else(|| JsError::new("no develop in progress"))?;
+        job.store_tile(&self.job_tiles[index], rgb);
+        Ok(())
+    }
+
+    pub fn finish_raw_develop(&mut self) -> Result<(), JsError> {
+        let job = self.job.take().ok_or_else(|| JsError::new("no develop in progress"))?;
+        self.developed = Some(job.finish());
+        Ok(())
+    }
+
     /// Develops the full-resolution image and returns JPEG bytes.
     pub async fn export_jpeg(&mut self, quality: u8) -> Result<Vec<u8>, JsError> {
-        let mut developed = match &self.raw_file {
-            Some(file) => Some(op_core::develop_raw_full(file).map_err(js_error)?),
-            None if !self.heals.is_empty() => self.working.clone(),
-            None => None,
+        let mut developed = match (self.developed.take(), &self.raw_file) {
+            (Some(image), _) => Some(image),
+            (None, Some(file)) => Some(op_core::develop_raw_full(file).map_err(js_error)?),
+            (None, None) if !self.heals.is_empty() => self.working.clone(),
+            (None, None) => None,
         };
         if let Some(image) = &mut developed {
             apply_heals(image, &self.heals);
