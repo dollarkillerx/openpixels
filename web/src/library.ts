@@ -46,6 +46,13 @@ export function engineJson(adjustments: Adjustments): string {
     curve: ["M", "R", "G", "B"].map((channel) => [0, 1, 2, 3, 4].map((i) => adjustments[`curve${channel}${i}`] ?? 0)),
     lensManual: [adjustments.lensDistortion ?? 0, adjustments.lensVignette ?? 0, adjustments.lensCaRed ?? 0, adjustments.lensCaBlue ?? 0],
     perspective: [adjustments.perspectiveV ?? 0, adjustments.perspectiveH ?? 0],
+    replaceBackground: adjustments.backgroundAsset ? (adjustments.backgroundAmount ?? 1) : 0,
+    replaceBackgroundExposure: adjustments.backgroundFillExposure ?? 0,
+    replaceBackgroundShift: adjustments.backgroundShift ?? 0,
+    replaceSky: adjustments.skyAsset ? (adjustments.skyAmount ?? 1) : 0,
+    replaceSkyExposure: adjustments.skyFillExposure ?? 0,
+    replaceSkyShift: adjustments.skyShift ?? 0,
+    replaceSkyRelight: adjustments.skyRelight ?? 0,
     localRange: [0, 1, 2, 3].map((layer) => {
       const value = (name: string, fallback: number) => adjustments[`local${layer}Range${name}`] ?? fallback;
       const mode = value("Mode", 0);
@@ -129,6 +136,37 @@ export function saveRating(id: string, rating: number) {
 }
 
 /** 1 for a picked photo, -1 for a rejected one. */
+const LABELS_KEY = "openpixels.labels.v1";
+const SNAPSHOTS_KEY = "openpixels.snapshots.v1";
+const OUTPUT_PRESETS_KEY = "openpixels.outputPresets.v1";
+
+/** A colour label's index into `COLOR_LABELS`, plus one. */
+export const loadLabels = (): Record<string, number> => read<Record<string, number>>(LABELS_KEY, {});
+
+export function saveLabel(id: string, label: number) {
+  const all = loadLabels();
+  if (label !== 0) all[id] = label;
+  else delete all[id];
+  write(LABELS_KEY, all);
+}
+
+export interface Snapshot {
+  name: string;
+  edit: Adjustments;
+}
+
+export const loadSnapshots = (id: string): Snapshot[] => read<Record<string, Snapshot[]>>(SNAPSHOTS_KEY, {})[id] ?? [];
+
+export function saveSnapshots(id: string, snapshots: Snapshot[]) {
+  const all = read<Record<string, Snapshot[]>>(SNAPSHOTS_KEY, {});
+  if (snapshots.length > 0) all[id] = snapshots;
+  else delete all[id];
+  write(SNAPSHOTS_KEY, all);
+}
+
+export const loadOutputPresets = (): Record<string, OutputSettings> => read<Record<string, OutputSettings>>(OUTPUT_PRESETS_KEY, {});
+export const saveOutputPresets = (presets: Record<string, OutputSettings>) => write(OUTPUT_PRESETS_KEY, presets);
+
 export const loadFlags = (): Record<string, number> => read<Record<string, number>>(FLAGS_KEY, {});
 
 export function saveFlag(id: string, flag: number) {

@@ -1,3 +1,3 @@
 mod renderer;
 
-pub use renderer::{GpuError, Renderer, encode_jpeg};
+pub use renderer::{GpuError, Renderer, ViewTransform, VisibleArea, encode_jpeg};

@@ -15,8 +15,20 @@ const attributes = (element) => Object.fromEntries([...element.matchAll(/([\w-]+
 const elements = (block, tag) => [...block.matchAll(new RegExp(`<${tag}\\s[^>]*/?>`, "g"))].map((match) => attributes(match[0]));
 const numbers = (entry, names) => names.map((name) => Number(entry[name] ?? 0));
 
-/** Lower case, letters, digits and points only, so punctuation differences do not matter. */
-const normalize = (text) => text.toLowerCase().replace(/[^a-z0-9.]/g, "");
+// Must match `normalize` in web/src/lensfun.ts.
+/**
+ * What a lens is called, however a camera or database spells it: no maker's name, Sigma's
+ * product lines as one letter, no model code, and only letters, digits and points.
+ */
+const normalize = (text) =>
+  text
+    .toLowerCase()
+    .replace(/\b(sigma|tamron|tokina|samyang|rokinon|viltrox|canon|nikon|sony|fujifilm|fujinon|panasonic|olympus)\b/g, "")
+    .replace(/[|[(]\s*(a|art)\s*\d*\s*[\])]?\s*$/g, "a")
+    .replace(/[|[(]\s*(c|contemporary)\s*\d*\s*[\])]?\s*$/g, "c")
+    .replace(/[|[(]\s*(s|sports)\s*\d*\s*[\])]?\s*$/g, "s")
+    .replace(/\(?\b[a-z]\d{3}\)?\s*$/g, "")
+    .replace(/[^a-z0-9.]/g, "");
 
 const DISTORTION_PARAMETERS = { ptlens: ["a", "b", "c"], poly3: ["k1"], poly5: ["k1", "k2"] };
 const TCA_PARAMETERS = { linear: ["kr", "kb"], poly3: ["vr", "vb", "cr", "cb", "br", "bb"] };
@@ -57,6 +69,7 @@ for (const file of readdirSync(source).filter((name) => name.endsWith(".xml")).s
       for (const maker of makers) names.add(normalize(`${maker} ${model}`));
     }
     lenses.push({
+      maker: makers[0] ?? "",
       names: [...names],
       crop: number(block, "cropfactor", 1),
       aspect: number(block, "aspect-ratio", 1.5),

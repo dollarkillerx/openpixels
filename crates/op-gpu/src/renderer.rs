@@ -51,6 +51,7 @@ struct Region {
     _padding: [f32; 2],
     camera: [[f32; 4]; 3],
     airlight: [f32; 4],
+    sky_tint: [f32; 4],
 }
 
 #[repr(C)]
@@ -66,6 +67,62 @@ struct BlitParams {
     distortion: [f32; 4],
     chroma: [f32; 4],
     perspective: [f32; 4],
+    view: [f32; 4],
+    detail_rect: [f32; 4],
+    flags: [f32; 4],
+}
+
+/// How the framed image is shown: `zoom` times its fitted size, around `center` (0..=1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewTransform {
+    pub zoom: f32,
+    pub center: [f32; 2],
+}
+
+impl Default for ViewTransform {
+    fn default() -> Self {
+        Self { zoom: 1.0, center: [0.5; 2] }
+    }
+}
+
+/// The part of the framed image on the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisibleArea {
+    /// Half size on the canvas in clip space: 1 fills that axis.
+    pub quad: [f32; 2],
+    /// First visible s and t.
+    pub start: [f32; 2],
+    /// Visible span of s and t.
+    pub span: [f32; 2],
+}
+
+impl VisibleArea {
+    /// What a fitted image of clip-space half size `fit` shows at `view`. An axis that
+    /// does not fill the canvas stays centred; one that overflows is panned.
+    pub fn new(fit: [f32; 2], view: ViewTransform) -> Self {
+        let axis = |index: usize| {
+            let zoomed = fit[index] * view.zoom;
+            if zoomed <= 1.0 {
+                return (zoomed, 0.0, 1.0);
+            }
+            let span = 1.0 / zoomed;
+            (1.0, (view.center[index] - span / 2.0).clamp(0.0, 1.0 - span), span)
+        };
+        let (x, y) = (axis(0), axis(1));
+        Self { quad: [x.0, y.0], start: [x.1, y.1], span: [x.2, y.2] }
+    }
+}
+
+/// A region of the full-resolution image, developed alongside the proxy.
+struct Detail {
+    /// x, y, width and height in pixels of the image.
+    region: [u32; 4],
+    full_size: [u32; 2],
+    source_view: wgpu::TextureView,
+    source_offset: [u32; 2],
+    source_size: [u32; 2],
+    output_view: wgpu::TextureView,
+    develop: wgpu::BindGroup,
 }
 
 struct Preview {
@@ -77,6 +134,7 @@ struct Preview {
     before_view: wgpu::TextureView,
     before_ready: bool,
     warp: wgpu::Texture,
+    warp_view: wgpu::TextureView,
     develop: wgpu::BindGroup,
     blit: wgpu::BindGroup,
 }
@@ -106,8 +164,14 @@ pub struct Renderer {
     curve_texture: wgpu::Texture,
     curve_view: wgpu::TextureView,
     look_view: wgpu::TextureView,
-    replace_view: wgpu::TextureView,
+    background_image_view: wgpu::TextureView,
+    sky_image_view: wgpu::TextureView,
     sky_mask_view: wgpu::TextureView,
+    sky_tint: [f32; 3],
+    view: ViewTransform,
+    clip_warnings: [bool; 2],
+    detail: Option<Detail>,
+    no_detail_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     lens_profile: Option<LensProfile>,
     camera_matrix: Option<[[f32; 3]; 3]>,
@@ -132,6 +196,7 @@ impl Renderer {
                 uniform_entry(2, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 texture_entry(3, wgpu::ShaderStages::FRAGMENT, true),
                 texture_entry(4, wgpu::ShaderStages::FRAGMENT, true),
+                texture_entry(5, wgpu::ShaderStages::FRAGMENT, true),
             ],
         });
         let blit_pipeline_layout =
@@ -193,8 +258,10 @@ impl Renderer {
         });
         let curve_view = curve_texture.create_view(&Default::default());
         let look_view = create_look_view(&device, &queue, 2, &IDENTITY_LOOK);
-        let replace_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
+        let background_image_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
+        let sky_image_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
         let sky_mask_view = create_mask_view(&device, &queue, 1, 1, &[0]);
+        let no_detail_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
 
         Self {
             device,
@@ -218,8 +285,14 @@ impl Renderer {
             curve_texture,
             curve_view,
             look_view,
-            replace_view,
+            background_image_view,
+            sky_image_view,
             sky_mask_view,
+            sky_tint: [1.0; 3],
+            view: ViewTransform::default(),
+            clip_warnings: [false; 2],
+            detail: None,
+            no_detail_view,
             base_exposure: None,
             lens_profile: None,
             camera_matrix: None,
@@ -251,9 +324,16 @@ impl Renderer {
 
     /// Sets the subject mask for the current image. `mask` holds `width * height`
     /// bytes covering the whole image, at any resolution.
-    /// Sets the image that replaces the background or sky, straight sRGB RGBA8.
-    pub fn set_replace_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
-        self.replace_view = create_replace_view(&self.device, &self.queue, width, height, rgba);
+    /// Sets the image that replaces the background, straight sRGB RGBA8.
+    pub fn set_background_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.background_image_view = create_replace_view(&self.device, &self.queue, width, height, rgba);
+        self.rebuild_preview_bindings();
+    }
+
+    /// Sets the image that replaces the sky, straight sRGB RGBA8.
+    pub fn set_sky_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.sky_image_view = create_replace_view(&self.device, &self.queue, width, height, rgba);
+        self.sky_tint = neutral_tint(rgba);
         self.rebuild_preview_bindings();
     }
 
@@ -308,12 +388,13 @@ impl Renderer {
     ) -> Option<(f32, f32)> {
         let preview = self.preview.as_ref()?;
         let size = (preview.width, preview.height);
-        let scale = letterbox(geometry.output_size(size.0, size.1), target_size);
-        let s = (canvas_x - 0.5) / scale[0] + 0.5;
-        let t = (canvas_y - 0.5) / scale[1] + 0.5;
-        if !(0.0..=1.0).contains(&s) || !(0.0..=1.0).contains(&t) {
+        let area = VisibleArea::new(letterbox(geometry.output_size(size.0, size.1), target_size), self.view);
+        let on_quad = |position: f32, axis: usize| (position - 0.5) / area.quad[axis] + 0.5;
+        let (across, down) = (on_quad(canvas_x, 0), on_quad(canvas_y, 1));
+        if !(0.0..=1.0).contains(&across) || !(0.0..=1.0).contains(&down) {
             return None;
         }
+        let (s, t) = (area.start[0] + across * area.span[0], area.start[1] + down * area.span[1]);
         let map = geometry.uv_map(size.0, size.1);
         let u = map.origin[0] + s * map.axis_s[0] + t * map.axis_t[0];
         let v = map.origin[1] + s * map.axis_s[1] + t * map.axis_t[1];
@@ -363,6 +444,105 @@ impl Renderer {
             let develop = self.develop_bind_group(&preview.source_view, &preview.output_view);
             self.preview.as_mut().expect("checked above").develop = develop;
         }
+        if let Some(detail) = &self.detail {
+            let develop = self.develop_bind_group(&detail.source_view, &detail.output_view);
+            self.detail.as_mut().expect("checked above").develop = develop;
+        }
+    }
+
+    fn blit_bind_group(
+        &self,
+        output: &wgpu::TextureView,
+        warp: &wgpu::TextureView,
+        before: &wgpu::TextureView,
+        detail: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        let texture = |binding, view| wgpu::BindGroupEntry { binding, resource: wgpu::BindingResource::TextureView(view) };
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit"),
+            layout: &self.blit_layout,
+            entries: &[
+                texture(0, output),
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blit_buffer.as_entire_binding() },
+                texture(3, warp),
+                texture(4, before),
+                texture(5, detail),
+            ],
+        })
+    }
+
+    fn rebuild_blit(&mut self) {
+        let Some(preview) = &self.preview else { return };
+        let detail = self.detail.as_ref().map_or(&self.no_detail_view, |detail| &detail.output_view);
+        let blit = self.blit_bind_group(&preview.output_view, &preview.warp_view, &preview.before_view, detail);
+        self.preview.as_mut().expect("checked above").blit = blit;
+    }
+
+    pub fn set_view(&mut self, view: ViewTransform) {
+        self.view = view;
+    }
+
+    pub fn view(&self) -> ViewTransform {
+        self.view
+    }
+
+    /// Marks clipped highlights and shadows on the canvas.
+    pub fn set_clip_warnings(&mut self, highlights: bool, shadows: bool) {
+        self.clip_warnings = [highlights, shadows];
+    }
+
+    /// The part of the framed image on a canvas of the given size.
+    pub fn visible_area(&self, geometry: &Geometry, target_size: (u32, u32)) -> Option<VisibleArea> {
+        let preview = self.preview.as_ref()?;
+        Some(VisibleArea::new(letterbox(geometry.output_size(preview.width, preview.height), target_size), self.view))
+    }
+
+    pub fn preview_size(&self) -> Option<(u32, u32)> {
+        self.preview.as_ref().map(|preview| (preview.width, preview.height))
+    }
+
+    /// Whether the full-resolution layer covers a rectangle of source UV.
+    pub fn detail_covers(&self, min: [f32; 2], max: [f32; 2]) -> bool {
+        self.detail.as_ref().is_some_and(|detail| {
+            let [x, y, w, h] = detail.region.map(|value| value as f32);
+            let (full_w, full_h) = (detail.full_size[0] as f32, detail.full_size[1] as f32);
+            min[0] >= x / full_w && min[1] >= y / full_h && max[0] <= (x + w) / full_w && max[1] <= (y + h) / full_h
+        })
+    }
+
+    pub fn has_detail(&self) -> bool {
+        self.detail.is_some()
+    }
+
+    pub fn clear_detail(&mut self) {
+        if self.detail.take().is_some() {
+            self.rebuild_blit();
+        }
+    }
+
+    /// Prepares a region of the full-resolution image to be developed with each frame.
+    pub fn set_detail(&mut self, image: &LinearImage, region: [u32; 4]) {
+        let [x, y, w, h] = region;
+        let (source_x, source_y) = (x.saturating_sub(TILE_MARGIN), y.saturating_sub(TILE_MARGIN));
+        let source_w = (x + w + TILE_MARGIN).min(image.width) - source_x;
+        let source_h = (y + h + TILE_MARGIN).min(image.height) - source_y;
+        let source = self.create_source_texture(source_w, source_h);
+        self.upload_source(&source, &image.rgba_region(source_x, source_y, source_w, source_h), source_w, source_h);
+        let output = self.create_output_texture(w, h);
+        let source_view = source.create_view(&Default::default());
+        let output_view = output.create_view(&Default::default());
+        let develop = self.develop_bind_group(&source_view, &output_view);
+        self.detail = Some(Detail {
+            region,
+            full_size: [image.width, image.height],
+            source_view,
+            source_offset: [x - source_x, y - source_y],
+            source_size: [source_w, source_h],
+            output_view,
+            develop,
+        });
+        self.rebuild_blit();
     }
 
     /// Uploads `proxy` as the image shown by [`Self::draw_preview`] and clears any
@@ -403,34 +583,10 @@ impl Renderer {
         });
         self.write_warp(&warp, &empty_field);
         let warp_view = warp.create_view(&Default::default());
-        let blit = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit"),
-            layout: &self.blit_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.blit_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&warp_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&before_view),
-                },
-            ],
-        });
+        let blit = self.blit_bind_group(&output_view, &warp_view, &before_view, &self.no_detail_view);
+        self.detail = None;
         self.preview =
-            Some(Preview { width, height, source, source_view, output_view, before_view, before_ready: false, warp, develop, blit });
+            Some(Preview { width, height, source, source_view, output_view, before_view, before_ready: false, warp, warp_view, develop, blit });
     }
 
     /// Whether the comparison image has been developed for the current proxy.
@@ -470,11 +626,16 @@ impl Renderer {
         let preview = self.preview.as_ref().ok_or(GpuError::NoImage)?;
         let (width, height) = (preview.width as f32, preview.height as f32);
         self.write_params(adjustments, [width, height], [0.0; 2], [width, height], [0.0; 2], [width, height]);
-        let scale = letterbox(geometry.output_size(preview.width, preview.height), target_size);
+        let area = VisibleArea::new(letterbox(geometry.output_size(preview.width, preview.height), target_size), self.view);
         let map = geometry.uv_map(preview.width, preview.height);
         let lens = self.lens_map(adjustments, preview.width, preview.height);
+        let detail_rect = self.detail.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |detail| {
+            let [x, y, w, h] = detail.region.map(|value| value as f32);
+            let (full_w, full_h) = (detail.full_size[0] as f32, detail.full_size[1] as f32);
+            [x / full_w, y / full_h, (x + w) / full_w, (y + h) / full_h]
+        });
         let blit = BlitParams {
-            scale,
+            scale: area.quad,
             uv_origin: map.origin,
             uv_axis_s: map.axis_s,
             uv_axis_t: map.axis_t,
@@ -483,12 +644,35 @@ impl Renderer {
             compare,
             distortion: lens.distortion,
             chroma: lens.chroma,
-            perspective: [lens.perspective[0], lens.perspective[1], 0.0, 0.0],
+            perspective: [lens.perspective[0], lens.perspective[1], f32::from(lens.keep_whole), 0.0],
+            view: [area.start[0], area.start[1], area.span[0], area.span[1]],
+            detail_rect,
+            flags: [
+                f32::from(self.detail.is_some()),
+                f32::from(self.clip_warnings[0]),
+                f32::from(self.clip_warnings[1]),
+                0.0,
+            ],
         };
         self.queue.write_buffer(&self.blit_buffer, 0, bytes_of(&blit));
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.dispatch(&mut encoder, &preview.develop, preview.width, preview.height);
+        if let Some(detail) = &self.detail {
+            // The two passes need different parameters, so they cannot share a submission.
+            self.queue.submit([encoder.finish()]);
+            let [x, y, w, h] = detail.region;
+            self.write_params(
+                adjustments,
+                detail.full_size.map(|value| value as f32),
+                [x as f32, y as f32],
+                [w as f32, h as f32],
+                detail.source_offset.map(|value| value as f32),
+                detail.source_size.map(|value| value as f32),
+            );
+            encoder = self.device.create_command_encoder(&Default::default());
+            self.dispatch(&mut encoder, &detail.develop, w, h);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("blit"),
@@ -781,7 +965,11 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 14,
-                    resource: wgpu::BindingResource::TextureView(&self.replace_view),
+                    resource: wgpu::BindingResource::TextureView(&self.background_image_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: wgpu::BindingResource::TextureView(&self.sky_image_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 15,
@@ -815,6 +1003,7 @@ impl Renderer {
             _padding: [0.0; 2],
             camera: self.camera_rows(adjustments.camera_profile),
             airlight: [self.airlight[0], self.airlight[1], self.airlight[2], 0.0],
+            sky_tint: [self.sky_tint[0], self.sky_tint[1], self.sky_tint[2], 0.0],
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
     }
@@ -928,6 +1117,7 @@ fn develop_pass(device: &wgpu::Device, format: wgpu::TextureFormat, shader: &str
             texture_entry(13, wgpu::ShaderStages::COMPUTE, true),
             texture_entry(14, wgpu::ShaderStages::COMPUTE, true),
             texture_entry(15, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(16, wgpu::ShaderStages::COMPUTE, true),
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -961,6 +1151,27 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8, exif: Optio
         jpeg_encoder::ColorType::Rgb,
     )?;
     Ok(out)
+}
+
+/// An image's mean colour in linear light, with its luminance divided out and its strength
+/// limited, so relighting moves the colour of a photo but never its exposure.
+fn neutral_tint(rgba: &[u8]) -> [f32; 3] {
+    const LIMITS: (f32, f32) = (0.6, 1.5);
+    let linear = |byte: u8| {
+        let c = f32::from(byte) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let mut total = [0.0f32; 3];
+    for pixel in rgba.chunks_exact(4) {
+        for channel in 0..3 {
+            total[channel] += linear(pixel[channel]);
+        }
+    }
+    let luma = 0.2126 * total[0] + 0.7152 * total[1] + 0.0722 * total[2];
+    if luma <= 0.0 {
+        return [1.0; 3];
+    }
+    total.map(|value| (value / luma).clamp(LIMITS.0, LIMITS.1))
 }
 
 fn create_replace_view(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8]) -> wgpu::TextureView {
@@ -1329,9 +1540,9 @@ mod tests {
     fn replacing_the_background_keeps_the_subject_and_fills_the_rest() {
         let mut renderer = renderer();
         renderer.set_mask(2, 1, &[255, 0]);
-        renderer.set_replace_image(1, 1, &[188, 188, 188, 255]);
+        renderer.set_background_image(1, 1, &[188, 188, 188, 255]);
         let image = flat_gray(64, 16);
-        let adj = Adjustments { replace_mode: 1.0, replace_amount: 1.0, ..Default::default() };
+        let adj = Adjustments { replace_background: 1.0, ..Default::default() };
         let out = export(&renderer, &image, &adj, 64);
         let at = |x: usize| out[(8 * 64 + x) * 3];
         assert_eq!(at(60), 188, "background");
@@ -1342,14 +1553,43 @@ mod tests {
     fn replacing_the_sky_follows_its_own_mask_and_keeps_tiles_identical() {
         let mut renderer = renderer();
         renderer.set_sky_mask(1, 2, &[255, 0]);
-        renderer.set_replace_image(2, 2, &[230, 40, 40, 255, 40, 40, 230, 255, 230, 40, 40, 255, 40, 40, 230, 255]);
+        renderer.set_sky_image(2, 2, &[230, 40, 40, 255, 40, 40, 230, 255, 230, 40, 40, 255, 40, 40, 230, 255]);
         let image = flat_gray(64, 64);
-        let adj = Adjustments { replace_mode: 2.0, replace_amount: 1.0, ..Default::default() };
+        let adj = Adjustments { replace_sky: 1.0, ..Default::default() };
         let out = export(&renderer, &image, &adj, 512);
         let plain = export(&renderer, &image, &Adjustments::default(), 512);
         assert!(out[(2 * 64 + 4) * 3].abs_diff(230) <= 8, "sky takes the replacement");
         assert_eq!(out[(61 * 64 + 4) * 3], plain[(61 * 64 + 4) * 3], "the ground is untouched");
         assert_eq!(out, export(&renderer, &image, &adj, 16));
+    }
+
+    #[test]
+    fn the_sky_and_background_can_be_replaced_together() {
+        let mut renderer = renderer();
+        renderer.set_mask(2, 1, &[255, 0]);
+        renderer.set_sky_mask(1, 2, &[255, 0]);
+        renderer.set_background_image(1, 1, &[60, 60, 60, 255]);
+        renderer.set_sky_image(1, 1, &[220, 220, 220, 255]);
+        let image = flat_gray(64, 64);
+        let adj = Adjustments { replace_background: 1.0, replace_sky: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        assert!(out[(4 * 64 + 60) * 3].abs_diff(220) <= 3, "background side of the sky");
+        assert!(out[(60 * 64 + 60) * 3].abs_diff(60) <= 3, "background below the sky");
+        assert_eq!(out[(60 * 64 + 2) * 3], plain[(60 * 64 + 2) * 3], "the subject");
+    }
+
+    #[test]
+    fn relighting_shifts_the_ground_towards_the_sky_without_changing_its_brightness() {
+        let mut renderer = renderer();
+        renderer.set_sky_mask(1, 2, &[255, 0]);
+        renderer.set_sky_image(1, 1, &[255, 150, 90, 255]);
+        let image = flat_gray(32, 32);
+        let adj = Adjustments { replace_sky: 1.0, replace_sky_relight: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let at = (30 * 32 + 8) * 3;
+        assert!(out[at] > plain[at] && out[at + 2] < plain[at + 2], "warmer: {:?} against {:?}", &out[at..at + 3], &plain[at..at + 3]);
     }
 
     #[test]
@@ -1361,9 +1601,9 @@ mod tests {
         for x in 0..4 {
             rgba.extend(if x == 1 || x == 2 { [200, 200, 200, 255] } else { [20, 20, 20, 255] });
         }
-        renderer.set_replace_image(4, 1, &rgba);
+        renderer.set_background_image(4, 1, &rgba);
         let image = flat_gray(32, 32);
-        let adj = Adjustments { replace_mode: 1.0, replace_amount: 1.0, ..Default::default() };
+        let adj = Adjustments { replace_background: 1.0, ..Default::default() };
         let out = export(&renderer, &image, &adj, 64);
         assert!(out[(16 * 32 + 2) * 3] > 150 && out[(16 * 32 + 29) * 3] > 150, "only the middle shows");
     }
@@ -1784,6 +2024,32 @@ mod tests {
         let out = export(&renderer, &image, &adj, 64);
         assert!(out[0] > plain[0] + 20, "red {} -> {}", plain[0], out[0]);
         assert_eq!(&out[3..6], &plain[3..6], "blue is outside the hue range");
+    }
+
+    #[test]
+    fn a_small_zoom_stays_centred_and_a_large_one_pans() {
+        let fit = VisibleArea::new([0.5, 1.0], ViewTransform::default());
+        assert_eq!(fit, VisibleArea { quad: [0.5, 1.0], start: [0.0, 0.0], span: [1.0, 1.0] });
+
+        // The width just fills the canvas; the height overflows it and shows half.
+        let zoomed = VisibleArea::new([0.5, 1.0], ViewTransform { zoom: 2.0, center: [0.5, 0.25] });
+        assert_eq!(zoomed, VisibleArea { quad: [1.0, 1.0], start: [0.0, 0.0], span: [1.0, 0.5] });
+
+        // Panning stops at the edge of the image.
+        let edge = VisibleArea::new([1.0, 1.0], ViewTransform { zoom: 4.0, center: [1.0, 0.0] });
+        assert_eq!(edge.start, [0.75, 0.0]);
+        assert_eq!(edge.span, [0.25, 0.25]);
+    }
+
+    #[test]
+    fn clicks_map_through_the_zoomed_view() {
+        let mut renderer = renderer();
+        renderer.set_preview(&flat_gray(200, 200));
+        renderer.set_view(ViewTransform { zoom: 4.0, center: [0.75, 0.25] });
+        let (u, v) = renderer.canvas_to_image(&Geometry::default(), (200, 200), 0.5, 0.5).unwrap();
+        assert!((u - 0.75).abs() < 1e-4 && (v - 0.25).abs() < 1e-4, "{u}, {v}");
+        let (u, v) = renderer.canvas_to_image(&Geometry::default(), (200, 200), 0.0, 1.0).unwrap();
+        assert!((u - 0.625).abs() < 1e-4 && (v - 0.375).abs() < 1e-4, "{u}, {v}");
     }
 
     #[test]

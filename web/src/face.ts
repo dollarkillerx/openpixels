@@ -1,4 +1,4 @@
-import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { FaceLandmarker, FilesetResolver, type Category, type FaceLandmarkerResult, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import type { FaceFinding } from "./analysis";
 import type { Thumbnail } from "./protocol";
 
@@ -21,6 +21,8 @@ const TILE_SIZE = 512;
 const TILE_STRIDE = 256;
 const TILE_CONFIDENCE = 0.8;
 const DEFAULT_CONFIDENCE = 0.5;
+/** Canvas sizes for retrying an extreme close-up, relative to its long edge. */
+const CLOSE_UP_PADDINGS = [2, 3.5];
 /** Assumed face size when none is found, as a fraction of the short edge. */
 const CLOSE_UP_FACE_FRACTION = 0.7;
 
@@ -137,7 +139,45 @@ function centerOf(landmarks: NormalizedLandmark[]): Point {
  * The detector shrinks its input to a small square, so a face in a full-length or
  * group shot is too few pixels to see. Searching overlapping windows keeps them large.
  */
-async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promise<NormalizedLandmark[][]> {
+interface Detected {
+  landmarks: NormalizedLandmark[];
+  shapes: Category[];
+}
+
+function collect(result: FaceLandmarkerResult): Detected[] {
+  return result.faceLandmarks.map((landmarks, index) => ({ landmarks, shapes: result.faceBlendshapes[index]?.categories ?? [] }));
+}
+
+/** A face filling the frame is too big for the detector, so give it room around it. */
+function detectPadded(detector: FaceLandmarker, image: ImageData, padding: number): Detected[] {
+  const size = Math.round(Math.max(image.width, image.height) * padding);
+  const [left, top] = [Math.round((size - image.width) / 2), Math.round((size - image.height) / 2)];
+  const source = new OffscreenCanvas(image.width, image.height);
+  source.getContext("2d")!.putImageData(image, 0, 0);
+  const canvas = new OffscreenCanvas(size, size);
+  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  context.fillStyle = "#808080";
+  context.fillRect(0, 0, size, size);
+  context.drawImage(source, left, top);
+  return collect(detector.detect(context.getImageData(0, 0, size, size))).map(({ landmarks, shapes }) => ({
+    landmarks: landmarks.map((point) => ({ ...point, x: (point.x * size - left) / image.width, y: (point.y * size - top) / image.height })),
+    shapes,
+  }));
+}
+
+/** Faces of any size: as they are, then extreme close-ups, then ones too small to see whole. */
+async function detectFaces(detector: FaceLandmarker, thumbnail: Thumbnail, detailed: () => Promise<Thumbnail>): Promise<Detected[]> {
+  const image = toImageData(thumbnail);
+  const whole = collect(detector.detect(image));
+  if (whole.length > 0) return whole;
+  for (const padding of CLOSE_UP_PADDINGS) {
+    const padded = detectPadded(detector, image, padding);
+    if (padded.length > 0) return padded;
+  }
+  return detectInTiles(detector, toImageData(await detailed()));
+}
+
+async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promise<Detected[]> {
   // Many windows mean many chances of a false match, so demand more certainty.
   await detector.setOptions({ minFaceDetectionConfidence: TILE_CONFIDENCE });
   const source = new OffscreenCanvas(image.width, image.height);
@@ -153,12 +193,12 @@ async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promis
     return positions;
   };
 
-  const found: NormalizedLandmark[][] = [];
+  const found: Detected[] = [];
   for (const top of steps(image.height)) {
     for (const left of steps(image.width)) {
       context.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
       context.drawImage(source, -left, -top);
-      for (const landmarks of detector.detect(context.getImageData(0, 0, TILE_SIZE, TILE_SIZE)).faceLandmarks) {
+      for (const { landmarks, shapes } of collect(detector.detect(context.getImageData(0, 0, TILE_SIZE, TILE_SIZE)))) {
         const mapped = landmarks.map((p) => ({
           ...p,
           x: (left + p.x * TILE_SIZE) / image.width,
@@ -167,10 +207,10 @@ async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promis
         const center = centerOf(mapped);
         // Overlapping windows see the same face more than once.
         const duplicate = found.some((other) => {
-          const c = centerOf(other);
+          const c = centerOf(other.landmarks);
           return Math.hypot((c.x - center.x) * image.width, (c.y - center.y) * image.height) < TILE_STRIDE / 2;
         });
-        if (!duplicate) found.push(mapped);
+        if (!duplicate) found.push({ landmarks: mapped, shapes });
       }
     }
   }
@@ -185,13 +225,12 @@ async function detectInTiles(detector: FaceLandmarker, image: ImageData): Promis
  * checks decide what is skin; `faces` is then 0.
  */
 /** Where the faces are in a thumbnail, and how open their eyes are. */
-export async function locateFaces(thumbnail: Thumbnail): Promise<FaceFinding[]> {
+export async function locateFaces(thumbnail: Thumbnail, detailed: () => Promise<Thumbnail>): Promise<FaceFinding[]> {
   const detector = await getLandmarker();
-  const { faceLandmarks, faceBlendshapes } = detector.detect(toImageData(thumbnail));
-  return faceLandmarks.map((landmarks, index) => {
+  return (await detectFaces(detector, thumbnail, detailed)).map(({ landmarks, shapes }) => {
     const xs = landmarks.map((point) => point.x * thumbnail.width);
     const ys = landmarks.map((point) => point.y * thumbnail.height);
-    const shape = (name: string) => faceBlendshapes[index]?.categories.find((item) => item.categoryName === name)?.score ?? 0;
+    const shape = (name: string) => shapes.find((item) => item.categoryName === name)?.score ?? 0;
     return {
       box: { left: Math.max(0, Math.min(...xs)), top: Math.max(0, Math.min(...ys)), right: Math.min(thumbnail.width, Math.max(...xs)), bottom: Math.min(thumbnail.height, Math.max(...ys)) },
       blink: Math.min(shape("eyeBlinkLeft"), shape("eyeBlinkRight")),
@@ -206,8 +245,7 @@ export async function buildSkinMask(
   proxyHeight: number,
 ): Promise<SkinMask> {
   const detector = await getLandmarker();
-  let { faceLandmarks } = detector.detect(toImageData(thumbnail));
-  if (faceLandmarks.length === 0) faceLandmarks = await detectInTiles(detector, toImageData(await detailed()));
+  const faceLandmarks = (await detectFaces(detector, thumbnail, detailed)).map((face) => face.landmarks);
   if (faceLandmarks.length === 0) {
     const everything = new Uint8Array(proxyWidth * proxyHeight).fill(255);
     return {

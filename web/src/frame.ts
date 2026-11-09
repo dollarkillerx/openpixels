@@ -39,6 +39,28 @@ export function fitBox(aspect: number, stageWidth: number, stageHeight: number):
   return { left: (stageWidth - width) / 2, top: (stageHeight - height) / 2, width, height };
 }
 
+/** How the framed image is shown: `zoom` times its fitted size, around (x, y) in 0..=1. */
+export interface View {
+  zoom: number;
+  x: number;
+  y: number;
+}
+
+export const FIT_VIEW: View = { zoom: 1, x: 0.5, y: 0.5 };
+
+/** Where a zoomed image sits on the stage. Mirrors `VisibleArea` in op-gpu. */
+export function viewBox(fit: Box, stageWidth: number, stageHeight: number, view: View): Box {
+  const place = (fitted: number, stage: number, centre: number) => {
+    const size = fitted * view.zoom;
+    if (size <= stage) return { size, start: (stage - size) / 2 };
+    const span = stage / size;
+    return { size, start: -Math.min(1 - span, Math.max(0, centre - span / 2)) * size };
+  };
+  const x = place(fit.width, stageWidth, view.x);
+  const y = place(fit.height, stageHeight, view.y);
+  return { left: x.start, top: y.start, width: x.size, height: y.size };
+}
+
 /** The largest centred crop with `ratio` (width / height, in pixels). */
 export function cropForRatio(ratio: number, frameWidth: number, frameHeight: number): Crop {
   const frameAspect = frameWidth / frameHeight;

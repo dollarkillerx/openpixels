@@ -12,6 +12,7 @@ import type {
   ErasePatch,
   ExportResult,
   FromWorker,
+  HistogramData,
   LoadResult,
   ModelInput,
   Thumbnail,
@@ -19,6 +20,9 @@ import type {
 } from "./protocol";
 
 const PROXY_LONG_EDGE = 2048;
+const HISTOGRAM_LONG_EDGE = 320;
+const HISTOGRAM_DELAY_MS = 150;
+const DETAIL_DELAY_MS = 120;
 const MAX_DEVELOP_WORKERS = 8;
 
 let engine: Engine | null = null;
@@ -47,7 +51,43 @@ let pendingAdjustments: Adjustments | null = null;
 let renderScheduled = false;
 let hasImage = false;
 
-function scheduleRender() {
+let histogramTimer: ReturnType<typeof setTimeout> | undefined;
+let detailTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Waits for edits to settle; a histogram is not worth computing for every frame of a drag. */
+function scheduleHistogram() {
+  clearTimeout(histogramTimer);
+  histogramTimer = setTimeout(() => {
+    enqueue(async () => {
+      if (!hasImage) return;
+      const rgb = await engine!.framed_thumbnail(HISTOGRAM_LONG_EDGE);
+      const channels: HistogramData["channels"] = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+      for (let at = 0; at < rgb.length; at += 3) {
+        channels[0][rgb[at]]++;
+        channels[1][rgb[at + 1]]++;
+        channels[2][rgb[at + 2]]++;
+      }
+      post({ type: "histogram", data: { channels, total: rgb.length / 3 } }, channels.map((channel) => channel.buffer));
+    });
+  }, HISTOGRAM_DELAY_MS);
+}
+
+/** Waits for the view to settle, then develops what is in it at full resolution. */
+function scheduleDetail() {
+  clearTimeout(detailTimer);
+  detailTimer = setTimeout(() => {
+    enqueue(async () => {
+      if (!hasImage || !engine!.needs_detail()) return;
+      if (!engine!.has_full_image()) await developInParallel();
+      engine!.update_detail();
+      scheduleRender(false);
+    });
+  }, DETAIL_DELAY_MS);
+}
+
+/** `edited` is false when only the view changed, which leaves the histogram as it is. */
+function scheduleRender(edited = true) {
+  if (edited && hasImage) scheduleHistogram();
   if (renderScheduled || !hasImage) return;
   renderScheduled = true;
   enqueue(async () => {
@@ -58,6 +98,7 @@ function scheduleRender() {
       pendingAdjustments = null;
     }
     await engine!.render();
+    if (engine!.needs_detail()) scheduleDetail();
     post({ type: "frame", ms: performance.now() - start });
   });
 }
@@ -182,7 +223,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
         pendingAdjustments = null;
       }
       const start = performance.now();
-      await developInParallel();
+      if (!engine!.has_full_image()) await developInParallel();
       const { format, quality, bitDepth, longEdge, watermark } = request.settings;
       const size = JSON.parse(engine!.export_size(longEdge));
       const overlay = await renderWatermark(watermark, size.width, size.height);
@@ -246,6 +287,8 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
     case "inpaintInput": {
       const { x, y, width, height, size } = request;
       const start = performance.now();
+      // A RAW is only developed at full size on demand. It stays developed for the export.
+      if (!engine!.has_full_image()) await developInParallel();
       const tensor = detach(engine!.inpaint_input(x, y, width, height, size));
       const result: ModelInput = { tensor, ms: performance.now() - start };
       return [result, [tensor]];
@@ -266,15 +309,26 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       return [result, [tensor]];
     }
 
+    case "refineMask": {
+      const refined = detach(engine!.refine_model_mask(request.width, request.height, new Uint8Array(request.mask)));
+      return [refined, [refined]];
+    }
+
     case "setSkyMask":
       engine!.set_sky_mask(request.width, request.height, new Uint8Array(request.mask));
       scheduleRender();
       return [undefined, []];
 
     case "setReplaceImage":
-      engine!.set_replace_image(request.width, request.height, new Uint8Array(request.rgba));
+      engine!.set_replace_image(request.sky, request.width, request.height, new Uint8Array(request.rgba));
       scheduleRender();
       return [undefined, []];
+
+    case "warpField": {
+      const offsets = detach(engine!.warp_field());
+      const size = JSON.parse(engine!.warp_field_size());
+      return [offsets.byteLength > 0 ? { ...size, offsets } : null, offsets.byteLength > 0 ? [offsets] : []];
+    }
 
     case "setMask":
       engine!.set_mask(request.width, request.height, new Uint8Array(request.mask));
@@ -307,14 +361,28 @@ self.onmessage = ({ data }: MessageEvent<ToWorker>) => {
   if (data.type === "resize") {
     const { width, height } = data;
     enqueue(() => engine?.resize(width, height));
-    scheduleRender();
+    scheduleRender(false);
+    return;
+  }
+
+  if (data.type === "view") {
+    const { zoom, x, y } = data;
+    enqueue(() => engine?.set_view(zoom, x, y));
+    scheduleRender(false);
+    return;
+  }
+
+  if (data.type === "clipWarnings") {
+    const { highlights, shadows } = data;
+    enqueue(() => engine?.set_clip_warnings(highlights, shadows));
+    scheduleRender(false);
     return;
   }
 
   if (data.type === "compare") {
     const { split } = data;
     enqueue(() => engine?.set_compare(split));
-    scheduleRender();
+    scheduleRender(false);
     return;
   }
 

@@ -6,12 +6,17 @@ use op_core::{
     OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
     neutral_white_balance, resize_rgb,
 };
-use op_gpu::{Renderer, encode_jpeg};
+use op_gpu::{Renderer, ViewTransform, encode_jpeg};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
 
 const EXPORT_TILE_SIZE: u32 = 2048;
+/// The largest side of the full-resolution layer. Beyond this the proxy is detailed enough.
+const MAX_DETAIL_SIDE: f32 = 4096.0;
+/// Extra area developed around the view, so short pans do not need a new region.
+const DETAIL_PADDING: f32 = 0.2;
+const DETAIL_SAMPLES: usize = 8;
 
 fn js_error(error: impl std::fmt::Display) -> JsError {
     JsError::new(&error.to_string())
@@ -86,6 +91,8 @@ pub struct Engine {
     crop_editing: bool,
     heals: Vec<HealSpot>,
     erases: Vec<ErasePatch>,
+    /// The full image with heals and erases applied, kept while viewing up close.
+    full_view: Option<LinearImage>,
     healed_proxy: Option<LinearImage>,
     warp: Option<WarpField>,
     curve: ToneCurve,
@@ -159,6 +166,7 @@ impl Engine {
             crop_editing: false,
             heals: Vec::new(),
             erases: Vec::new(),
+            full_view: None,
             healed_proxy: None,
             warp: None,
             curve: ToneCurve::default(),
@@ -217,9 +225,35 @@ impl Engine {
         Ok(proxy.srgb_nchw_tensor(width, height, channels(mean)?, channels(std)?))
     }
 
-    /// Sets the image that replaces the background or sky, straight sRGB RGBA8.
-    pub fn set_replace_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
-        self.renderer.set_replace_image(width, height, rgba);
+    /// Follows a model's coarse mask to the proxy's own edges. Returns one byte per pixel.
+    pub fn refine_model_mask(&self, width: u32, height: u32, mask: &[u8]) -> Result<Vec<u8>, JsError> {
+        let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        Ok(proxy.refine_mask(mask, width, height).2)
+    }
+
+    /// Sets an image that replaces the sky or else the background, straight sRGB RGBA8.
+    pub fn set_replace_image(&mut self, sky: bool, width: u32, height: u32, rgba: &[u8]) {
+        if sky {
+            self.renderer.set_sky_image(width, height, rgba);
+        } else {
+            self.renderer.set_background_image(width, height, rgba);
+        }
+    }
+
+    /// The liquify field as interleaved offsets, or nothing if the image is not warped.
+    pub fn warp_field(&self) -> Vec<f32> {
+        self.warp.as_ref().filter(|field| !field.is_identity()).map_or_else(Vec::new, |field| field.offsets().to_vec())
+    }
+
+    /// Width and height of [`Self::warp_field`], as JSON.
+    pub fn warp_field_size(&self) -> Result<String, JsError> {
+        let (width, height) = self.warp.as_ref().map_or((0, 0), |field| (field.width, field.height));
+        serde_json::to_string(&ProxyInfo { width, height }).map_err(js_error)
+    }
+
+    /// Whether the open image is ready for full-size reading.
+    pub fn has_full_image(&self) -> bool {
+        self.developed.is_some() || self.raw_file.is_none()
     }
 
     /// Sets where the sky is, `width * height` bytes covering the whole image.
@@ -358,19 +392,36 @@ impl Engine {
     /// Replaces the list of healed spots, given as JSON.
     pub fn set_heals(&mut self, json: &str) -> Result<(), JsError> {
         self.heals = serde_json::from_str(json).map_err(js_error)?;
+        self.forget_full_view();
         self.refresh_healed_preview();
         Ok(())
     }
 
-    /// A rectangle of the proxy, as it currently looks before development, as a
-    /// 0..=1 sRGB NCHW tensor for the inpainting model.
-    pub fn inpaint_input(&self, x: u32, y: u32, width: u32, height: u32, size: u32) -> Result<Vec<f32>, JsError> {
-        let proxy = self.healed_proxy.as_ref().or(self.proxy.as_ref());
-        let proxy = proxy.ok_or_else(|| JsError::new("no image loaded"))?;
-        if x + width > proxy.width || y + height > proxy.height {
-            return Err(JsError::new("erase region is outside the image"));
-        }
-        Ok(proxy.crop(x, y, width, height).srgb_nchw_tensor(size, size, [0.0; 3], [1.0; 3]))
+    /// A rectangle given as fractions of the image, at the best resolution available and
+    /// with earlier erases applied, as a 0..=1 sRGB NCHW tensor for the inpainting model.
+    pub fn inpaint_input(&self, x: f32, y: f32, width: f32, height: f32, size: u32) -> Result<Vec<f32>, JsError> {
+        let source = self.developed.as_ref().or(self.working.as_ref()).or(self.proxy.as_ref());
+        let source = source.ok_or_else(|| JsError::new("no image loaded"))?;
+        let (full_w, full_h) = (source.width as f32, source.height as f32);
+        let left = ((x * full_w).round() as u32).min(source.width - 1);
+        let top = ((y * full_h).round() as u32).min(source.height - 1);
+        let crop_w = ((width * full_w).round() as u32).clamp(1, source.width - left);
+        let crop_h = ((height * full_h).round() as u32).clamp(1, source.height - top);
+        let mut crop = source.crop(left, top, crop_w, crop_h);
+        let (span_w, span_h) = (crop_w as f32, crop_h as f32);
+        let moved: Vec<ErasePatch> = self
+            .erases
+            .iter()
+            .map(|patch| ErasePatch {
+                x: (patch.x * full_w - left as f32) / span_w,
+                y: (patch.y * full_h - top as f32) / span_h,
+                width: patch.width * full_w / span_w,
+                height: patch.height * full_h / span_h,
+                ..patch.clone()
+            })
+            .collect();
+        apply_erases(&mut crop, &moved);
+        Ok(crop.srgb_nchw_tensor(size, size, [0.0; 3], [1.0; 3]))
     }
 
     pub fn clear_erases(&mut self) {
@@ -389,7 +440,55 @@ impl Engine {
     }
 
     pub fn refresh_erases(&mut self) {
+        self.forget_full_view();
         self.refresh_healed_preview();
+    }
+
+    /// Sets how the image is shown: `zoom` times its fitted size, around (x, y) in 0..=1.
+    pub fn set_view(&mut self, zoom: f32, x: f32, y: f32) {
+        self.renderer.set_view(ViewTransform { zoom, center: [x, y] });
+    }
+
+    pub fn set_clip_warnings(&mut self, highlights: bool, shadows: bool) {
+        self.renderer.set_clip_warnings(highlights, shadows);
+    }
+
+    /// Whether the full-resolution layer should change, because the view moved or it
+    /// is no longer needed. Removes it in the latter case.
+    pub fn needs_detail(&mut self) -> bool {
+        match self.wanted_detail() {
+            Some((min, max)) => !self.renderer.detail_covers(min, max),
+            None => {
+                self.renderer.clear_detail();
+                false
+            }
+        }
+    }
+
+    /// Develops the area in view at full resolution from now on.
+    pub fn update_detail(&mut self) {
+        let Some((min, max)) = self.wanted_detail() else { return };
+        if (!self.erases.is_empty() || !self.heals.is_empty()) && self.full_view.is_none() {
+            self.full_view = self.developed.as_ref().or(self.working.as_ref()).cloned();
+            if let Some(image) = &mut self.full_view {
+                apply_erases(image, &self.erases);
+                apply_heals(image, &self.heals);
+            }
+        }
+        let source = self.full_view.as_ref().or(self.developed.as_ref()).or(self.working.as_ref());
+        let Some(source) = source else { return };
+        let (full_w, full_h) = (source.width as f32, source.height as f32);
+        // Padded, unless that would make the layer too large.
+        let pad = |low: f32, high: f32, full: f32| {
+            let margin = ((high - low) * DETAIL_PADDING).min(((MAX_DETAIL_SIDE / full - (high - low)) / 2.0).max(0.0));
+            (((low - margin).max(0.0) * full).floor() as u32, ((high + margin).min(1.0) * full).ceil() as u32)
+        };
+        let (left, right) = pad(min[0], max[0], full_w);
+        let (top, bottom) = pad(min[1], max[1], full_h);
+        let (right, bottom) = (right.min(source.width), bottom.min(source.height));
+        if right > left && bottom > top {
+            self.renderer.set_detail(source, [left, top, right - left, bottom - top]);
+        }
     }
 
     /// Sets the screen fraction, from the left, that shows the unedited image.
@@ -405,6 +504,7 @@ impl Engine {
         apply_heals(healed, &added);
         self.renderer.update_preview_pixels(healed);
         self.heals.extend(added);
+        self.forget_full_view();
         Ok(())
     }
 
@@ -413,12 +513,11 @@ impl Engine {
     pub fn white_balance_at(&self, stage_x: f32, stage_y: f32, stage_width: u32, stage_height: u32) -> Result<String, JsError> {
         const SAMPLE_RADIUS: u32 = 3;
         let size = (stage_width.max(1), stage_height.max(1));
-        let Some((u, v)) = self.renderer.canvas_to_image(&self.geometry, size, stage_x, stage_y) else {
+        let Some((u, v)) = self.stage_to_source(size, stage_x, stage_y) else {
             return Ok("null".into());
         };
         let proxy = self.healed_proxy.as_ref().or(self.proxy.as_ref());
         let proxy = proxy.ok_or_else(|| JsError::new("no image loaded"))?;
-        let (u, v) = self.renderer.lens_map(&self.adjustments, proxy.width, proxy.height).source_uv(u, v, 1);
         let colour = proxy.mean_around(u, v, SAMPLE_RADIUS);
         let matched = self.renderer.camera_rows(self.adjustments.camera_profile).map(|row| {
             row[0] * colour[0] + row[1] * colour[1] + row[2] * colour[2]
@@ -443,18 +542,17 @@ impl Engine {
         // The size comes from the caller so the position and the layout it was measured
         // against always agree, even while a resize is still on its way here.
         let size = (stage_width.max(1), stage_height.max(1));
-        let Some((u, v)) = self.renderer.canvas_to_image(&self.geometry, size, stage_x, stage_y) else {
+        // Spots live on the unwarped image, while the stage shows the corrected one.
+        let Some((u, v)) = self.stage_to_source(size, stage_x, stage_y) else {
             return Ok("null".into());
         };
-        // Spots live on the unwarped image, while the stage shows the corrected one.
-        let (proxy_width, proxy_height) = self.proxy.as_ref().map_or((1, 1), |proxy| (proxy.width, proxy.height));
-        let (u, v) = self.renderer.lens_map(&self.adjustments, proxy_width, proxy_height).source_uv(u, v, 1);
         let current = self.healed_proxy.as_ref().or(self.proxy.as_ref());
         let current = current.ok_or_else(|| JsError::new("no image loaded"))?;
         let Some(spot) = find_heal_source(current, u, v, radius) else {
             return Ok("null".into());
         };
         self.heals.push(spot);
+        self.forget_full_view();
         self.refresh_healed_preview();
         serde_json::to_string(&spot).map_err(js_error)
     }
@@ -545,6 +643,8 @@ impl Engine {
         overlay_height: u32,
     ) -> Result<Vec<u8>, JsError> {
         let settings: OutputSettings = serde_json::from_str(&settings).map_err(js_error)?;
+        // Export needs the memory more than the close-up view does.
+        self.forget_full_view();
         let mut developed = match (self.developed.take(), &self.raw_file) {
             (Some(image), _) => Some(image),
             (None, Some(file)) => Some(op_core::develop_raw_full(file).map_err(js_error)?),
@@ -590,6 +690,9 @@ impl Engine {
         self.healed_proxy = None;
         // The next photo's sky is unknown, and the last one's must not show on it.
         self.renderer.set_sky_mask(1, 1, &[0]);
+        // Erasing develops a RAW ahead of export; that must not outlive its photo.
+        self.developed = None;
+        self.forget_full_view();
     }
 
     fn finish_open(&mut self, opened: op_core::Opened, bytes: Option<&[u8]>) -> Result<String, JsError> {
@@ -612,6 +715,50 @@ impl Engine {
             self.raw_file = bytes.map(<[u8]>::to_vec);
         }
         serde_json::to_string(&info).map_err(js_error)
+    }
+
+    /// Follows a stage position back through framing, liquify and lens correction, the
+    /// reverse of how the image reaches the stage.
+    fn stage_to_source(&self, size: (u32, u32), stage_x: f32, stage_y: f32) -> Option<(f32, f32)> {
+        let (u, v) = self.renderer.canvas_to_image(&self.geometry, size, stage_x, stage_y)?;
+        let (du, dv) = self.warp.as_ref().map_or((0.0, 0.0), |field| field.offset_at(u, v));
+        let (width, height) = self.proxy.as_ref().map_or((1, 1), |proxy| (proxy.width, proxy.height));
+        Some(self.renderer.lens_map(&self.adjustments, width, height).source_uv(u + du, v + dv, 1))
+    }
+
+    fn forget_full_view(&mut self) {
+        self.full_view = None;
+        self.renderer.clear_detail();
+    }
+
+    /// The rectangle of source UV in view, when the proxy is too coarse to show it.
+    fn wanted_detail(&self) -> Option<([f32; 2], [f32; 2])> {
+        let shown = if self.crop_editing { self.geometry.whole_frame() } else { self.geometry };
+        let target = (self.config.width, self.config.height);
+        let area = self.renderer.visible_area(&shown, target)?;
+        let (proxy_w, proxy_h) = self.renderer.preview_size()?;
+        let map = shown.uv_map(proxy_w, proxy_h);
+        let lens = self.renderer.lens_map(&self.adjustments, proxy_w, proxy_h);
+        let (mut min, mut max) = ([1.0f32; 2], [0.0f32; 2]);
+        for row in 0..=DETAIL_SAMPLES {
+            for col in 0..=DETAIL_SAMPLES {
+                let s = area.start[0] + area.span[0] * col as f32 / DETAIL_SAMPLES as f32;
+                let t = area.start[1] + area.span[1] * row as f32 / DETAIL_SAMPLES as f32;
+                let u = map.origin[0] + s * map.axis_s[0] + t * map.axis_t[0];
+                let v = map.origin[1] + s * map.axis_s[1] + t * map.axis_t[1];
+                let (du, dv) = self.warp.as_ref().map_or((0.0, 0.0), |field| field.offset_at(u, v));
+                let (x, y) = lens.source_uv(u + du, v + dv, 1);
+                min = [min[0].min(x.clamp(0.0, 1.0)), min[1].min(y.clamp(0.0, 1.0))];
+                max = [max[0].max(x.clamp(0.0, 1.0)), max[1].max(y.clamp(0.0, 1.0))];
+            }
+        }
+        // Worth doing once a screen pixel covers less than one proxy pixel.
+        let canvas_pixels = target.0 as f32 * area.quad[0];
+        let proxy_pixels = area.span[0] * shown.output_size(proxy_w, proxy_h).0 as f32;
+        let (full_w, full_h) = (self.full_size.0 as f32, self.full_size.1 as f32);
+        let too_large = (max[0] - min[0]) * full_w > MAX_DETAIL_SIDE || (max[1] - min[1]) * full_h > MAX_DETAIL_SIDE;
+        let larger_than_proxy = self.full_size.0 > proxy_w || self.full_size.1 > proxy_h;
+        (proxy_pixels < canvas_pixels && !too_large && larger_than_proxy && max[0] > min[0] && max[1] > min[1]).then_some((min, max))
     }
 
     fn warped<S: Sample>(&self, rgb: Vec<S>, width: u32, height: u32) -> Vec<S> {

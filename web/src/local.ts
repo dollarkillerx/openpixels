@@ -16,7 +16,22 @@ export interface Point {
   y: number;
 }
 
-export type LocalKind = "linear" | "radial" | "brush" | "full";
+export type AiLocalKind = "subject" | "background" | "sky";
+export type LocalKind = "linear" | "radial" | "brush" | "full" | AiLocalKind;
+
+export const isAiLocal = (kind: LocalKind): kind is AiLocalKind => kind === "subject" || kind === "background" || kind === "sky";
+/** Shapes with handles to drag on the image. */
+export const hasLocalHandles = (kind: LocalKind) => kind === "linear" || kind === "radial";
+
+/** A mask found by a model, at the size of the proxy. */
+export interface ModelMask {
+  mask: Uint8Array;
+  width: number;
+  height: number;
+}
+export type ModelMasks = Partial<Record<"subject" | "sky", ModelMask>>;
+/** The model behind an AI layer; a background is the inverse of the subject. */
+export const modelOf = (kind: AiLocalKind) => (kind === "sky" ? "sky" : "subject");
 
 /** A local adjustment's shape, in source-image UV. Its values live in the edit. */
 export interface LocalLayer {
@@ -25,8 +40,10 @@ export interface LocalLayer {
   a: Point;
   /** Where a gradient ends, or a point on the radial's edge. */
   b: Point;
-  /** Brush paths. */
+  /** Brush paths; on an AI layer, what is added to the model's mask. */
   strokes: Point[][];
+  /** Brush paths taken away from the mask. */
+  erase?: Point[][];
   /** Brush radius as a fraction of the long edge. */
   radius: number;
   invert: boolean;
@@ -86,18 +103,65 @@ function drawLayer(context: OffscreenCanvasRenderingContext2D, layer: LocalLayer
   }
 }
 
+/** A model's mask at another size, bilinearly. */
+function resampled({ mask, width, height }: ModelMask, outWidth: number, outHeight: number) {
+  if (width === outWidth && height === outHeight) return mask.slice();
+  const out = new Uint8Array(outWidth * outHeight);
+  for (let row = 0; row < outHeight; row++) {
+    const fy = Math.min(height - 1, Math.max(0, ((row + 0.5) * height) / outHeight - 0.5));
+    const [y0, ty] = [Math.floor(fy), fy - Math.floor(fy)];
+    const y1 = Math.min(y0 + 1, height - 1);
+    for (let col = 0; col < outWidth; col++) {
+      const fx = Math.min(width - 1, Math.max(0, ((col + 0.5) * width) / outWidth - 0.5));
+      const [x0, tx] = [Math.floor(fx), fx - Math.floor(fx)];
+      const x1 = Math.min(x0 + 1, width - 1);
+      const top = mask[y0 * width + x0] * (1 - tx) + mask[y0 * width + x1] * tx;
+      const bottom = mask[y1 * width + x0] * (1 - tx) + mask[y1 * width + x1] * tx;
+      out[row * outWidth + col] = Math.round(top * (1 - ty) + bottom * ty);
+    }
+  }
+  return out;
+}
+
+/** A half-covered sky edge would let the old brightness through, so it is tightened. */
+const tightenSky = (value: number) => {
+  const t = Math.min(1, Math.max(0, (value / 255 - 0.3) / 0.4));
+  return Math.round(255 * t * t * (3 - 2 * t));
+};
+
 /** Rasterises up to four layers into the channels of one RGBA buffer. */
-export function renderLocalMask(layers: LocalLayer[], width: number, height: number): ArrayBuffer {
+export function renderLocalMask(layers: LocalLayer[], width: number, height: number, models: ModelMasks = {}): ArrayBuffer {
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext("2d", { willReadFrequently: true })!;
   const out = new Uint8Array(width * height * 4);
+  const painted = (layer: LocalLayer, strokes: Point[][]) => {
+    context.fillStyle = "black";
+    context.fillRect(0, 0, width, height);
+    drawBrush(context, { ...layer, strokes }, width, height);
+    return context.getImageData(0, 0, width, height).data;
+  };
   layers.slice(0, MAX_LOCAL_LAYERS).forEach((layer, channel) => {
     context.globalCompositeOperation = "source-over";
-    drawLayer(context, layer, width, height);
-    const { data } = context.getImageData(0, 0, width, height);
-    for (let i = 0; i < width * height; i++) {
-      out[i * 4 + channel] = layer.invert ? 255 - data[i * 4] : data[i * 4];
+    const values = new Uint8Array(width * height);
+    if (isAiLocal(layer.kind)) {
+      const model = models[modelOf(layer.kind)];
+      if (model) values.set(resampled(model, width, height));
+      if (layer.kind === "background") for (let i = 0; i < values.length; i++) values[i] = 255 - values[i];
+      if (layer.kind === "sky") for (let i = 0; i < values.length; i++) values[i] = tightenSky(values[i]);
+      if (layer.strokes.length > 0) {
+        const added = painted(layer, layer.strokes);
+        for (let i = 0; i < values.length; i++) values[i] = Math.max(values[i], added[i * 4]);
+      }
+    } else {
+      drawLayer(context, layer, width, height);
+      const { data } = context.getImageData(0, 0, width, height);
+      for (let i = 0; i < values.length; i++) values[i] = data[i * 4];
     }
+    if (layer.erase?.length) {
+      const removed = painted(layer, layer.erase);
+      for (let i = 0; i < values.length; i++) values[i] = Math.round((values[i] * (255 - removed[i * 4])) / 255);
+    }
+    for (let i = 0; i < values.length; i++) out[i * 4 + channel] = layer.invert ? 255 - values[i] : values[i];
   });
   return out.buffer;
 }

@@ -2,6 +2,8 @@ import { buildSkinMask } from "./face";
 import type { Lut } from "./lut";
 import type { OutputSettings } from "./output";
 import type { EraseCrop } from "./erase";
+import type { WarpView } from "./lens";
+import type { ModelMask } from "./local";
 import { INPAINT_MODEL, MODEL, SKY_MODEL, modelInputSize } from "./model";
 import type { ReplaceImage } from "./replace";
 import type {
@@ -11,6 +13,7 @@ import type {
   ExportResult,
   FromWorker,
   HealSpot,
+  HistogramData,
   InpaintReply,
   InpaintRequest,
   LoadResult,
@@ -55,6 +58,8 @@ export class EngineClient {
 
   /** Called after each frame reaches the GPU. */
   onFrame: (ms: number) => void = () => {};
+  /** Called when the histogram of the edited image has changed. */
+  onHistogram: (data: HistogramData) => void = () => {};
   /** Called for failures in a worker that no request is waiting on. */
   onCrash: (message: string) => void = () => {};
 
@@ -62,6 +67,10 @@ export class EngineClient {
     this.worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
       if (data.type === "frame") {
         this.onFrame(data.ms);
+        return;
+      }
+      if (data.type === "histogram") {
+        this.onHistogram(data.data);
         return;
       }
       const request = this.pending.get(data.id);
@@ -98,7 +107,7 @@ export class EngineClient {
     return this.call<void>({ type: "setErases", erases });
   }
 
-  /** Fills the marked part of a proxy rectangle. Resolves to interleaved sRGB bytes. */
+  /** Fills the marked part of a rectangle, given as fractions of the image. Resolves to interleaved sRGB bytes. */
   async inpaint(crop: EraseCrop, mask: Float32Array<ArrayBuffer>) {
     const input = await this.call<ModelInput>({ type: "inpaintInput", ...crop, size: INPAINT_MODEL.size });
     window.clearTimeout(this.inpaintIdleTimer);
@@ -154,6 +163,15 @@ export class EngineClient {
 
   exportImage(settings: OutputSettings) {
     return this.call<ExportResult>({ type: "export", settings });
+  }
+
+  /** Shows the image `zoom` times its fitted size, around (x, y) in 0..=1. */
+  setView(zoom: number, x: number, y: number) {
+    this.worker.postMessage({ type: "view", zoom, x, y } satisfies ToWorker);
+  }
+
+  setClipWarnings(highlights: boolean, shadows: boolean) {
+    this.worker.postMessage({ type: "clipWarnings", highlights, shadows } satisfies ToWorker);
   }
 
   /** Shows the unedited image on this fraction of the frame, from the left. 0 is off. */
@@ -223,7 +241,23 @@ export class EngineClient {
     return { inputMs, loadMs, inferMs };
   }
 
-  setReplaceImage({ rgba, width, height }: ReplaceImage) {
-    return this.call<void>({ type: "setReplaceImage", rgba, width, height }, [rgba]);
+  /** A model's mask for the open image, following its edges, at the proxy's size. */
+  async modelMask(model: "subject" | "sky", proxyWidth: number, proxyHeight: number): Promise<ModelMask> {
+    const reply =
+      model === "sky"
+        ? await this.segment("sky", { width: SKY_MODEL.size, height: SKY_MODEL.size }, SKY_MODEL.mean, SKY_MODEL.std)
+        : await this.segment("matte", modelInputSize(proxyWidth, proxyHeight), MODEL.mean, MODEL.std);
+    const refined = await this.call<ArrayBuffer>({ type: "refineMask", mask: reply.mask, width: reply.width, height: reply.height }, [reply.mask]);
+    return { mask: new Uint8Array(refined), width: proxyWidth, height: proxyHeight };
+  }
+
+  setReplaceImage(sky: boolean, { rgba, width, height }: ReplaceImage) {
+    return this.call<void>({ type: "setReplaceImage", sky, rgba, width, height }, [rgba]);
+  }
+
+  /** The liquify field, or null if the image is not warped. */
+  async warpField(): Promise<WarpView | null> {
+    const field = await this.call<{ width: number; height: number; offsets: ArrayBuffer } | null>({ type: "warpField" });
+    return field && { ...field, offsets: new Float32Array(field.offsets) };
   }
 }

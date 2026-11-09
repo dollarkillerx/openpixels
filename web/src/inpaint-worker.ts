@@ -5,6 +5,7 @@ import type { InpaintReply, InpaintRequest } from "./protocol";
 
 // Absolute for the same reason as in ai-worker.ts.
 ort.env.wasm.wasmPaths = `${self.location.origin}/ort/`;
+// One thread, on purpose: as of 1.31.1, several hang in this worker on this model.
 ort.env.wasm.numThreads = 1;
 
 let session: ort.InferenceSession | null = null;

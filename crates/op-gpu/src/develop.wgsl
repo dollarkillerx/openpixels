@@ -42,10 +42,14 @@ struct Adjustments {
     perspective: vec2<f32>,
     padding: vec2<f32>,
     local_range: array<vec4<f32>, 4>,
-    replace_mode: f32,
-    replace_exposure: f32,
-    replace_shift: f32,
-    replace_amount: f32,
+    replace_background: f32,
+    replace_background_exposure: f32,
+    replace_background_shift: f32,
+    replace_padding: f32,
+    replace_sky: f32,
+    replace_sky_exposure: f32,
+    replace_sky_shift: f32,
+    replace_sky_relight: f32,
 }
 
 struct Region {
@@ -72,6 +76,8 @@ struct Region {
     camera_blue: vec4<f32>,
     // Scene-linear colour of the haze, for dehazing.
     airlight: vec4<f32>,
+    // Colour of the new sky relative to neutral, for relighting the rest of the photo.
+    sky_tint: vec4<f32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -80,9 +86,10 @@ struct Region {
 @group(0) @binding(3) var<uniform> region: Region;
 // Subject mask spanning the whole image; 1 is subject, 0 is background.
 @group(0) @binding(4) var subject_mask: texture_2d<f32>;
-// Replacement image, sampled as linear light, and where the sky is.
-@group(0) @binding(14) var replace_image: texture_2d<f32>;
+// Replacement images, sampled as linear light, and where the sky is.
+@group(0) @binding(14) var background_image: texture_2d<f32>;
 @group(0) @binding(15) var sky_mask: texture_2d<f32>;
+@group(0) @binding(16) var sky_image: texture_2d<f32>;
 @group(0) @binding(5) var mask_sampler: sampler;
 // Heavily blurred scene-linear luminance of the whole image, for clarity.
 @group(0) @binding(6) var blurred_luma: texture_2d<f32>;
@@ -497,25 +504,43 @@ fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
 }
 
 // 16 * 16 = 256 invocations, the WebGPU default limit per workgroup.
-// Blends in the replacement image. Comes after the tone and colour edits, which are
-// tuned to the photo, and before the look and grain, which unify the two.
-fn apply_replacement(rgb: vec3<f32>, uv: vec2<f32>, background: f32) -> vec3<f32> {
-    if adj.replace_mode == 0.0 {
-        return rgb;
-    }
-    var alpha = background;
-    if adj.replace_mode == 2.0 {
-        // Tightened, because a half-covered edge lets the old, usually brighter sky through.
-        alpha = smoothstep(0.3, 0.7, textureSampleLevel(sky_mask, mask_sampler, uv, 0.0).r);
-    }
-    // Fills the frame without stretching, showing the centre of what does not fit.
-    let image_size = vec2<f32>(textureDimensions(replace_image));
+// A replacement image at a whole-image position, filling the frame without stretching
+// and showing the centre of what does not fit.
+fn replacement_at(image: texture_2d<f32>, uv: vec2<f32>, shift: f32, exposure: f32) -> vec3<f32> {
+    let image_size = vec2<f32>(textureDimensions(image));
     let ratio = (region.full_size.x / region.full_size.y) / (image_size.x / image_size.y);
     let visible = select(vec2<f32>(1.0, 1.0 / ratio), vec2<f32>(ratio, 1.0), ratio < 1.0);
     var at = (uv - 0.5) * visible + 0.5;
-    at.y -= adj.replace_shift;
-    let fill = textureSampleLevel(replace_image, mask_sampler, at, 0.0).rgb * pow(2.0, adj.replace_exposure);
-    return mix(rgb, fill, clamp(alpha * adj.replace_amount, 0.0, 1.0));
+    at.y -= shift;
+    return textureSampleLevel(image, mask_sampler, at, 0.0).rgb * pow(2.0, exposure);
+}
+
+// Blends in the replacements. Comes after the tone and colour edits, which are tuned to
+// the photo, and before the look and grain, which unify them.
+fn apply_replacement(rgb: vec3<f32>, uv: vec2<f32>, background: f32) -> vec3<f32> {
+    var out = rgb;
+    var sky = 0.0;
+    if adj.replace_sky > 0.0 {
+        // Tightened, because a half-covered edge lets the old, usually brighter sky through.
+        sky = smoothstep(0.3, 0.7, textureSampleLevel(sky_mask, mask_sampler, uv, 0.0).r);
+        out *= mix(vec3<f32>(1.0), region.sky_tint.rgb, adj.replace_sky_relight * adj.replace_sky * (1.0 - sky));
+    }
+    if adj.replace_background > 0.0 {
+        // Favours the new background, so fine hair does not keep a rim of the old one.
+        let alpha = smoothstep(0.1, 0.75, background) * (1.0 - sky) * adj.replace_background;
+        let fill = replacement_at(background_image, uv, adj.replace_background_shift, adj.replace_background_exposure);
+        out = mix(out, fill, clamp(alpha, 0.0, 1.0));
+    }
+    if adj.replace_sky > 0.0 {
+        // With a background replaced too, the subject mask is known and can stand in front.
+        var alpha = sky * adj.replace_sky;
+        if adj.replace_background > 0.0 {
+            alpha *= background;
+        }
+        let fill = replacement_at(sky_image, uv, adj.replace_sky_shift, adj.replace_sky_exposure);
+        out = mix(out, fill, clamp(alpha, 0.0, 1.0));
+    }
+    return out;
 }
 
 @compute @workgroup_size(16, 16)

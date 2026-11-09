@@ -4,6 +4,7 @@ import type { LensQuery } from "./protocol";
 type Sample = [number, string, ...number[]];
 
 interface Lens {
+  maker: string;
   names: string[];
   crop: number;
   aspect: number;
@@ -23,6 +24,9 @@ const TCA_PARAMETERS: Record<string, string[]> = { linear: ["kr", "kb"], poly3: 
 /** Tolerates a rounded crop factor when checking that a calibration covers the frame. */
 const CROP_TOLERANCE = 1.03;
 
+/** One company can appear under several names, like "Nikon" and "NIKON CORPORATION". */
+const makerFamily = (maker: string) => (/^om digital/i.test(maker) ? "olympus" : maker.toLowerCase().split(" ")[0]);
+
 let database: Promise<Database | null> | null = null;
 
 function loadDatabase() {
@@ -32,8 +36,20 @@ function loadDatabase() {
   return database;
 }
 
-/** Must match `normalize` in scripts/build-lensfun.mjs. */
-const normalize = (text: string) => text.toLowerCase().replace(/[^a-z0-9.]/g, "");
+// Must match `normalize` in scripts/build-lensfun.mjs.
+/**
+ * What a lens is called, however a camera or database spells it: no maker's name, Sigma's
+ * product lines as one letter, no model code, and only letters, digits and points.
+ */
+const normalize = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/\b(sigma|tamron|tokina|samyang|rokinon|viltrox|canon|nikon|sony|fujifilm|fujinon|panasonic|olympus)\b/g, "")
+    .replace(/[|[(]\s*(a|art)\s*\d*\s*[\])]?\s*$/g, "a")
+    .replace(/[|[(]\s*(c|contemporary)\s*\d*\s*[\])]?\s*$/g, "c")
+    .replace(/[|[(]\s*(s|sports)\s*\d*\s*[\])]?\s*$/g, "s")
+    .replace(/\(?\b[a-z]\d{3}\)?\s*$/g, "")
+    .replace(/[^a-z0-9.]/g, "");
 
 /** The two values bracketing `at` in sorted `values`, and how far `at` is between them. */
 function bracket(values: number[], at: number): [number, number, number] {
@@ -96,7 +112,8 @@ export async function lensfunCalibration(query: LensQuery) {
   // Exact names only: a near match would silently apply another lens's corrections.
   const name = normalize(query.lens);
   const entries = db.lenses.filter((entry) => entry.names.includes(name));
-  if (entries.length === 0) return null;
+  // With the maker's name gone, one name could mean lenses from two makers.
+  if (entries.length === 0 || new Set(entries.map((entry) => makerFamily(entry.maker))).size > 1) return null;
   const camera = db.cameras[normalize(query.camera)];
   // A lens can be calibrated on several sensors. One smaller than this camera's would
   // leave the corners unmeasured, so use the largest that is not.

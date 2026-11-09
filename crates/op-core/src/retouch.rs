@@ -196,7 +196,9 @@ pub fn build_skin_retouch(image: &LinearImage, mask: &[u8], face_width: f32) -> 
     for i in 0..crop_mask.len() {
         if coverage[i] > 0.0 {
             for channel in 0..3 {
-                healed[channel][i] += (replacements[channel][i] - planes[channel][i]) * coverage[i];
+                // Replaces the spot but keeps the skin's own fine grain, or the patch shows
+                // as a smooth dot at full size.
+                healed[channel][i] += (replacements[channel][i] - fine[channel][i]) * coverage[i];
             }
         }
     }
@@ -258,6 +260,26 @@ mod tests {
         // The spot is one stop dark, so a full correction is about +1.
         let centre = correction(&retouch.blemish, 100, 100);
         assert!(centre > 0.6 && centre < 1.2, "centre correction {centre}");
+    }
+
+    #[test]
+    fn a_healed_spot_keeps_the_skin_grain() {
+        // Fine, regular texture over the skin, so a flat fill would stand out.
+        let grain = |x: usize, y: usize| 1.0 + if (x + y) % 2 == 0 { 0.04 } else { -0.04 };
+        let textured = |x: usize, y: usize| {
+            let [r, g, b] = spotted(x, y);
+            [r * grain(x, y), g * grain(x, y), b * grain(x, y)]
+        };
+        let retouch = build_skin_retouch(&image_with(textured), &full_mask(), FACE);
+        // Correction in stops: what the original plus it comes to across two neighbours.
+        let healed = |x: usize| {
+            let original = textured(x, 100)[1].log2();
+            original + correction(&retouch.blemish, x, 100)
+        };
+        let swing = (healed(100) - healed(101)).abs();
+        let expected = (1.04f32 / 0.96).log2();
+        // The finest texture is partly lost to the filter; a flat fill would leave none.
+        assert!(swing > expected * 0.35, "grain left inside the spot: {swing} stops of {expected}");
     }
 
     #[test]

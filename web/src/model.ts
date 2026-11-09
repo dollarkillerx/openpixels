@@ -10,7 +10,8 @@ export const MODEL = {
 /** SkyWater-Seg (MIT), which labels background, sky, water and person. */
 export const SKY_MODEL = {
   url: "/models/skywater.onnx",
-  size: 384,
+  // Above the 384 it was trained at, for finer edges around branches and rooftops.
+  size: 640,
   mean: [0.485, 0.456, 0.406],
   std: [0.229, 0.224, 0.225],
   classes: 4,

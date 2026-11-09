@@ -321,8 +321,10 @@ pub struct LensMap {
     /// Half-diagonal-normalised half size: `aspect[0]² + aspect[1]² = 1`.
     pub aspect: [f32; 2],
     pub distortion: [f32; 4],
-    /// Zooms just enough that the corrected frame has no empty edges.
+    /// Zooms just enough that the corrected frame has no empty edges, or, when
+    /// `keep_whole`, just enough that all of the photo is in it.
     pub scale: f32,
+    pub keep_whole: bool,
     /// Red constant and r², blue constant and r².
     pub chroma: [f32; 4],
     pub vignette: [f32; 4],
@@ -351,7 +353,8 @@ impl LensMap {
         let diagonal = w.hypot(h);
         let aspect = [w / diagonal, h / diagonal];
         let perspective = adjustments.perspective.map(|value| value * MANUAL_PERSPECTIVE);
-        let mut map = Self { aspect, distortion, scale: 1.0, chroma, vignette, perspective };
+        let keep_whole = adjustments.perspective_keep != 0.0;
+        let mut map = Self { aspect, distortion, scale: 1.0, keep_whole, chroma, vignette, perspective };
         map.scale = map.fitting_scale();
         map
     }
@@ -371,21 +374,25 @@ impl LensMap {
         1.0 + r2 * (a + r2 * (b + r2 * (c + r2 * d)))
     }
 
-    /// The largest zoom-out that keeps the whole output inside the source frame.
+    /// The zoom at which the output frame just fits inside the source, or, when
+    /// `keep_whole`, the source just fits inside the output frame.
     fn fitting_scale(&self) -> f32 {
         if self.distortion == [0.0; 4] && self.perspective == [0.0; 2] {
             return 1.0;
         }
-        let mut furthest = 0.0f32;
+        let (mut furthest, mut nearest) = (0.0f32, f32::MAX);
         for step in 0..=BOUNDARY_STEPS {
             let position = step as f32 / BOUNDARY_STEPS as f32 * 2.0 - 1.0;
-            for (x, y) in [(position, 1.0), (1.0, position)] {
+            // All four sides, since a keystone is not symmetric.
+            for (x, y) in [(position, 1.0), (position, -1.0), (1.0, position), (-1.0, position)] {
                 let (px, py) = self.keystone(x * self.aspect[0], y * self.aspect[1]);
                 let stretch = self.radial(px * px + py * py);
-                furthest = furthest.max((px / self.aspect[0]).abs() * stretch).max((py / self.aspect[1]).abs() * stretch);
+                let reach = ((px / self.aspect[0]).abs() * stretch).max((py / self.aspect[1]).abs() * stretch);
+                furthest = furthest.max(reach);
+                nearest = nearest.min(reach);
             }
         }
-        1.0 / furthest
+        1.0 / if self.keep_whole { nearest } else { furthest }
     }
 
     /// Where a corrected position reads from, for `channel` (0 red, 1 green, 2 blue).
@@ -427,6 +434,9 @@ impl LensMap {
                 for (channel, value) in target.iter_mut().enumerate() {
                     let (su, sv) =
                         if fringing && channel != 1 { self.source_uv(u, v, channel) } else { (green_u, green_v) };
+                    if self.keep_whole && !((0.0..=1.0).contains(&su) && (0.0..=1.0).contains(&sv)) {
+                        continue;
+                    }
                     *value = sample(su * width as f32 - 0.5, sv * height as f32 - 0.5, channel);
                 }
             }
@@ -552,6 +562,51 @@ impl<'a> Tiff<'a> {
         }
         queue.push(self.u32(offset + 2 + count * 12)? as usize);
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    fn map(perspective: [f32; 2], keep: f32) -> LensMap {
+        LensMap::new(None, &Adjustments { perspective, perspective_keep: keep, ..Default::default() }, 600, 400)
+    }
+
+    fn boundary() -> Vec<(f32, f32)> {
+        let edge = (0..=40).map(|i| i as f32 / 40.0);
+        edge.flat_map(|t| [(t, 0.0), (t, 1.0), (0.0, t), (1.0, t)]).collect()
+    }
+
+    #[test]
+    fn the_frame_stays_inside_the_photo_for_either_keystone_direction() {
+        for perspective in [[0.6, 0.0], [-0.6, 0.0], [0.0, 0.5], [0.4, -0.4]] {
+            let map = map(perspective, 0.0);
+            for (u, v) in boundary() {
+                let (x, y) = map.source_uv(u, v, 1);
+                assert!((-1e-3..=1.001).contains(&x) && (-1e-3..=1.001).contains(&y), "{perspective:?} at {u},{v}: {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn keeping_the_whole_photo_puts_every_edge_of_the_frame_outside_it() {
+        for perspective in [[0.6, 0.0], [-0.6, 0.0], [0.0, 0.5], [0.4, -0.4]] {
+            let map = map(perspective, 1.0);
+            for (u, v) in boundary() {
+                let (x, y) = map.source_uv(u, v, 1);
+                assert!(!(0.001..0.999).contains(&x) || !(0.001..0.999).contains(&y), "{perspective:?} at {u},{v} reads inside: {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn what_falls_outside_the_photo_is_black_when_keeping_it_whole() {
+        let map = map([0.6, 0.0], 1.0);
+        let rgb = vec![200u8; 600 * 400 * 3];
+        let out = map.apply_rgb(&rgb, 600, 400);
+        assert_eq!(out[(399 * 600 + 2) * 3], 0, "a corner beyond the photo");
+        assert!(out[(200 * 600 + 300) * 3] > 190, "the middle is the photo");
     }
 }
 

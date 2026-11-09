@@ -69,18 +69,27 @@ pub struct Adjustments {
     pub grain_size: f32,
     /// Keystone correction, vertical then horizontal, each -1..=1.
     pub perspective: [f32; 2],
+    /// Non-zero zooms out to show the whole photo after a correction, leaving black
+    /// edges, rather than zooming in to hide them.
+    pub perspective_keep: f32,
     #[serde(skip)]
-    pub _padding: [f32; 2],
+    pub _padding: f32,
     /// Per local layer: lightest-to-darkest limits, then hue in degrees and hue half
     /// width. A zero upper limit means the layer has no range.
     pub local_range: [[f32; 4]; 4],
-    /// 0 is off, 1 replaces the background, 2 replaces the sky.
-    pub replace_mode: f32,
-    /// Brightness of the replacement, in EV.
-    pub replace_exposure: f32,
-    /// Moves the replacement up (negative) or down (positive), as a fraction of its height.
-    pub replace_shift: f32,
-    pub replace_amount: f32,
+    /// How much of the background to replace; 0 is off.
+    pub replace_background: f32,
+    /// Brightness of the new background, in EV.
+    pub replace_background_exposure: f32,
+    /// Moves the new background up (negative) or down (positive), as a fraction of its height.
+    pub replace_background_shift: f32,
+    pub _replace_padding: f32,
+    /// How much of the sky to replace; 0 is off.
+    pub replace_sky: f32,
+    pub replace_sky_exposure: f32,
+    pub replace_sky_shift: f32,
+    /// How far the rest of the photo takes on the new sky's colour.
+    pub replace_sky_relight: f32,
 }
 
 /// The white balance sliders' travel either way.
@@ -112,7 +121,7 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32);
     }
 
     #[test]

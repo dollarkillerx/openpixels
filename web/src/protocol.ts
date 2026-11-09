@@ -45,6 +45,12 @@ export interface LensQuery {
   aperture: number | null;
 }
 
+/** Pixel counts per 8-bit level, for red, green and blue. */
+export interface HistogramData {
+  channels: [Uint32Array, Uint32Array, Uint32Array];
+  total: number;
+}
+
 export interface LoadResult {
   width: number;
   height: number;
@@ -120,12 +126,16 @@ export type EngineRequest =
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
   | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }
   | { type: "setSkyMask"; mask: ArrayBuffer; width: number; height: number }
-  | { type: "setReplaceImage"; rgba: ArrayBuffer; width: number; height: number }
+  | { type: "refineMask"; mask: ArrayBuffer; width: number; height: number }
+  | { type: "setReplaceImage"; sky: boolean; rgba: ArrayBuffer; width: number; height: number }
+  | { type: "warpField" }
   | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number }
   | { type: "setLocalMask"; mask: ArrayBuffer; width: number; height: number }
   | { type: "setLook"; size: number; data: ArrayBuffer };
 
 export type EngineCommand =
+  | { type: "view"; zoom: number; x: number; y: number }
+  | { type: "clipWarnings"; highlights: boolean; shadows: boolean }
   | { type: "adjust"; adjustments: Adjustments }
   | { type: "resize"; width: number; height: number }
   | { type: "compare"; split: number };
@@ -134,7 +144,8 @@ export type ToWorker = (EngineRequest & { id: number }) | EngineCommand;
 
 export type FromWorker =
   | { type: "reply"; id: number; result?: unknown; error?: string }
-  | { type: "frame"; ms: number };
+  | { type: "frame"; ms: number }
+  | { type: "histogram"; data: HistogramData };
 
 export interface SegmentRequest {
   id: number;

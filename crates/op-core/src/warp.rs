@@ -64,6 +64,11 @@ impl WarpField {
         !self.touched
     }
 
+    /// Interleaved (du, dv) for the whole field.
+    pub fn offsets(&self) -> &[f32] {
+        &self.offsets
+    }
+
     /// Bilinear lookup of the offset at a UV position.
     pub fn offset_at(&self, u: f32, v: f32) -> (f32, f32) {
         sample(&self.offsets, self.width as usize, self.height as usize, u, v)
