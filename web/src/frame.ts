@@ -76,6 +76,21 @@ export function shrinkToImage(crop: Crop, degrees: number, frameWidth: number, f
   return current;
 }
 
+/** Source UV shown at output position (s, t). Mirrors `Geometry::uv_map` in op-core. */
+export function outputToSource(s: number, t: number, edit: Adjustments, width: number, height: number) {
+  const quarter = edit.quarter ?? 0;
+  const frame = frameSize(width, height, quarter);
+  const crop = cropOf(edit);
+  const radians = ((edit.rotate ?? 0) * Math.PI) / 180;
+  const [sin, cos] = [Math.sin(radians), Math.cos(radians)];
+  const x = (crop.x + s * crop.w - 0.5) * frame.width;
+  const y = (crop.y + t * crop.h - 0.5) * frame.height;
+  const [ux, uy] = [x * cos + y * sin, -x * sin + y * cos];
+  const turns = ((quarter % 4) + 4) % 4;
+  const [sx, sy] = turns === 1 ? [uy, -ux] : turns === 2 ? [-ux, -uy] : turns === 3 ? [-uy, ux] : [ux, uy];
+  return { x: sx / width + 0.5, y: sy / height + 0.5 };
+}
+
 export type CropHandle = "move" | "nw" | "ne" | "sw" | "se";
 
 /** A crop after dragging `handle` by a fraction of the frame. `ratio` locks the shape. */

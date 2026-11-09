@@ -12,6 +12,8 @@ struct Blit {
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var image_sampler: sampler;
 @group(0) @binding(2) var<uniform> blit: Blit;
+// Liquify offsets in UV.
+@group(0) @binding(3) var warp: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -30,7 +32,8 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let colour = textureSample(image, image_sampler, in.uv);
+    let offset = textureSample(warp, image_sampler, in.uv).rg;
+    let colour = textureSample(image, image_sampler, in.uv + offset);
     // Rotation can show areas beyond the image; the export leaves those black too.
     if any(in.uv < vec2<f32>(0.0)) || any(in.uv > vec2<f32>(1.0)) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);

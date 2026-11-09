@@ -12,6 +12,7 @@ import type {
   SegmentRequest,
   Thumbnail,
   ToWorker,
+  WarpStroke,
 } from "./protocol";
 
 export interface MaskStats {
@@ -77,8 +78,17 @@ export class EngineClient {
     });
   }
 
-  open(buffer: ArrayBuffer, adjustments: Adjustments, heals: HealSpot[]) {
-    return this.call<LoadResult>({ type: "open", buffer, adjustments, heals }, [buffer]);
+  open(buffer: ArrayBuffer, adjustments: Adjustments, heals: HealSpot[], warps: WarpStroke[]) {
+    return this.call<LoadResult>({ type: "open", buffer, adjustments, heals, warps }, [buffer]);
+  }
+
+  /** Pushes the image between two positions in 0..=1 on the stage. */
+  liquify(request: Omit<Extract<EngineRequest, { type: "liquify" }>, "type">) {
+    return this.call<WarpStroke | null>({ type: "liquify", ...request });
+  }
+
+  setWarps(strokes: WarpStroke[]) {
+    return this.call<void>({ type: "setWarps", strokes });
   }
 
   /** Heals at a position in 0..=1 on the stage. Resolves to null if it missed the image. */
@@ -105,6 +115,10 @@ export class EngineClient {
   /** `framed` applies the crop and rotation; analysis needs the unframed image. */
   thumbnail(maxLongEdge: number, framed: boolean) {
     return this.call<Thumbnail>({ type: "thumbnail", maxLongEdge, framed });
+  }
+
+  setLocalMask(mask: ArrayBuffer, width: number, height: number) {
+    return this.call<void>({ type: "setLocalMask", mask, width, height }, [mask]);
   }
 
   /** Finds faces in the open image and builds its skin corrections. */

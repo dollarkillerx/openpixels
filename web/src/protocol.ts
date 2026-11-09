@@ -9,6 +9,16 @@ export interface HealSpot {
   sourceDy: number;
 }
 
+/** A liquify brush step. See `WarpStroke` in op-core for the units. */
+export interface WarpStroke {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  radius: number;
+  strength: number;
+}
+
 export interface LoadResult {
   width: number;
   height: number;
@@ -43,14 +53,27 @@ export interface Thumbnail {
 /** Messages the engine worker answers, each paired by id with one reply. */
 export type EngineRequest =
   | { type: "init"; canvas: OffscreenCanvas }
-  | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[] }
+  | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[]; warps: WarpStroke[] }
   | { type: "export"; quality: number }
   | { type: "thumbnail"; maxLongEdge: number; framed: boolean }
   | { type: "healAt"; x: number; y: number; stageWidth: number; stageHeight: number; radius: number }
   | { type: "setHeals"; heals: HealSpot[] }
+  | { type: "setWarps"; strokes: WarpStroke[] }
+  | {
+      type: "liquify";
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+      stageWidth: number;
+      stageHeight: number;
+      radius: number;
+      strength: number;
+    }
   | { type: "modelInput"; width: number; height: number; mean: number[]; std: number[] }
   | { type: "setMask"; mask: ArrayBuffer; width: number; height: number }
-  | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number };
+  | { type: "setSkinMask"; mask: ArrayBuffer; faceWidth: number }
+  | { type: "setLocalMask"; mask: ArrayBuffer; width: number; height: number };
 
 export type EngineCommand =
   | { type: "adjust"; adjustments: Adjustments }

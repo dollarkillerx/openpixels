@@ -72,6 +72,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       const info = JSON.parse(engine!.decode(new Uint8Array(request.buffer)));
       const t1 = performance.now();
       const proxy = JSON.parse(engine!.build_proxy(PROXY_LONG_EDGE));
+      engine!.set_warp_strokes(JSON.stringify(request.warps));
       const t2 = performance.now();
       engine!.set_adjustments(engineJson(request.adjustments));
       engine!.set_heals(JSON.stringify(request.heals));
@@ -116,6 +117,18 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       return [spot, []];
     }
 
+    case "liquify": {
+      const { fromX, fromY, toX, toY, stageWidth, stageHeight, radius, strength } = request;
+      const stroke = JSON.parse(engine!.liquify(fromX, fromY, toX, toY, stageWidth, stageHeight, radius, strength));
+      scheduleRender();
+      return [stroke, []];
+    }
+
+    case "setWarps":
+      engine!.set_warp_strokes(JSON.stringify(request.strokes));
+      scheduleRender();
+      return [undefined, []];
+
     case "setHeals":
       engine!.set_heals(JSON.stringify(request.heals));
       scheduleRender();
@@ -133,6 +146,11 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
 
     case "setMask":
       engine!.set_mask(request.width, request.height, new Uint8Array(request.mask));
+      scheduleRender();
+      return [undefined, []];
+
+    case "setLocalMask":
+      engine!.set_local_mask(request.width, request.height, new Uint8Array(request.mask));
       scheduleRender();
       return [undefined, []];
 

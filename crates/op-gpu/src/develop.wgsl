@@ -28,6 +28,7 @@ struct Adjustments {
     hsl_hue: array<vec4<f32>, 2>,
     hsl_saturation: array<vec4<f32>, 2>,
     hsl_luminance: array<vec4<f32>, 2>,
+    local: array<vec4<f32>, 4>,
 }
 
 struct Region {
@@ -58,6 +59,11 @@ struct Region {
 // Log2 skin corrections for the whole image.
 @group(0) @binding(7) var skin_smooth_map: texture_2d<f32>;
 @group(0) @binding(8) var skin_blemish_map: texture_2d<f32>;
+// One channel per local adjustment layer.
+@group(0) @binding(9) var local_mask: texture_2d<f32>;
+
+// This pixel's combined local adjustments: exposure, contrast, saturation, temperature.
+var<private> local_values: vec4<f32>;
 
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 const TONE_GAMMA = 2.2;
@@ -89,9 +95,9 @@ fn apply_base_look(rgb: vec3<f32>) -> vec3<f32> {
 
 fn white_balance(rgb: vec3<f32>) -> vec3<f32> {
     let gain = pow(vec3<f32>(2.0), vec3<f32>(
-        adj.temperature * 0.5 + adj.tint * 0.25,
+        (adj.temperature + local_values.w) * 0.5 + adj.tint * 0.25,
         -adj.tint * 0.5,
-        -adj.temperature * 0.5 + adj.tint * 0.25,
+        -(adj.temperature + local_values.w) * 0.5 + adj.tint * 0.25,
     ));
     // Keep neutral luminance fixed so temperature does not read as exposure.
     return rgb * gain / dot(gain, LUMA);
@@ -113,7 +119,7 @@ fn shape_tone(input: f32) -> f32 {
     tone += adj.whites * 0.12 * tone_band(tone, 1.0, 0.35);
 
     // Exponential contrast around mid gray; continuous at 0 and monotonic.
-    let slope = pow(2.0, adj.contrast * 1.2);
+    let slope = pow(2.0, (adj.contrast + local_values.y) * 1.2);
     let centered = max(tone, 0.0) / MID_GRAY_TONE;
     return MID_GRAY_TONE * pow(centered, slope);
 }
@@ -131,7 +137,7 @@ fn apply_color(rgb: vec3<f32>) -> vec3<f32> {
     let trough = min(min(rgb.r, rgb.g), rgb.b);
     let chroma = clamp((peak - trough) / max(peak, 1e-5), 0.0, 1.0);
     // Vibrance acts mostly on muted colours, saturation on all of them equally.
-    let amount = (1.0 + adj.saturation) * (1.0 + adj.vibrance * (1.0 - chroma));
+    let amount = max(1.0 + adj.saturation + local_values.z, 0.0) * (1.0 + adj.vibrance * (1.0 - chroma));
     return max(mix(vec3<f32>(luma), rgb, amount), vec3<f32>(0.0));
 }
 
@@ -263,11 +269,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let uv = (pixel + 0.5) / region.full_size;
     let background = 1.0 - textureSampleLevel(subject_mask, mask_sampler, uv, 0.0).r;
 
+    let weights = textureSampleLevel(local_mask, mask_sampler, uv, 0.0);
+    local_values = adj.local[0] * weights.r + adj.local[1] * weights.g
+        + adj.local[2] * weights.b + adj.local[3] * weights.a;
+
     let source_pixel = vec2<i32>(id.xy) + vec2<i32>(region.source_offset);
     var rgb = apply_sharpen(source_at(source_pixel), source_pixel);
     rgb = apply_skin(rgb, uv);
     rgb = white_balance(rgb);
-    let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background);
+    let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background + local_values.x);
     rgb *= scene_gain;
     rgb = apply_base_look(rgb);
     rgb = apply_clarity(rgb, uv, scene_gain);

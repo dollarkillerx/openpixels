@@ -2,20 +2,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CropOverlay } from "./CropOverlay";
 import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
-import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, shrinkToImage, type Crop } from "./frame";
+import { FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, type Crop } from "./frame";
+import { LOCAL_SLIDERS, MAX_LOCAL_LAYERS, removeLocalValues, renderLocalMask, type LocalKind, type LocalLayer } from "./local";
 import {
   exportName,
   fileId,
   loadEdit,
   loadHeals,
+  loadLocals,
   loadPresets,
+  loadWarps,
   persistable,
   saveHeals,
+  saveLocals,
+  saveWarps,
   savePresets,
   saveEdits,
   type Presets,
 } from "./library";
-import type { Adjustments, HealSpot, LoadResult, Thumbnail } from "./protocol";
+import type { Adjustments, HealSpot, LoadResult, Thumbnail, WarpStroke } from "./protocol";
 
 interface SliderDef {
   key: string;
@@ -83,6 +88,9 @@ const CROP_RATIOS: { label: string; value: number | null }[] = [
   { label: "16:9", value: 16 / 9 },
 ];
 
+const LOCAL_MASK_INTERVAL_MS = 33;
+const MIN_LIQUIFY_STEP = 2;
+const LIQUIFY_SETTLE_MS = 120;
 const JPEG_QUALITY = 92;
 const FRAME_WINDOW = 30;
 const THUMBNAIL_LONG_EDGE = 200;
@@ -167,6 +175,18 @@ export function App() {
   const [healing, setHealing] = useState(false);
   const [healRadius, setHealRadius] = useState(0.012);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+  const [warpGroups, setWarpGroups] = useState<WarpStroke[][]>([]);
+  const [liquifying, setLiquifying] = useState(false);
+  const [liquifyRadius, setLiquifyRadius] = useState(0.06);
+  const [liquifyStrength, setLiquifyStrength] = useState(0.7);
+  const dragRef = useRef<{ x: number; y: number; strokes: WarpStroke[] } | null>(null);
+  const [locals, setLocals] = useState<LocalLayer[]>([]);
+  const [activeLocal, setActiveLocal] = useState(0);
+  const [localTool, setLocalTool] = useState<LocalKind | null>(null);
+  const [localBrush, setLocalBrush] = useState(0.04);
+  const localsRef = useRef<LocalLayer[]>([]);
+  const localFrameRef = useRef<number | null>(null);
+  const localDragRef = useRef(false);
 
   const current = photos.find((photo) => photo.id === currentId) ?? null;
   const locked = batchRunning;
@@ -214,10 +234,10 @@ export function App() {
 
   /** Opens a photo in the engine. Rejects with STALE if another open overtook it. */
   const openPhoto = useCallback(
-    async (photo: Photo, edit: Adjustments, spots: HealSpot[]) => {
+    async (photo: Photo, edit: Adjustments, spots: HealSpot[], warps: WarpStroke[][]) => {
       const engine = engineRef.current!;
       const ticket = ++openTicketRef.current;
-      const result = await engine.open(await photo.file.arrayBuffer(), edit, spots);
+      const result = await engine.open(await photo.file.arrayBuffer(), edit, spots, warps.flat());
       if (ticket !== openTicketRef.current) throw new Error(STALE);
       return result;
     },
@@ -231,14 +251,34 @@ export function App() {
     pendingSettleRef.current = null;
   }, []);
 
+  const proxySizeRef = useRef({ width: 1, height: 1 });
+
+  /** Rasterises the layers shortly; drags change them faster than that is useful. */
+  const scheduleLocalMask = useCallback(() => {
+    if (localFrameRef.current !== null) return;
+    localFrameRef.current = window.setTimeout(() => {
+      localFrameRef.current = null;
+      const { width, height } = proxySizeRef.current;
+      void engineRef.current?.setLocalMask(renderLocalMask(localsRef.current, width, height), width, height);
+    }, LOCAL_MASK_INTERVAL_MS);
+  }, []);
+
   const selectPhoto = useCallback(
     async (photo: Photo) => {
       flushPendingEdit();
       const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
       const spots = loadHeals(photo.id);
+      const warps = loadWarps(photo.id);
       editsRef.current[photo.id] = edit;
       setHeals(spots);
       setHealing(false);
+      setWarpGroups(warps);
+      setLiquifying(false);
+      const layers = loadLocals(photo.id);
+      localsRef.current = layers;
+      setLocals(layers);
+      setActiveLocal(0);
+      setLocalTool(null);
       settledRef.current = edit;
       setCurrentId(photo.id);
       setAdjustments(edit);
@@ -250,9 +290,17 @@ export function App() {
       setDetecting(false);
       setFindingFaces(false);
       try {
-        const result = await openPhoto(photo, edit, spots);
+        const result = await openPhoto(photo, edit, spots, warps);
         setLoaded(result);
         setHeapMB(result.heapMB);
+        proxySizeRef.current = { width: result.proxyWidth, height: result.proxyHeight };
+        if (layers.length > 0) {
+          await engineRef.current!.setLocalMask(
+            renderLocalMask(layers, result.proxyWidth, result.proxyHeight),
+            result.proxyWidth,
+            result.proxyHeight,
+          );
+        }
         setBusy("");
         const ticket = openTicketRef.current;
         // A saved edit needs its analysis back before it can be shown.
@@ -389,6 +437,8 @@ export function App() {
 
   const toggleCropEditing = () => {
     setHealing(false);
+    setLiquifying(false);
+    setLocalTool(null);
     setValue("cropEditing", cropEditing ? 0 : 1);
   };
 
@@ -416,7 +466,167 @@ export function App() {
 
   const toggleHealing = () => {
     if (cropEditing) setValue("cropEditing", 0);
+    setLiquifying(false);
+    setLocalTool(null);
     setHealing((on) => !on);
+  };
+
+  const toggleLiquify = () => {
+    if (cropEditing) setValue("cropEditing", 0);
+    setHealing(false);
+    setLocalTool(null);
+    setLiquifying((on) => !on);
+  };
+
+  const chooseLocalTool = (kind: LocalKind) => {
+    if (cropEditing) setValue("cropEditing", 0);
+    setHealing(false);
+    setLiquifying(false);
+    setLocalTool((current) => (current === kind ? null : kind));
+  };
+
+  const commitLocals = (next: LocalLayer[]) => {
+    localsRef.current = next;
+    setLocals(next);
+    scheduleLocalMask();
+    if (currentId) saveLocals(currentId, next);
+  };
+
+  /** A stage position in source UV, or null outside the displayed image. */
+  const pointerToSource = (event: React.PointerEvent<HTMLElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    // Measured now: layout state can lag behind, and does not update in a hidden page.
+    const box = fitBox((imageFrame.width * shownCrop.w) / (imageFrame.height * shownCrop.h), bounds.width, bounds.height);
+    const s = (event.clientX - bounds.left - box.left) / box.width;
+    const t = (event.clientY - bounds.top - box.top) / box.height;
+    if (!loaded || s < 0 || s > 1 || t < 0 || t > 1) return null;
+    return outputToSource(s, t, adjustments, loaded.width, loaded.height);
+  };
+
+  const startLocal = (event: React.PointerEvent<HTMLElement>) => {
+    if (!localTool) return;
+    const point = pointerToSource(event);
+    if (!point) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    localDragRef.current = true;
+    const layers = localsRef.current;
+    const active = layers[activeLocal];
+    if (localTool === "brush" && active?.kind === "brush") {
+      const updated = { ...active, strokes: [...active.strokes, [point]] };
+      commitLocals(layers.map((layer, index) => (index === activeLocal ? updated : layer)));
+      return;
+    }
+    if (layers.length >= MAX_LOCAL_LAYERS) {
+      localDragRef.current = false;
+      return;
+    }
+    const created: LocalLayer = {
+      kind: localTool,
+      a: point,
+      b: point,
+      strokes: localTool === "brush" ? [[point]] : [],
+      radius: localBrush,
+      invert: false,
+    };
+    const index = layers.length;
+    commitLocals([...layers, created]);
+    setActiveLocal(index);
+    // Starts visible, so the shape can be judged while it is being drawn.
+    applyEdit({ ...adjustments, [`local${index}Exposure`]: 0.5 });
+  };
+
+  const continueLocal = (event: React.PointerEvent<HTMLElement>) => {
+    if (!localDragRef.current) return;
+    const point = pointerToSource(event);
+    if (!point) return;
+    const layers = localsRef.current;
+    const index = layers.length > 0 && layers[activeLocal] ? activeLocal : layers.length - 1;
+    const layer = layers[index];
+    if (!layer) return;
+    const updated =
+      layer.kind === "brush"
+        ? { ...layer, strokes: [...layer.strokes.slice(0, -1), [...layer.strokes[layer.strokes.length - 1], point]] }
+        : { ...layer, b: point };
+    localsRef.current = layers.map((item, position) => (position === index ? updated : item));
+    setLocals(localsRef.current);
+    scheduleLocalMask();
+  };
+
+  const finishLocal = () => {
+    if (!localDragRef.current) return;
+    localDragRef.current = false;
+    commitLocals(localsRef.current);
+    if (currentId) void refreshThumbnail(currentId).catch(() => {});
+  };
+
+  const deleteLocal = () => {
+    const layers = localsRef.current;
+    if (!layers[activeLocal]) return;
+    applyEdit(removeLocalValues(adjustments, activeLocal, layers.length), true);
+    commitLocals(layers.filter((_, index) => index !== activeLocal));
+    setActiveLocal(0);
+  };
+
+  const invertLocal = () =>
+    commitLocals(
+      localsRef.current.map((layer, index) => (index === activeLocal ? { ...layer, invert: !layer.invert } : layer)),
+    );
+
+  const startLiquify = (event: React.PointerEvent<HTMLElement>) => {
+    if (!liquifying) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = { x: event.clientX, y: event.clientY, strokes: [] };
+  };
+
+  const continueLiquify = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < MIN_LIQUIFY_STEP) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const position = (x: number, y: number) => [(x - bounds.left) / bounds.width, (y - bounds.top) / bounds.height];
+    const [fromX, fromY] = position(drag.x, drag.y);
+    const [toX, toY] = position(event.clientX, event.clientY);
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    const strokes = drag.strokes;
+    engineRef.current!
+      .liquify({
+        fromX,
+        fromY,
+        toX,
+        toY,
+        stageWidth: Math.round(bounds.width),
+        stageHeight: Math.round(bounds.height),
+        radius: liquifyRadius,
+        strength: liquifyStrength,
+      })
+      .then((stroke) => {
+        if (stroke) strokes.push(stroke);
+      })
+      .catch((reason: Error) => setError(reason.message));
+  };
+
+  const finishLiquify = async () => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || !currentId) return;
+    // Let replies for the last pointer moves arrive before recording the drag.
+    await new Promise((resolve) => window.setTimeout(resolve, LIQUIFY_SETTLE_MS));
+    if (drag.strokes.length === 0) return;
+    setWarpGroups((groups) => {
+      const next = [...groups, drag.strokes];
+      saveWarps(currentId, next);
+      return next;
+    });
+    void refreshThumbnail(currentId).catch(() => {});
+  };
+
+  const replaceWarps = async (next: WarpStroke[][]) => {
+    if (!currentId) return;
+    setWarpGroups(next);
+    saveWarps(currentId, next);
+    await engineRef.current!.setWarps(next.flat());
+    void refreshThumbnail(currentId).catch(() => {});
   };
 
   const healAtPointer = async (event: React.MouseEvent<HTMLElement>) => {
@@ -445,6 +655,12 @@ export function App() {
     await engineRef.current!.setHeals(next);
     void refreshThumbnail(currentId).catch(() => {});
   };
+
+  const brushDiameter =
+    2 *
+    (liquifying ? liquifyRadius : healRadius) *
+    Math.max(loaded?.width ?? 1, loaded?.height ?? 1) *
+    (displayBox.width / (imageFrame.width * shownCrop.w));
 
   const detectSubject = async () => {
     if (!loaded) return;
@@ -561,8 +777,16 @@ export function App() {
         const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
         setCurrentId(photo.id);
         setAdjustments(edit);
-        const result = await openPhoto(photo, edit, loadHeals(photo.id));
+        const result = await openPhoto(photo, edit, loadHeals(photo.id), loadWarps(photo.id));
         setLoaded(result);
+        const layers = loadLocals(photo.id);
+        if (layers.length > 0) {
+          await engine.setLocalMask(
+            renderLocalMask(layers, result.proxyWidth, result.proxyHeight),
+            result.proxyWidth,
+            result.proxyHeight,
+          );
+        }
         if (needsSubject(edit)) await engine.detectSubject(result.proxyWidth, result.proxyHeight);
         if (needsSkin(edit)) await engine.prepareSkin(result.proxyWidth, result.proxyHeight);
         const { jpeg, heapMB: heap } = await engine.exportJpeg(JPEG_QUALITY);
@@ -590,12 +814,26 @@ export function App() {
         <main
           className="stage"
           ref={stageRef}
-          style={healing ? { cursor: "none" } : undefined}
+          style={healing || liquifying ? { cursor: "none" } : localTool ? { cursor: "crosshair" } : undefined}
+          onPointerDown={(event) => {
+            startLiquify(event);
+            startLocal(event);
+          }}
+          onPointerUp={() => {
+            void finishLiquify();
+            finishLocal();
+          }}
+          onPointerCancel={() => {
+            void finishLiquify();
+            finishLocal();
+          }}
           onClick={(event) => void healAtPointer(event)}
           onPointerMove={(event) => {
-            if (!healing) return;
+            continueLocal(event);
+            if (!healing && !liquifying) return;
             const bounds = event.currentTarget.getBoundingClientRect();
             setPointer({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+            continueLiquify(event);
           }}
           onPointerLeave={() => setPointer(null)}
           onDragOver={(event) => event.preventDefault()}
@@ -617,14 +855,14 @@ export function App() {
               onChange={updateCrop}
             />
           )}
-          {healing && pointer && loaded && (
+          {(healing || liquifying) && pointer && loaded && (
             <div
               className="heal-cursor"
               style={{
                 left: pointer.x,
                 top: pointer.y,
-                width: 2 * healRadius * Math.max(loaded.width, loaded.height) * (displayBox.width / (imageFrame.width * shownCrop.w)),
-                height: 2 * healRadius * Math.max(loaded.width, loaded.height) * (displayBox.width / (imageFrame.width * shownCrop.w)),
+                width: brushDiameter,
+                height: brushDiameter,
               }}
             />
           )}
@@ -833,6 +1071,70 @@ export function App() {
             />
           </label>
           <p className="progress" data-stat="heals">已修复 {heals.length} 处</p>
+        </section>
+
+        <section>
+          <h2>局部调整（{locals.length}/{MAX_LOCAL_LAYERS}）</h2>
+          <div className="row">
+            {([["linear", "线性"], ["radial", "径向"], ["brush", "画笔"]] as [LocalKind, string][]).map(([kind, label]) => (
+              <button key={kind} className={`button ${localTool === kind ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => chooseLocalTool(kind)}>{label}</button>
+            ))}
+          </div>
+          {localTool === "brush" && (
+            <label className="slider">
+              <span>局部画笔</span>
+              <output>{(localBrush * 100).toFixed(1)}</output>
+              <input aria-label="局部画笔" type="range" min={0.005} max={0.2} step={0.005} value={localBrush} onChange={(event) => setLocalBrush(Number(event.target.value))} />
+            </label>
+          )}
+          {locals.length > 0 && (
+            <>
+              <div className="row" role="group" aria-label="局部图层">
+                {locals.map((layer, index) => (
+                  <button key={index} className={`button ${index === activeLocal ? "" : "secondary"}`} disabled={locked} onClick={() => setActiveLocal(index)}>
+                    {layer.kind === "linear" ? "线" : layer.kind === "radial" ? "圆" : "笔"}{index + 1}
+                  </button>
+                ))}
+              </div>
+              {LOCAL_SLIDERS.map(({ suffix, label, min, max }) => {
+                const key = `local${activeLocal}${suffix}`;
+                const value = adjustments[key] ?? 0;
+                return (
+                  <label className="slider" key={suffix}>
+                    <span>{label}</span>
+                    <output>{value.toFixed(2)}</output>
+                    <input aria-label={`局部${label}`} type="range" min={min} max={max} step={0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} onDoubleClick={() => setValue(key, 0)} />
+                  </label>
+                );
+              })}
+              <div className="row">
+                <button className="button secondary" disabled={locked} onClick={invertLocal}>反转</button>
+                <button className="button secondary" disabled={locked} onClick={deleteLocal}>删除图层</button>
+              </div>
+            </>
+          )}
+        </section>
+
+        <section>
+          <h2>液化</h2>
+          <div className="row">
+            <button className={`button ${liquifying ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleLiquify}>
+              {liquifying ? "退出液化" : "推动变形"}
+            </button>
+            <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps(warpGroups.slice(0, -1))}>撤销一笔</button>
+            <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps([])}>清除</button>
+          </div>
+          <label className="slider">
+            <span>液化大小</span>
+            <output>{(liquifyRadius * 100).toFixed(1)}</output>
+            <input aria-label="液化大小" type="range" min={0.01} max={0.25} step={0.005} value={liquifyRadius} disabled={!loaded || locked} onChange={(event) => setLiquifyRadius(Number(event.target.value))} />
+          </label>
+          <label className="slider">
+            <span>液化强度</span>
+            <output>{liquifyStrength.toFixed(2)}</output>
+            <input aria-label="液化强度" type="range" min={0.05} max={1} step={0.05} value={liquifyStrength} disabled={!loaded || locked} onChange={(event) => setLiquifyStrength(Number(event.target.value))} />
+          </label>
+          <p className="progress" data-stat="warps">{warpGroups.length} 笔</p>
         </section>
 
         <section>

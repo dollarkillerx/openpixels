@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use futures_channel::oneshot;
-use op_core::{Adjustments, Geometry, LinearImage, SkinRetouch};
+use op_core::{Adjustments, Geometry, LinearImage, SkinRetouch, WarpField};
 use wgpu::util::align_to;
 
 const SOURCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -44,6 +44,7 @@ struct Preview {
     source: wgpu::Texture,
     source_view: wgpu::TextureView,
     output_view: wgpu::TextureView,
+    warp: wgpu::Texture,
     develop: wgpu::BindGroup,
     blit: wgpu::BindGroup,
 }
@@ -65,6 +66,7 @@ pub struct Renderer {
     blurred_luma_view: wgpu::TextureView,
     skin_smooth_view: wgpu::TextureView,
     skin_blemish_view: wgpu::TextureView,
+    local_mask_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     preview: Option<Preview>,
 }
@@ -101,6 +103,7 @@ impl Renderer {
                 texture_entry(6, wgpu::ShaderStages::COMPUTE, true),
                 texture_entry(7, wgpu::ShaderStages::COMPUTE, true),
                 texture_entry(8, wgpu::ShaderStages::COMPUTE, true),
+                texture_entry(9, wgpu::ShaderStages::COMPUTE, true),
             ],
         });
         let develop_pipeline_layout =
@@ -129,6 +132,7 @@ impl Renderer {
                     count: None,
                 },
                 uniform_entry(2, wgpu::ShaderStages::VERTEX),
+                texture_entry(3, wgpu::ShaderStages::FRAGMENT, true),
             ],
         });
         let blit_pipeline_layout =
@@ -175,6 +179,7 @@ impl Renderer {
         let blurred_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
         let skin_smooth_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
         let skin_blemish_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
+        let local_mask_view = create_local_mask_view(&device, &queue, 1, 1, &[0; 4]);
 
         Self {
             device,
@@ -191,6 +196,7 @@ impl Renderer {
             blurred_luma_view,
             skin_smooth_view,
             skin_blemish_view,
+            local_mask_view,
             base_exposure: None,
             preview: None,
         }
@@ -207,6 +213,26 @@ impl Renderer {
     pub fn set_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
         self.mask_view = create_mask_view(&self.device, &self.queue, width, height, mask);
         self.rebuild_preview_bindings();
+    }
+
+    /// Updates the liquify field shown by the preview.
+    pub fn update_warp(&self, field: &WarpField) {
+        if let Some(preview) = &self.preview {
+            self.write_warp(&preview.warp, field);
+        }
+    }
+
+    fn write_warp(&self, texture: &wgpu::Texture, field: &WarpField) {
+        self.queue.write_texture(
+            texture.as_image_copy(),
+            cast_slice(&field.to_half_bits()),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(field.width * 4),
+                rows_per_image: Some(field.height),
+            },
+            extent(field.width, field.height),
+        );
     }
 
     /// Replaces the proxy's pixels, keeping its mask and corrections. `proxy` must have
@@ -241,6 +267,12 @@ impl Renderer {
         ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((u, v))
     }
 
+    /// Sets the local adjustment masks, one layer per RGBA channel, covering the image.
+    pub fn set_local_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.local_mask_view = create_local_mask_view(&self.device, &self.queue, width, height, rgba);
+        self.rebuild_preview_bindings();
+    }
+
     /// Sets the skin corrections for the current image.
     pub fn set_skin_retouch(&mut self, retouch: &SkinRetouch) {
         let (width, height) = (retouch.width, retouch.height);
@@ -262,6 +294,7 @@ impl Renderer {
         self.mask_view = create_mask_view(&self.device, &self.queue, 1, 1, &[255]);
         self.skin_smooth_view = create_correction_view(&self.device, &self.queue, 1, 1, &[0; 4]);
         self.skin_blemish_view = create_correction_view(&self.device, &self.queue, 1, 1, &[0; 4]);
+        self.local_mask_view = create_local_mask_view(&self.device, &self.queue, 1, 1, &[0; 4]);
         let (luma_width, luma_height, luma) = proxy.blurred_luma(BLURRED_LUMA_LONG_EDGE);
         self.blurred_luma_view = create_luma_view(&self.device, &self.queue, luma_width, luma_height, &luma);
         let (width, height) = (proxy.width, proxy.height);
@@ -272,6 +305,19 @@ impl Renderer {
         let source_view = source.create_view(&Default::default());
         let output_view = output.create_view(&Default::default());
         let develop = self.develop_bind_group(&source_view, &output_view);
+        let empty_field = WarpField::new(width, height);
+        let warp = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("warp"),
+            size: extent(empty_field.width, empty_field.height),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.write_warp(&warp, &empty_field);
+        let warp_view = warp.create_view(&Default::default());
         let blit = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("blit"),
             layout: &self.blit_layout,
@@ -288,9 +334,13 @@ impl Renderer {
                     binding: 2,
                     resource: self.blit_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&warp_view),
+                },
             ],
         });
-        self.preview = Some(Preview { width, height, source, source_view, output_view, develop, blit });
+        self.preview = Some(Preview { width, height, source, source_view, output_view, warp, develop, blit });
     }
 
     /// Develops the proxy with `adjustments` and draws it, letterboxed, into `target`.
@@ -523,6 +573,10 @@ impl Renderer {
                     binding: 8,
                     resource: wgpu::BindingResource::TextureView(&self.skin_blemish_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&self.local_mask_view),
+                },
             ],
         })
     }
@@ -645,6 +699,36 @@ fn create_luma_view(
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(width * 2),
+            rows_per_image: Some(height),
+        },
+        extent(width, height),
+    );
+    texture.create_view(&Default::default())
+}
+
+fn create_local_mask_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("local mask"),
+        size: extent(width, height),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
             rows_per_image: Some(height),
         },
         extent(width, height),
@@ -937,6 +1021,41 @@ mod tests {
         renderer.set_skin_retouch(&one_stop_correction(4, 4));
         renderer.set_preview(&image);
         let adj = Adjustments { skin_smooth: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        assert!((i32::from(out[0]) - 118).abs() <= 1, "got {}", out[0]);
+    }
+
+    #[test]
+    fn a_local_layer_only_affects_its_masked_area() {
+        let mut renderer = renderer();
+        // Left pixel is in layer 0, right pixel is not.
+        renderer.set_local_mask(2, 1, &[255, 0, 0, 0, 0, 0, 0, 0]);
+        let mut adj = Adjustments::default();
+        adj.local[0][0] = 1.0;
+        let out = export(&renderer, &flat_gray(2, 1), &adj, 64);
+        assert!((i32::from(out[0]) - 161).abs() <= 1, "masked got {}", out[0]);
+        assert!((i32::from(out[3]) - 118).abs() <= 1, "unmasked got {}", out[3]);
+    }
+
+    #[test]
+    fn local_layers_use_separate_channels() {
+        let mut renderer = renderer();
+        renderer.set_local_mask(1, 1, &[0, 255, 0, 0]);
+        let mut adj = Adjustments::default();
+        adj.local[0][0] = 2.0;
+        adj.local[1][0] = 1.0;
+        let out = export(&renderer, &flat_gray(1, 1), &adj, 64);
+        assert!((i32::from(out[0]) - 161).abs() <= 1, "got {}", out[0]);
+    }
+
+    #[test]
+    fn a_new_image_clears_local_masks() {
+        let mut renderer = renderer();
+        renderer.set_local_mask(1, 1, &[255, 0, 0, 0]);
+        let image = flat_gray(4, 4);
+        renderer.set_preview(&image);
+        let mut adj = Adjustments::default();
+        adj.local[0][0] = 1.0;
         let out = export(&renderer, &image, &adj, 64);
         assert!((i32::from(out[0]) - 118).abs() <= 1, "got {}", out[0]);
     }

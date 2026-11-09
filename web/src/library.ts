@@ -1,8 +1,11 @@
-import type { Adjustments, HealSpot } from "./protocol";
+import type { LocalLayer } from "./local";
+import type { Adjustments, HealSpot, WarpStroke } from "./protocol";
 
 const EDITS_KEY = "openpixels.edits.v1";
 const PRESETS_KEY = "openpixels.presets.v1";
 const HEALS_KEY = "openpixels.heals.v1";
+const WARPS_KEY = "openpixels.warps.v1";
+const LOCALS_KEY = "openpixels.locals.v1";
 
 /** Editing aids that belong to the session, never to a saved edit. */
 const SESSION_ONLY = new Set(["maskOverlay", "cropEditing"]);
@@ -35,6 +38,9 @@ export function engineJson(adjustments: Adjustments): string {
     hslHue: bands("hslHue"),
     hslSaturation: bands("hslSat"),
     hslLuminance: bands("hslLum"),
+    local: [0, 1, 2, 3].map((layer) =>
+      ["Exposure", "Contrast", "Saturation", "Temperature"].map((name) => adjustments[`local${layer}${name}`] ?? 0),
+    ),
   });
 }
 
@@ -67,6 +73,25 @@ export function saveHeals(id: string, heals: HealSpot[]) {
   if (heals.length > 0) all[id] = heals;
   else delete all[id];
   write(HEALS_KEY, all);
+}
+
+/** Liquify strokes, grouped by the drag that made them so undo removes a whole drag. */
+export const loadWarps = (id: string): WarpStroke[][] => read<Record<string, WarpStroke[][]>>(WARPS_KEY, {})[id] ?? [];
+
+export function saveWarps(id: string, groups: WarpStroke[][]) {
+  const all = read<Record<string, WarpStroke[][]>>(WARPS_KEY, {});
+  if (groups.length > 0) all[id] = groups;
+  else delete all[id];
+  write(WARPS_KEY, all);
+}
+
+export const loadLocals = (id: string): LocalLayer[] => read<Record<string, LocalLayer[]>>(LOCALS_KEY, {})[id] ?? [];
+
+export function saveLocals(id: string, layers: LocalLayer[]) {
+  const all = read<Record<string, LocalLayer[]>>(LOCALS_KEY, {});
+  if (layers.length > 0) all[id] = layers;
+  else delete all[id];
+  write(LOCALS_KEY, all);
 }
 
 export const loadPresets = (): Presets => read<Presets>(PRESETS_KEY, {});

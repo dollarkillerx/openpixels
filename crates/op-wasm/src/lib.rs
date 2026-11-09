@@ -1,7 +1,9 @@
 //! Browser bindings. Everything here runs inside one dedicated Worker, which must
 //! not call a method while an async one is still pending.
 
-use op_core::{Adjustments, Geometry, HealSpot, LinearImage, apply_heals, find_heal_source};
+use op_core::{
+    Adjustments, Geometry, HealSpot, LinearImage, WarpField, WarpStroke, apply_heals, find_heal_source,
+};
 use op_gpu::{Renderer, encode_jpeg};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -53,6 +55,7 @@ pub struct Engine {
     crop_editing: bool,
     heals: Vec<HealSpot>,
     healed_proxy: Option<LinearImage>,
+    warp: Option<WarpField>,
 }
 
 #[wasm_bindgen]
@@ -108,6 +111,7 @@ impl Engine {
             crop_editing: false,
             heals: Vec::new(),
             healed_proxy: None,
+            warp: None,
         })
     }
 
@@ -139,6 +143,7 @@ impl Engine {
         let image = self.working.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
         let proxy = image.proxy(max_long_edge);
         self.renderer.set_preview(&proxy);
+        self.warp = Some(WarpField::new(proxy.width, proxy.height));
         let info = ProxyInfo { width: proxy.width, height: proxy.height };
         self.proxy = Some(proxy);
         if self.raw_file.is_some() {
@@ -212,6 +217,51 @@ impl Engine {
         Ok(())
     }
 
+    /// Pushes the image from one stage position to another, both in 0..=1. Returns the
+    /// stroke as JSON, or `null` if either position missed the image.
+    #[allow(clippy::too_many_arguments)]
+    pub fn liquify(
+        &mut self,
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+        stage_width: u32,
+        stage_height: u32,
+        radius: f32,
+        strength: f32,
+    ) -> Result<String, JsError> {
+        let size = (stage_width.max(1), stage_height.max(1));
+        let from = self.renderer.canvas_to_image(&self.geometry, size, from_x, from_y);
+        let to = self.renderer.canvas_to_image(&self.geometry, size, to_x, to_y);
+        let (Some(from), Some(to), Some(field)) = (from, to, self.warp.as_mut()) else {
+            return Ok("null".into());
+        };
+        let stroke =
+            WarpStroke { x: from.0, y: from.1, dx: to.0 - from.0, dy: to.1 - from.1, radius, strength };
+        field.apply(&stroke);
+        self.renderer.update_warp(field);
+        serde_json::to_string(&stroke).map_err(js_error)
+    }
+
+    /// Rebuilds the liquify field from a list of strokes, given as JSON.
+    pub fn set_warp_strokes(&mut self, json: &str) -> Result<(), JsError> {
+        let strokes: Vec<WarpStroke> = serde_json::from_str(json).map_err(js_error)?;
+        let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let mut field = WarpField::new(proxy.width, proxy.height);
+        for stroke in &strokes {
+            field.apply(stroke);
+        }
+        self.renderer.update_warp(&field);
+        self.warp = Some(field);
+        Ok(())
+    }
+
+    /// Sets the local adjustment masks, one layer per RGBA channel, covering the image.
+    pub fn set_local_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.renderer.set_local_mask(width, height, rgba);
+    }
+
     /// Replaces the list of healed spots, given as JSON.
     pub fn set_heals(&mut self, json: &str) -> Result<(), JsError> {
         self.heals = serde_json::from_str(json).map_err(js_error)?;
@@ -261,7 +311,8 @@ impl Engine {
     pub async fn framed_thumbnail(&mut self, max_long_edge: u32) -> Result<Vec<u8>, JsError> {
         let rgb = self.thumbnail(max_long_edge).await?;
         let (width, height) = self.thumbnail_dimensions(max_long_edge)?;
-        Ok(self.geometry.apply_rgb8(&rgb, width, height).0)
+        let warped = self.warped(rgb, width, height);
+        Ok(self.geometry.apply_rgb8(&warped, width, height).0)
     }
 
     /// Size of [`Self::framed_thumbnail`] for the same `max_long_edge`, as JSON.
@@ -296,12 +347,21 @@ impl Engine {
             .export_rgb8(image, &self.adjustments, EXPORT_TILE_SIZE)
             .await
             .map_err(js_error)?;
-        let (framed, width, height) = self.geometry.apply_rgb8(&rgb, image.width, image.height);
+        let (image_width, image_height) = (image.width, image.height);
+        let warped = self.warped(rgb, image_width, image_height);
+        let (framed, width, height) = self.geometry.apply_rgb8(&warped, image_width, image_height);
         encode_jpeg(&framed, width, height, quality).map_err(js_error)
     }
 }
 
 impl Engine {
+    fn warped(&self, rgb: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
+        match &self.warp {
+            Some(field) if !field.is_identity() => field.warp_rgb8(&rgb, width, height),
+            _ => rgb,
+        }
+    }
+
     fn refresh_healed_preview(&mut self) {
         let Some(proxy) = &self.proxy else { return };
         if self.heals.is_empty() {

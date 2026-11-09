@@ -40,6 +40,8 @@ pub struct Adjustments {
     pub hsl_hue: [[f32; 4]; 2],
     pub hsl_saturation: [[f32; 4]; 2],
     pub hsl_luminance: [[f32; 4]; 2],
+    /// Per local layer: exposure in EV, contrast, saturation and temperature.
+    pub local: [[f32; 4]; 4],
 }
 
 #[cfg(test)]
@@ -54,6 +56,6 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16);
     }
 }
