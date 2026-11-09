@@ -8,6 +8,8 @@
 use half::f16;
 use serde::{Deserialize, Serialize};
 
+use crate::output::Sample;
+
 const FIELD_LONG_EDGE: u32 = 512;
 /// How far one bloat or pucker step moves content, relative to its distance from the centre.
 const RADIAL_RATE: f32 = 0.08;
@@ -116,13 +118,13 @@ impl WarpField {
         self.offsets.iter().map(|&value| f16::from_f32(value).to_bits()).collect()
     }
 
-    /// Applies the field to tightly packed RGB8.
-    pub fn warp_rgb8(&self, rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+    /// Applies the field to tightly packed RGB.
+    pub fn warp_rgb<S: Sample>(&self, rgb: &[S], width: u32, height: u32) -> Vec<S> {
         if self.is_identity() {
             return rgb.to_vec();
         }
         let (w, h) = (width as usize, height as usize);
-        let mut out = vec![0u8; rgb.len()];
+        let mut out = vec![S::default(); rgb.len()];
         for row in 0..h {
             let v = (row as f32 + 0.5) / h as f32;
             for col in 0..w {
@@ -135,10 +137,10 @@ impl WarpField {
                 let (tx, ty) = (px.fract(), py.fract());
                 let target = (row * w + col) * 3;
                 for channel in 0..3 {
-                    let at = |x: usize, y: usize| f32::from(rgb[(y * w + x) * 3 + channel]);
+                    let at = |x: usize, y: usize| rgb[(y * w + x) * 3 + channel].to_f32();
                     let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
                     let bottom = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
-                    out[target + channel] = (top * (1.0 - ty) + bottom * ty).round() as u8;
+                    out[target + channel] = S::from_f32(top * (1.0 - ty) + bottom * ty);
                 }
             }
         }
@@ -190,14 +192,14 @@ mod tests {
     fn an_empty_field_leaves_the_image_alone() {
         let field = WarpField::new(SIZE, SIZE);
         assert!(field.is_identity());
-        assert_eq!(field.warp_rgb8(&bar(), SIZE, SIZE), bar());
+        assert_eq!(field.warp_rgb(&bar(), SIZE, SIZE), bar());
     }
 
     #[test]
     fn dragging_right_moves_content_right() {
         let mut field = WarpField::new(SIZE, SIZE);
         field.apply(&stroke(0.1));
-        let out = field.warp_rgb8(&bar(), SIZE, SIZE);
+        let out = field.warp_rgb(&bar(), SIZE, SIZE);
         let moved = brightest_x(&out, 128);
         assert!(moved > 140, "bar should move right at the brush centre, found at {moved}");
     }
@@ -206,7 +208,7 @@ mod tests {
     fn content_outside_the_brush_stays_put() {
         let mut field = WarpField::new(SIZE, SIZE);
         field.apply(&stroke(0.1));
-        let out = field.warp_rgb8(&bar(), SIZE, SIZE);
+        let out = field.warp_rgb(&bar(), SIZE, SIZE);
         assert_eq!(brightest_x(&out, 10), brightest_x(&bar(), 10));
     }
 

@@ -17,6 +17,8 @@ export interface Watermark {
 export interface OutputSettings {
   format: OutputFormat;
   quality: number;
+  /** Bits per channel for PNG and TIFF; JPEG is always 8. */
+  bitDepth: 8 | 16;
   /** Longest side in pixels; 0 keeps the full size. */
   longEdge: number;
   template: string;
@@ -26,6 +28,7 @@ export interface OutputSettings {
 export const DEFAULT_OUTPUT: OutputSettings = {
   format: "jpeg",
   quality: 92,
+  bitDepth: 8,
   longEdge: 0,
   template: "{name}",
   watermark: { enabled: false, text: "", logo: null, size: 0.03, opacity: 0.7, position: "bottomRight" },

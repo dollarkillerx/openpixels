@@ -3,8 +3,8 @@
 
 use op_core::{
     Adjustments, DevelopJob, ErasePatch, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
-    OutputFormat, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
-    neutral_white_balance, resize_rgb8,
+    OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
+    neutral_white_balance, resize_rgb,
 };
 use op_gpu::{Renderer, encode_jpeg};
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,17 @@ struct OutputSettings {
     format: OutputFormat,
     quality: u8,
     long_edge: u32,
+    #[serde(default)]
+    bit_depth: u32,
+}
+
+/// A watermark raster and where it goes on the finished image.
+struct Overlay<'a> {
+    rgba: &'a [u8],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Serialize)]
@@ -167,10 +178,11 @@ impl Engine {
     }
 
     /// Opens an image a browser-side codec already decoded. Returns JSON metadata.
-    pub fn decode_rgba(&mut self, rgba: &[u8], width: u32, height: u32) -> Result<String, JsError> {
+    /// `source` is the original file, for its capture details.
+    pub fn decode_rgba(&mut self, rgba: &[u8], width: u32, height: u32, source: &[u8]) -> Result<String, JsError> {
         self.release_image();
         let opened = op_core::open_rgba8(width, height, rgba).map_err(js_error)?;
-        self.source_exif = None;
+        self.source_exif = Some(export_exif(source));
         self.finish_open(opened, None)
     }
 
@@ -435,9 +447,9 @@ impl Engine {
     pub async fn framed_thumbnail(&mut self, max_long_edge: u32) -> Result<Vec<u8>, JsError> {
         let rgb = self.thumbnail(max_long_edge).await?;
         let (width, height) = self.thumbnail_dimensions(max_long_edge)?;
-        let corrected = self.renderer.lens_map(&self.adjustments, width, height).apply_rgb8(&rgb, width, height);
+        let corrected = self.renderer.lens_map(&self.adjustments, width, height).apply_rgb(&rgb, width, height);
         let warped = self.warped(corrected, width, height);
-        Ok(self.geometry.apply_rgb8(&warped, width, height).0)
+        Ok(self.geometry.apply_rgb(&warped, width, height).0)
     }
 
     /// Size of [`Self::framed_thumbnail`] for the same `max_long_edge`, as JSON.
@@ -520,24 +532,23 @@ impl Engine {
             .as_ref()
             .or(self.working.as_ref())
             .ok_or_else(|| JsError::new("no image loaded"))?;
-        let rgb = self
-            .renderer
-            .export_rgb8(image, &self.adjustments, EXPORT_TILE_SIZE)
-            .await
-            .map_err(js_error)?;
         let (image_width, image_height) = (image.width, image.height);
-        // In the order the blit undoes them: lens, then liquify, then framing.
-        let corrected = self.renderer.lens_map(&self.adjustments, image_width, image_height).apply_rgb8(&rgb, image_width, image_height);
-        let warped = self.warped(corrected, image_width, image_height);
-        let (framed, frame_width, frame_height) = self.geometry.apply_rgb8(&warped, image_width, image_height);
-        drop(warped);
-        let (width, height) = fit_long_edge(frame_width, frame_height, settings.long_edge);
-        let mut finished = resize_rgb8(framed, frame_width, frame_height, width, height);
-        composite_overlay(&mut finished, width, height, &overlay, overlay_x, overlay_y, overlay_width, overlay_height);
+        let overlay = Overlay { rgba: &overlay, x: overlay_x, y: overlay_y, width: overlay_width, height: overlay_height };
+
+        if settings.bit_depth == 16 && settings.format != OutputFormat::Jpeg {
+            let rgb = self.renderer.export_rgb16(image, &self.adjustments, EXPORT_TILE_SIZE).await.map_err(js_error)?;
+            // The source is no longer needed, and the steps below each allocate a copy.
+            drop(developed);
+            let (finished, width, height) = self.finish(rgb, image_width, image_height, settings.long_edge, &overlay);
+            return self.encode_lossless(settings.format, &finished, width, height);
+        }
+
+        let rgb = self.renderer.export_rgb8(image, &self.adjustments, EXPORT_TILE_SIZE).await.map_err(js_error)?;
+        drop(developed);
+        let (finished, width, height) = self.finish(rgb, image_width, image_height, settings.long_edge, &overlay);
         match settings.format {
             OutputFormat::Jpeg => encode_jpeg(&finished, width, height, settings.quality.clamp(1, 100), self.source_exif.clone()).map_err(js_error),
-            OutputFormat::Png => encode_png(&finished, width, height).map_err(js_error),
-            OutputFormat::Tiff => encode_tiff(&finished, width, height).map_err(js_error),
+            format => self.encode_lossless(format, &finished, width, height),
         }
     }
 }
@@ -572,10 +583,35 @@ impl Engine {
         serde_json::to_string(&info).map_err(js_error)
     }
 
-    fn warped(&self, rgb: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
+    fn warped<S: Sample>(&self, rgb: Vec<S>, width: u32, height: u32) -> Vec<S> {
         match &self.warp {
-            Some(field) if !field.is_identity() => field.warp_rgb8(&rgb, width, height),
+            Some(field) if !field.is_identity() => field.warp_rgb(&rgb, width, height),
             _ => rgb,
+        }
+    }
+
+    /// Applies, in the order the blit undoes them, the lens correction, liquify and
+    /// framing, then the delivery size and the watermark.
+    fn finish<S: Sample>(&self, rgb: Vec<S>, width: u32, height: u32, long_edge: u32, overlay: &Overlay) -> (Vec<S>, u32, u32) {
+        let lens = self.renderer.lens_map(&self.adjustments, width, height);
+        let corrected = if lens.is_identity() { rgb } else { lens.apply_rgb(&rgb, width, height) };
+        let warped = self.warped(corrected, width, height);
+        let (framed, frame_width, frame_height) = if self.geometry == Geometry::default() {
+            (warped, width, height)
+        } else {
+            self.geometry.apply_rgb(&warped, width, height)
+        };
+        let (out_width, out_height) = fit_long_edge(frame_width, frame_height, long_edge);
+        let mut finished = resize_rgb(framed, frame_width, frame_height, out_width, out_height);
+        composite_overlay(&mut finished, out_width, out_height, overlay.rgba, overlay.x, overlay.y, overlay.width, overlay.height);
+        (finished, out_width, out_height)
+    }
+
+    fn encode_lossless<S: Sample>(&self, format: OutputFormat, rgb: &[S], width: u32, height: u32) -> Result<Vec<u8>, JsError> {
+        let exif = self.source_exif.as_deref();
+        match format {
+            OutputFormat::Png => encode_png(rgb, width, height, exif).map_err(js_error),
+            _ => Ok(encode_tiff(rgb, width, height, exif)),
         }
     }
 

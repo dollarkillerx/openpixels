@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Adjustments;
+use crate::output::Sample;
 
 /// How far the distortion slider bends the image at the corner, at full travel.
 const MANUAL_DISTORTION: f32 = 0.2;
@@ -307,22 +308,22 @@ impl LensMap {
     }
 
     /// Resamples a developed image through the geometric corrections.
-    pub fn apply_rgb8(&self, rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+    pub fn apply_rgb<S: Sample>(&self, rgb: &[S], width: u32, height: u32) -> Vec<S> {
         if self.is_identity() {
             return rgb.to_vec();
         }
         let (w, h) = (width as usize, height as usize);
-        let mut out = vec![0u8; rgb.len()];
+        let mut out = vec![S::default(); rgb.len()];
         let fringing = self.chroma != [0.0; 4];
-        let sample = |x: f32, y: f32, channel: usize| -> u8 {
+        let sample = |x: f32, y: f32, channel: usize| -> S {
             let (x, y) = (x.clamp(0.0, (w - 1) as f32), y.clamp(0.0, (h - 1) as f32));
             let (x0, y0) = (x as usize, y as usize);
             let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
             let (tx, ty) = (x - x0 as f32, y - y0 as f32);
-            let at = |px: usize, py: usize| f32::from(rgb[(py * w + px) * 3 + channel]);
+            let at = |px: usize, py: usize| rgb[(py * w + px) * 3 + channel].to_f32();
             let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
             let bottom = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
-            (top * (1.0 - ty) + bottom * ty).round() as u8
+            S::from_f32(top * (1.0 - ty) + bottom * ty)
         };
         for (row, line) in out.chunks_exact_mut(w * 3).enumerate() {
             let v = (row as f32 + 0.5) / height as f32;
@@ -498,7 +499,7 @@ mod tests {
         assert!(map.is_identity());
         assert_eq!(map.source_uv(0.25, 0.75, 1), (0.25, 0.75));
         let rgb: Vec<u8> = (0..300 * 200 * 3).map(|i| (i % 251) as u8).collect();
-        assert_eq!(map.apply_rgb8(&rgb, 300, 200), rgb);
+        assert_eq!(map.apply_rgb(&rgb, 300, 200), rgb);
     }
 
     #[test]

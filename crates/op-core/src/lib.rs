@@ -23,7 +23,7 @@ pub use exif::export_exif;
 pub use geometry::Geometry;
 pub use icc::srgb_icc_profile;
 pub use lens::{LensMap, LensProfile};
-pub use output::{OutputFormat, composite_overlay, encode_png, encode_tiff, fit_long_edge, resize_rgb8};
+pub use output::{OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, fit_long_edge, resize_rgb};
 pub use heal::{ErasePatch, HealSpot, apply_erases, apply_heals, find_heal_source};
 pub use image_buf::LinearImage;
 pub use retouch::{SkinRetouch, build_skin_retouch};

@@ -2185,6 +2185,14 @@ export function App() {
               ))}
             </select>
           </div>
+          {output.format !== "jpeg" && (
+            <div className="row">
+              <select aria-label="位深" value={output.bitDepth} disabled={locked} onChange={(event) => updateOutput({ bitDepth: Number(event.target.value) as 8 | 16 })}>
+                <option value={8}>8 位</option>
+                <option value={16}>16 位</option>
+              </select>
+            </div>
+          )}
           {output.format === "jpeg" && (
             <label className="slider">
               <span>质量</span>

@@ -138,7 +138,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       let decoded: string;
       if (isHeic(bytes)) {
         const raster = await decodeHeic(bytes);
-        decoded = engine!.decode_rgba(raster.rgba, raster.width, raster.height);
+        decoded = engine!.decode_rgba(raster.rgba, raster.width, raster.height, bytes);
       } else {
         decoded = engine!.decode(bytes);
       }
@@ -172,12 +172,12 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       }
       const start = performance.now();
       await developInParallel();
-      const { format, quality, longEdge, watermark } = request.settings;
+      const { format, quality, bitDepth, longEdge, watermark } = request.settings;
       const size = JSON.parse(engine!.export_size(longEdge));
       const overlay = await renderWatermark(watermark, size.width, size.height);
       const bytes = detach(
         await engine!.export_image(
-          JSON.stringify({ format, quality, longEdge }),
+          JSON.stringify({ format, quality, longEdge, bitDepth }),
           overlay?.rgba ?? new Uint8Array(0),
           overlay?.x ?? 0,
           overlay?.y ?? 0,

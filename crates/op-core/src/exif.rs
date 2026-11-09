@@ -1,5 +1,6 @@
-//! Writes an EXIF block for exported JPEGs: the capture details from the source file,
-//! and a sRGB colour space tag, with orientation reset because pixels are already upright.
+//! Writes the EXIF block of exported files, and whole TIFF files: the capture details from
+//! the source file, and a sRGB colour space tag, with orientation reset because pixels are
+//! already upright.
 
 use flashraw::FlashRaw;
 
@@ -8,8 +9,13 @@ const TYPE_ASCII: u16 = 2;
 const TYPE_SHORT: u16 = 3;
 const TYPE_LONG: u16 = 4;
 const TYPE_RATIONAL: u16 = 5;
+const TYPE_UNDEFINED: u16 = 7;
 const TYPE_SRATIONAL: u16 = 10;
 const EXIF_IFD_POINTER: u16 = 34665;
+const ICC_PROFILE: u16 = 34675;
+const HEADER_SIZE: u32 = 8;
+/// What precedes the TIFF structure in a JPEG's APP1 segment.
+pub(crate) const EXIF_PREFIX: &[u8] = b"Exif\0\0";
 
 const MAX_IFD_ENTRIES: usize = 1024;
 const MAX_VALUE_BYTES: usize = 4096;
@@ -18,6 +24,7 @@ const COPIED_MAIN_TAGS: [u16; 5] = [271, 272, 306, 315, 33432];
 /// Exposure, aperture, ISO, capture times, exposure compensation, focal length and lens.
 const COPIED_DETAIL_TAGS: [u16; 9] = [33434, 33437, 34855, 36867, 36868, 37380, 37386, 42035, 42036];
 
+#[derive(Clone)]
 struct Entry {
     tag: u16,
     kind: u16,
@@ -33,6 +40,10 @@ fn ascii(tag: u16, text: &str) -> Entry {
 
 fn short(tag: u16, value: u16) -> Entry {
     Entry { tag, kind: TYPE_SHORT, count: 1, data: value.to_le_bytes().to_vec() }
+}
+
+fn long(tag: u16, value: u32) -> Entry {
+    Entry { tag, kind: TYPE_LONG, count: 1, data: value.to_le_bytes().to_vec() }
 }
 
 fn rational(tag: u16, numerator: u32, denominator: u32) -> Entry {
@@ -90,10 +101,102 @@ fn exif_time(text: &str) -> Option<String> {
     valid.then_some(normal)
 }
 
-/// The TIFF structure holding a JPEG's EXIF, or a whole TIFF file.
+/// Splits the box at `at` into its four-character type, body and the position after it.
+fn heif_box(data: &[u8], at: usize) -> Option<(&[u8], &[u8], usize)> {
+    let size = u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize;
+    let kind = data.get(at + 4..at + 8)?;
+    let (body, end) = match size {
+        // Runs to the end of the enclosing data.
+        0 => (at + 8, data.len()),
+        1 => (at + 16, at.checked_add(u64::from_be_bytes(data.get(at + 8..at + 16)?.try_into().ok()?) as usize)?),
+        _ => (at + 8, at.checked_add(size)?),
+    };
+    Some((kind, data.get(body..end)?, end))
+}
+
+fn heif_child<'a>(data: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
+    let mut at = 0;
+    loop {
+        let (kind, body, end) = heif_box(data, at)?;
+        if kind == wanted {
+            return Some(body);
+        }
+        at = end;
+    }
+}
+
+fn be_uint(data: &[u8], at: usize, size: usize) -> Option<usize> {
+    let bytes = data.get(at..at + size)?;
+    Some(bytes.iter().fold(0usize, |value, &byte| (value << 8) | usize::from(byte)))
+}
+
+/// The item id of the first `Exif` item in an `iinf` box.
+fn heif_exif_item(iinf: &[u8]) -> Option<usize> {
+    let mut at = if *iinf.first()? == 0 { 6 } else { 8 };
+    loop {
+        let (kind, body, end) = heif_box(iinf, at)?;
+        if kind == b"infe" {
+            let version = *body.first()?;
+            let id_size = match version {
+                2 => 2,
+                3 => 4,
+                _ => return None,
+            };
+            if body.get(4 + id_size + 2..4 + id_size + 6)? == b"Exif" {
+                return be_uint(body, 4, id_size);
+            }
+        }
+        at = end;
+    }
+}
+
+/// File range of an item from an `iloc` box, if it is one extent in the file itself.
+fn heif_item_range(iloc: &[u8], item: usize) -> Option<(usize, usize)> {
+    let version = *iloc.first()?;
+    let (offset_size, length_size) = (usize::from(iloc.get(4)? >> 4), usize::from(iloc.get(4)? & 15));
+    let base_size = usize::from(iloc.get(5)? >> 4);
+    let index_size = if version > 0 { usize::from(iloc.get(5)? & 15) } else { 0 };
+    let (id_size, count_size) = if version < 2 { (2, 2) } else { (4, 4) };
+    let items = be_uint(iloc, 6, count_size)?.min(MAX_IFD_ENTRIES);
+    let mut at = 6 + count_size;
+    for _ in 0..items {
+        let id = be_uint(iloc, at, id_size)?;
+        at += id_size;
+        let in_file = version == 0 || be_uint(iloc, at, 2)? & 15 == 0;
+        at += if version == 0 { 0 } else { 2 } + 2;
+        let base = be_uint(iloc, at, base_size)?;
+        at += base_size;
+        let extents = be_uint(iloc, at, 2)?;
+        at += 2;
+        if id == item {
+            if !in_file || extents != 1 {
+                return None;
+            }
+            let offset = base.checked_add(be_uint(iloc, at + index_size, offset_size)?)?;
+            return Some((offset, be_uint(iloc, at + index_size + offset_size, length_size)?));
+        }
+        at += extents * (index_size + offset_size + length_size);
+    }
+    None
+}
+
+/// The TIFF structure of a HEIF file's EXIF item.
+fn heif_tiff_block(source: &[u8]) -> Option<&[u8]> {
+    let meta = heif_child(source, b"meta")?.get(4..)?;
+    let item = heif_exif_item(heif_child(meta, b"iinf")?)?;
+    let (offset, length) = heif_item_range(heif_child(meta, b"iloc")?, item)?;
+    let data = source.get(offset..offset.checked_add(length)?)?;
+    // The item starts with the distance from its fifth byte to the TIFF header.
+    data.get(4 + be_uint(data, 0, 4)?..)
+}
+
+/// The TIFF structure holding the EXIF of a JPEG or HEIF, or a whole TIFF file.
 fn tiff_block(source: &[u8]) -> Option<&[u8]> {
     if matches!(source.get(..2)?, b"II" | b"MM") {
         return Some(source);
+    }
+    if source.get(4..8)? == b"ftyp" {
+        return heif_tiff_block(source);
     }
     if source.get(..2)? != [0xFF, 0xD8] {
         return None;
@@ -154,7 +257,7 @@ impl TiffReader<'_> {
     }
 }
 
-/// Copies capture details from a JPEG or TIFF source. Location is deliberately left out.
+/// Copies capture details from a JPEG, HEIF or TIFF source. Location is deliberately left out.
 fn copy_source_tags(source: &[u8], main: &mut Vec<Entry>, details: &mut Vec<Entry>) -> Option<()> {
     let data = tiff_block(source)?;
     let big_endian = match data.get(..2)? {
@@ -215,29 +318,66 @@ pub fn export_exif(source: &[u8]) -> Vec<u8> {
         let _ = copy_source_tags(source, &mut main, &mut details);
     }
 
+    let mut out = EXIF_PREFIX.to_vec();
+    out.extend(tiff_structure(main, details, |_, _| {}));
+    out
+}
+
+/// Header, main IFD and EXIF IFD. `finish` can fill in values that depend on where
+/// the structure ends, given the main IFD's entries and that end.
+fn tiff_structure(mut main: Vec<Entry>, details: Vec<Entry>, finish: impl FnOnce(&mut Vec<Entry>, u32)) -> Vec<u8> {
     // The sub-IFD follows the main one, so reserve the main IFD's size first.
-    main.push(Entry { tag: EXIF_IFD_POINTER, kind: TYPE_LONG, count: 1, data: vec![0; 4] });
-    const HEADER: u32 = 8;
-    let placeholder = write_ifd(
-        main.iter()
-            .map(|e| Entry { tag: e.tag, kind: e.kind, count: e.count, data: e.data.clone() })
-            .collect(),
-        HEADER,
-    );
-    let details_offset = HEADER + placeholder.len() as u32;
+    main.push(long(EXIF_IFD_POINTER, 0));
+    let details_offset = HEADER_SIZE + write_ifd(main.clone(), HEADER_SIZE).len() as u32;
+    let details = write_ifd(details, details_offset);
     if let Some(pointer) = main.iter_mut().find(|e| e.tag == EXIF_IFD_POINTER) {
         pointer.data = details_offset.to_le_bytes().to_vec();
     }
+    finish(&mut main, details_offset + details.len() as u32);
 
-    let mut out = b"Exif\0\0II\x2a\0".to_vec();
-    out.extend(HEADER.to_le_bytes());
-    out.extend(write_ifd(main, HEADER));
-    out.extend(write_ifd(details, details_offset));
+    let mut out = b"II\x2a\0".to_vec();
+    out.extend(HEADER_SIZE.to_le_bytes());
+    out.extend(write_ifd(main, HEADER_SIZE));
+    out.extend(details);
+    out
+}
+
+/// Builds an uncompressed RGB TIFF from little-endian samples, with a colour profile
+/// and, from an APP1 payload made by [`export_exif`], the capture details.
+pub(crate) fn write_tiff(pixels: &[u8], width: u32, height: u32, bits: u16, icc: &[u8], exif: Option<&[u8]>) -> Vec<u8> {
+    const STRIP_OFFSETS: u16 = 273;
+    let mut main = vec![
+        long(256, width),
+        long(257, height),
+        Entry { tag: 258, kind: TYPE_SHORT, count: 3, data: [bits; 3].iter().flat_map(|b| b.to_le_bytes()).collect() },
+        short(259, 1),
+        short(262, 2),
+        long(STRIP_OFFSETS, 0),
+        short(274, 1),
+        short(277, 3),
+        long(278, height),
+        long(279, pixels.len() as u32),
+        short(284, 1),
+        ascii(305, SOFTWARE),
+        Entry { tag: ICC_PROFILE, kind: TYPE_UNDEFINED, count: icc.len() as u32, data: icc.to_vec() },
+    ];
+    let mut details = vec![short(40961, 1)];
+    if let Some(block) = exif.and_then(|block| block.strip_prefix(EXIF_PREFIX)) {
+        // Whatever could not be read is simply left out.
+        let _ = copy_source_tags(block, &mut main, &mut details);
+    }
+
+    let mut out = tiff_structure(main, details, |main, end| {
+        if let Some(entry) = main.iter_mut().find(|e| e.tag == STRIP_OFFSETS) {
+            entry.data = end.to_le_bytes().to_vec();
+        }
+    });
+    out.extend_from_slice(pixels);
     out
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn read_u16(tiff: &[u8], at: usize) -> u16 {
@@ -291,7 +431,7 @@ mod tests {
     }
 
     /// A JPEG whose EXIF is big-endian and holds a model name and an ISO.
-    fn jpeg_with_exif() -> Vec<u8> {
+    pub(crate) fn jpeg_with_exif() -> Vec<u8> {
         let mut tiff = b"MM\0\x2a\0\0\0\x08".to_vec();
         tiff.extend([0, 3]);
         tiff.extend([0x01, 0x10, 0, 2, 0, 0, 0, 5, 0, 0, 0, 68]); // Model, at offset 68.
@@ -323,6 +463,79 @@ mod tests {
         let pointer = main.iter().find(|(tag, _)| *tag == EXIF_IFD_POINTER).unwrap().1;
         let details = entries(tiff, read_u32(tiff, pointer) as usize);
         assert_eq!(read_u16(tiff, details.iter().find(|(tag, _)| *tag == 34855).unwrap().1), 400);
+    }
+
+    /// A HEIF holding the same TIFF structure as [`jpeg_with_exif`] as its EXIF item.
+    fn heif_with_exif() -> Vec<u8> {
+        fn boxed(kind: &[u8], body: &[u8]) -> Vec<u8> {
+            let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+            out.extend(kind);
+            out.extend(body);
+            out
+        }
+        let jpeg = jpeg_with_exif();
+        let tiff = &jpeg[12..jpeg.len() - 2];
+        let mut item = vec![0; 4];
+        item.extend(tiff);
+
+        let build = |offset: u32| {
+            // Two items, so finding the right one matters.
+            let mut infos = vec![0, 0, 0, 0, 0, 2];
+            infos.extend(boxed(b"infe", &[2, 0, 0, 0, 0, 1, 0, 0, b'h', b'v', b'c', b'1']));
+            infos.extend(boxed(b"infe", &[2, 0, 0, 0, 0, 2, 0, 0, b'E', b'x', b'i', b'f']));
+            let mut locations = vec![0, 0, 0, 0, 0x44, 0, 0, 2];
+            locations.extend([0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9]);
+            locations.extend([0, 2, 0, 0, 0, 1]);
+            locations.extend(offset.to_be_bytes());
+            locations.extend((item.len() as u32).to_be_bytes());
+            let mut meta = vec![0; 4];
+            meta.extend(boxed(b"iinf", &infos));
+            meta.extend(boxed(b"iloc", &locations));
+            let mut file = boxed(b"ftyp", b"heic\0\0\0\0mif1");
+            file.extend(boxed(b"meta", &meta));
+            file
+        };
+        let offset = build(0).len() as u32;
+        let mut file = build(offset);
+        file.extend(&item);
+        file
+    }
+
+    #[test]
+    fn a_heif_source_keeps_its_capture_details() {
+        let exif = export_exif(&heif_with_exif());
+        let tiff = &exif[6..];
+        let main = entries(tiff, read_u32(tiff, 4) as usize);
+        let model = read_u32(tiff, main.iter().find(|(tag, _)| *tag == 272).unwrap().1) as usize;
+        assert_eq!(&tiff[model..model + 4], b"ABCD");
+    }
+
+    #[test]
+    fn a_truncated_heif_is_not_a_problem() {
+        let heif = heif_with_exif();
+        for length in 0..heif.len() {
+            let _ = export_exif(&heif[..length]);
+        }
+    }
+
+    #[test]
+    fn a_tiff_has_a_valid_structure_with_its_details_in_order() {
+        let exif = export_exif(&jpeg_with_exif());
+        let pixels = [7u8; 3 * 2 * 2];
+        let tiff = write_tiff(&pixels, 2, 2, 8, b"profile-bytes", Some(&exif));
+        let main = entries(&tiff, read_u32(&tiff, 4) as usize);
+        let tags: Vec<u16> = main.iter().map(|e| e.0).collect();
+        assert!(tags.windows(2).all(|pair| pair[0] < pair[1]), "{tags:?}");
+
+        let strip = read_u32(&tiff, main.iter().find(|(tag, _)| *tag == 273).unwrap().1) as usize;
+        assert_eq!(&tiff[strip..], &pixels);
+        let icc = read_u32(&tiff, main.iter().find(|(tag, _)| *tag == ICC_PROFILE).unwrap().1) as usize;
+        assert_eq!(&tiff[icc..icc + 13], b"profile-bytes");
+        let model = read_u32(&tiff, main.iter().find(|(tag, _)| *tag == 272).unwrap().1) as usize;
+        assert_eq!(&tiff[model..model + 4], b"ABCD");
+        let pointer = main.iter().find(|(tag, _)| *tag == EXIF_IFD_POINTER).unwrap().1;
+        let details = entries(&tiff, read_u32(&tiff, pointer) as usize);
+        assert_eq!(read_u16(&tiff, details.iter().find(|(tag, _)| *tag == 34855).unwrap().1), 400);
     }
 
     #[test]

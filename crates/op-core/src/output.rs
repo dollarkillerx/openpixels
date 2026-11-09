@@ -1,15 +1,68 @@
-//! Turns a finished RGB8 image into a delivered file: resizing, the watermark, and the
-//! encoders other than JPEG.
-
-use std::io::Cursor;
+//! Turns a finished image into a delivered file: resizing, the watermark, and the
+//! encoders other than JPEG. Everything here works at 8 or 16 bits per channel.
 
 use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
-use image::codecs::tiff::TiffEncoder;
 use image::imageops::{self, FilterType};
-use image::{ExtendedColorType, ImageEncoder, ImageResult, RgbImage};
+use image::{ExtendedColorType, ImageBuffer, ImageEncoder, ImageResult, Rgb};
 use serde::Deserialize;
 
+use crate::exif::{EXIF_PREFIX, write_tiff};
 use crate::srgb_icc_profile;
+
+// The encoders reinterpret sample memory as little-endian bytes.
+const _: () = assert!(cfg!(target_endian = "little"));
+
+/// One channel of a developed, sRGB-encoded pixel.
+pub trait Sample: bytemuck::Pod + Default + Send + Sync + 'static {
+    const BITS: u16;
+    const COLOR: ExtendedColorType;
+
+    fn to_f32(self) -> f32;
+    /// Rounds to the nearest code value.
+    fn from_f32(value: f32) -> Self;
+    fn to_u32(self) -> u32;
+    fn from_u32(value: u32) -> Self;
+    /// The same level expressed at this depth.
+    fn from_u8(value: u8) -> Self;
+    fn lanczos(rgb: Vec<Self>, width: u32, height: u32, out_width: u32, out_height: u32) -> Vec<Self>;
+}
+
+macro_rules! impl_sample {
+    ($type:ty, $bits:literal, $color:ident, $scale:literal) => {
+        impl Sample for $type {
+            const BITS: u16 = $bits;
+            const COLOR: ExtendedColorType = ExtendedColorType::$color;
+
+            fn to_f32(self) -> f32 {
+                f32::from(self)
+            }
+
+            fn from_f32(value: f32) -> Self {
+                value.round() as Self
+            }
+
+            fn to_u32(self) -> u32 {
+                u32::from(self)
+            }
+
+            fn from_u32(value: u32) -> Self {
+                value as Self
+            }
+
+            fn from_u8(value: u8) -> Self {
+                Self::from(value) * $scale
+            }
+
+            fn lanczos(rgb: Vec<Self>, width: u32, height: u32, out_width: u32, out_height: u32) -> Vec<Self> {
+                let image = ImageBuffer::<Rgb<Self>, Vec<Self>>::from_raw(width, height, rgb).expect("buffer matches its stated size");
+                imageops::resize(&image, out_width, out_height, FilterType::Lanczos3).into_raw()
+            }
+        }
+    };
+}
+
+impl_sample!(u8, 8, Rgb8, 1);
+impl_sample!(u16, 16, Rgb16, 257);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,42 +85,41 @@ pub fn fit_long_edge(width: u32, height: u32, long_edge: u32) -> (u32, u32) {
 }
 
 /// Averages blocks of `factor` pixels.
-fn reduce(rgb: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>, u32, u32) {
+fn reduce<S: Sample>(rgb: &[S], width: u32, height: u32, factor: u32) -> (Vec<S>, u32, u32) {
     let (out_w, out_h) = (width / factor, height / factor);
     let (stride, f) = (width as usize * 3, factor as usize);
     let mut out = Vec::with_capacity(out_w as usize * out_h as usize * 3);
-    let samples = (f * f) as u32;
+    let samples = (f * f) as u64;
     for y in 0..out_h as usize {
-        let mut totals = vec![[0u32; 3]; out_w as usize];
+        let mut totals = vec![[0u64; 3]; out_w as usize];
         for row in rgb[y * f * stride..].chunks_exact(stride).take(f) {
             for (block, total) in row.chunks_exact(f * 3).zip(totals.iter_mut()) {
                 for pixel in block.chunks_exact(3) {
                     for channel in 0..3 {
-                        total[channel] += u32::from(pixel[channel]);
+                        total[channel] += u64::from(pixel[channel].to_u32());
                     }
                 }
             }
         }
-        out.extend(totals.iter().flat_map(|total| total.map(|value| ((value + samples / 2) / samples) as u8)));
+        out.extend(totals.iter().flat_map(|total| total.map(|value| S::from_u32(((value + samples / 2) / samples) as u32))));
     }
     (out, out_w, out_h)
 }
 
-/// Resizes tightly packed RGB8. Large reductions start with a block average, because a
+/// Resizes tightly packed RGB. Large reductions start with a block average, because a
 /// filter as wide as the reduction would be slow and no sharper.
-pub fn resize_rgb8(rgb: Vec<u8>, width: u32, height: u32, out_width: u32, out_height: u32) -> Vec<u8> {
+pub fn resize_rgb<S: Sample>(rgb: Vec<S>, width: u32, height: u32, out_width: u32, out_height: u32) -> Vec<S> {
     if (width, height) == (out_width, out_height) {
         return rgb;
     }
     let factor = (width / out_width).min(height / out_height) / 2;
     let (pixels, w, h) = if factor >= 2 { reduce(&rgb, width, height, factor) } else { (rgb, width, height) };
-    let image = RgbImage::from_raw(w, h, pixels).expect("buffer matches its stated size");
-    imageops::resize(&image, out_width, out_height, FilterType::Lanczos3).into_raw()
+    S::lanczos(pixels, w, h, out_width, out_height)
 }
 
-/// Draws straight-alpha RGBA over RGB8 at a position, clipped to the image.
+/// Draws straight-alpha RGBA8 over RGB at a position, clipped to the image.
 #[allow(clippy::too_many_arguments)]
-pub fn composite_overlay(rgb: &mut [u8], width: u32, height: u32, overlay: &[u8], x: i32, y: i32, overlay_width: u32, overlay_height: u32) {
+pub fn composite_overlay<S: Sample>(rgb: &mut [S], width: u32, height: u32, overlay: &[u8], x: i32, y: i32, overlay_width: u32, overlay_height: u32) {
     if overlay.len() != overlay_width as usize * overlay_height as usize * 4 {
         return;
     }
@@ -86,26 +138,29 @@ pub fn composite_overlay(rgb: &mut [u8], width: u32, height: u32, overlay: &[u8]
             let alpha = u32::from(source[3]);
             let target = &mut rgb[((target_y * w + target_x) * 3) as usize..][..3];
             for channel in 0..3 {
-                let blended = u32::from(source[channel]) * alpha + u32::from(target[channel]) * (255 - alpha);
-                target[channel] = ((blended + 127) / 255) as u8;
+                let blended = S::from_u8(source[channel]).to_u32() * alpha + target[channel].to_u32() * (255 - alpha);
+                target[channel] = S::from_u32((blended + 127) / 255);
             }
         }
     }
 }
 
-pub fn encode_png(rgb: &[u8], width: u32, height: u32) -> ImageResult<Vec<u8>> {
+/// `exif` is an APP1 payload from [`crate::export_exif`].
+pub fn encode_png<S: Sample>(rgb: &[S], width: u32, height: u32, exif: Option<&[u8]>) -> ImageResult<Vec<u8>> {
     let mut out = Vec::new();
     // Fast compression: on a large image the better settings take many times longer.
     let mut encoder = PngEncoder::new_with_quality(&mut out, CompressionType::Fast, PngFilter::Adaptive);
     encoder.set_icc_profile(srgb_icc_profile()).map_err(image::ImageError::Unsupported)?;
-    encoder.write_image(rgb, width, height, ExtendedColorType::Rgb8)?;
+    if let Some(block) = exif.and_then(|block| block.strip_prefix(EXIF_PREFIX)) {
+        encoder.set_exif_metadata(block.to_vec()).map_err(image::ImageError::Unsupported)?;
+    }
+    encoder.write_image(bytemuck::cast_slice(rgb), width, height, S::COLOR)?;
     Ok(out)
 }
 
-pub fn encode_tiff(rgb: &[u8], width: u32, height: u32) -> ImageResult<Vec<u8>> {
-    let mut out = Cursor::new(Vec::new());
-    TiffEncoder::new(&mut out).write_image(rgb, width, height, ExtendedColorType::Rgb8)?;
-    Ok(out.into_inner())
+/// An uncompressed TIFF. `exif` is an APP1 payload from [`crate::export_exif`].
+pub fn encode_tiff<S: Sample>(rgb: &[S], width: u32, height: u32, exif: Option<&[u8]>) -> Vec<u8> {
+    write_tiff(bytemuck::cast_slice(rgb), width, height, S::BITS, &srgb_icc_profile(), exif)
 }
 
 #[cfg(test)]
@@ -124,7 +179,7 @@ mod tests {
     fn resizing_preserves_a_flat_colour_at_any_ratio() {
         let rgb = [10u8, 120, 240].repeat(1000 * 600);
         for (w, h) in [(500, 300), (100, 60), (37, 22)] {
-            let out = resize_rgb8(rgb.clone(), 1000, 600, w, h);
+            let out = resize_rgb(rgb.clone(), 1000, 600, w, h);
             assert_eq!(out.len(), w as usize * h as usize * 3);
             for pixel in out.chunks_exact(3) {
                 assert!(pixel[0].abs_diff(10) <= 1 && pixel[1].abs_diff(120) <= 1 && pixel[2].abs_diff(240) <= 1, "{pixel:?}");
@@ -148,9 +203,53 @@ mod tests {
     #[test]
     fn png_and_tiff_round_trip_the_pixels() {
         let rgb: Vec<u8> = (0..3 * 16 * 16).map(|i| (i % 251) as u8).collect();
-        let png = image::load_from_memory(&encode_png(&rgb, 16, 16).unwrap()).unwrap();
+        let png = image::load_from_memory(&encode_png(&rgb, 16, 16, None).unwrap()).unwrap();
         assert_eq!(png.into_rgb8().into_raw(), rgb);
-        let tiff = image::load_from_memory(&encode_tiff(&rgb, 16, 16).unwrap()).unwrap();
+        let tiff = image::load_from_memory(&encode_tiff(&rgb, 16, 16, None)).unwrap();
         assert_eq!(tiff.into_rgb8().into_raw(), rgb);
+    }
+
+    #[test]
+    fn sixteen_bit_files_keep_every_code_value() {
+        // Odd values have no 8-bit equivalent, so a hidden 8-bit step would change them.
+        let rgb: Vec<u16> = (0..3 * 32 * 32u32).map(|i| (i * 21 + 1) as u16).collect();
+        let png = image::load_from_memory(&encode_png(&rgb, 32, 32, None).unwrap()).unwrap();
+        assert_eq!(png.into_rgb16().into_raw(), rgb);
+        let tiff = image::load_from_memory(&encode_tiff(&rgb, 32, 32, None)).unwrap();
+        assert_eq!(tiff.into_rgb16().into_raw(), rgb);
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|window| window == needle)
+    }
+
+    #[test]
+    fn delivered_files_carry_the_colour_profile_and_capture_details() {
+        let exif = crate::export_exif(&crate::exif::tests::jpeg_with_exif());
+        let rgb = [40u16; 3 * 8 * 8];
+        let png = encode_png(&rgb, 8, 8, Some(&exif)).unwrap();
+        assert!(contains(&png, b"iCCP") && contains(&png, b"eXIf") && contains(&png, b"ABCD"));
+
+        let tiff = encode_tiff(&rgb, 8, 8, Some(&exif));
+        assert!(contains(&tiff, b"ABCD"));
+        assert!(contains(&tiff, &srgb_icc_profile()));
+        let decoded = image::load_from_memory(&tiff).unwrap();
+        assert_eq!(decoded.into_rgb16().into_raw(), rgb);
+    }
+
+    #[test]
+    fn a_sixteen_bit_overlay_covers_the_full_range() {
+        let mut rgb = vec![1000u16; 3];
+        composite_overlay(&mut rgb, 1, 1, &[255, 255, 255, 255], 0, 0, 1, 1);
+        assert_eq!(rgb, [65535; 3]);
+    }
+
+    #[test]
+    fn sixteen_bit_resizing_keeps_a_level_eight_bits_cannot_hold() {
+        let rgb = [33333u16; 3 * 400 * 300].to_vec();
+        for (w, h) in [(200, 150), (37, 28)] {
+            let out = resize_rgb(rgb.clone(), 400, 300, w, h);
+            assert!(out.iter().all(|&value| value.abs_diff(33333) <= 2), "resized to {w}x{h}");
+        }
     }
 }

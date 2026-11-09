@@ -6,6 +6,8 @@
 
 use serde::Deserialize;
 
+use crate::output::Sample;
+
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Geometry {
@@ -83,15 +85,15 @@ impl Geometry {
         }
     }
 
-    /// Applies the transform to tightly packed RGB8. Areas outside the source are black.
-    pub fn apply_rgb8(self, rgb: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    /// Applies the transform to tightly packed RGB. Areas outside the source are black.
+    pub fn apply_rgb<S: Sample>(self, rgb: &[S], width: u32, height: u32) -> (Vec<S>, u32, u32) {
         if self == Self::default() {
             return (rgb.to_vec(), width, height);
         }
         let (out_w, out_h) = self.output_size(width, height);
         let map = self.uv_map(width, height);
         let (w, h) = (width as usize, height as usize);
-        let mut out = vec![0u8; out_w as usize * out_h as usize * 3];
+        let mut out = vec![S::default(); out_w as usize * out_h as usize * 3];
 
         for row in 0..out_h {
             let t = (row as f32 + 0.5) / out_h as f32;
@@ -108,10 +110,10 @@ impl Geometry {
                 let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
                 let (tx, ty) = (px.fract(), py.fract());
                 for channel in 0..3 {
-                    let at = |x: usize, y: usize| f32::from(rgb[(y * w + x) * 3 + channel]);
+                    let at = |x: usize, y: usize| rgb[(y * w + x) * 3 + channel].to_f32();
                     let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
                     let bottom = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
-                    target[channel] = (top * (1.0 - ty) + bottom * ty).round() as u8;
+                    target[channel] = S::from_f32(top * (1.0 - ty) + bottom * ty);
                 }
             }
         }
@@ -134,7 +136,7 @@ mod tests {
 
     #[test]
     fn identity_is_unchanged() {
-        let (out, w, h) = Geometry::default().apply_rgb8(&sample(), 4, 2);
+        let (out, w, h) = Geometry::default().apply_rgb(&sample(), 4, 2);
         assert_eq!((w, h), (4, 2));
         assert_eq!(out, sample());
     }
@@ -142,7 +144,7 @@ mod tests {
     #[test]
     fn crop_selects_the_requested_pixels() {
         let geometry = Geometry { crop_x: 0.5, crop_w: 0.5, ..Default::default() };
-        let (out, w, h) = geometry.apply_rgb8(&sample(), 4, 2);
+        let (out, w, h) = geometry.apply_rgb(&sample(), 4, 2);
         assert_eq!((w, h), (2, 2));
         assert_eq!(reds(&out), vec![20, 30, 60, 70]);
     }
@@ -150,7 +152,7 @@ mod tests {
     #[test]
     fn quarter_turns_rotate_clockwise() {
         let geometry = Geometry { quarter: 1, ..Default::default() };
-        let (out, w, h) = geometry.apply_rgb8(&sample(), 4, 2);
+        let (out, w, h) = geometry.apply_rgb(&sample(), 4, 2);
         assert_eq!((w, h), (2, 4));
         // Clockwise: the bottom-left source pixel lands top-left.
         assert_eq!(reds(&out), vec![40, 0, 50, 10, 60, 20, 70, 30]);
@@ -159,7 +161,7 @@ mod tests {
     #[test]
     fn two_quarter_turns_reverse_the_image() {
         let geometry = Geometry { quarter: 2, ..Default::default() };
-        let (out, _, _) = geometry.apply_rgb8(&sample(), 4, 2);
+        let (out, _, _) = geometry.apply_rgb(&sample(), 4, 2);
         assert_eq!(reds(&out), vec![70, 60, 50, 40, 30, 20, 10, 0]);
     }
 
@@ -167,14 +169,14 @@ mod tests {
     fn negative_turns_are_counter_clockwise() {
         let left = Geometry { quarter: -1, ..Default::default() };
         let right = Geometry { quarter: 3, ..Default::default() };
-        assert_eq!(left.apply_rgb8(&sample(), 4, 2), right.apply_rgb8(&sample(), 4, 2));
+        assert_eq!(left.apply_rgb(&sample(), 4, 2), right.apply_rgb(&sample(), 4, 2));
     }
 
     #[test]
     fn rotation_leaves_black_outside_the_source() {
         let bright = vec![200u8; 64 * 64 * 3];
         let geometry = Geometry { rotate: 45.0, ..Default::default() };
-        let (out, w, h) = geometry.apply_rgb8(&bright, 64, 64);
+        let (out, w, h) = geometry.apply_rgb(&bright, 64, 64);
         assert_eq!((w, h), (64, 64));
         assert_eq!(out[0], 0, "corner is outside the rotated image");
         assert_eq!(out[(32 * 64 + 32) * 3], 200, "centre stays inside");

@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use futures_channel::oneshot;
 use op_core::{Adjustments, CURVE_LUT_SIZE, Geometry, LensMap, LensProfile, LinearImage, SkinRetouch, ToneCurve, WarpField};
@@ -7,6 +9,10 @@ const SOURCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const SOURCE_BYTES_PER_PIXEL: u32 = 8;
 const OUTPUT_BYTES_PER_PIXEL: u32 = 4;
+/// Floats, because 16-bit unsigned normalised textures are not part of core WebGPU.
+const DEEP_OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+const DEEP_OUTPUT_BYTES_PER_PIXEL: u32 = 16;
+const DEVELOP_SHADER: &str = include_str!("develop.wgsl");
 const WORKGROUP_SIZE: u32 = 16;
 /// Source pixels each export tile can see beyond its own area, for sharpening and denoising.
 const TILE_MARGIN: u32 = 5;
@@ -80,8 +86,9 @@ struct Preview {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    develop_pipeline: wgpu::ComputePipeline,
-    develop_layout: wgpu::BindGroupLayout,
+    develop: DevelopPass,
+    /// The same pass writing floats, built when a 16-bit file is first exported.
+    deep_develop: OnceLock<DevelopPass>,
     blit_pipeline: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -107,66 +114,8 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, target: wgpu::TextureFormat) -> Self {
-        let develop_module =
-            device.create_shader_module(wgpu::include_wgsl!("develop.wgsl"));
+        let develop = develop_pass(&device, OUTPUT_FORMAT, DEVELOP_SHADER);
         let blit_module = device.create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
-
-        let develop_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("develop"),
-            entries: &[
-                texture_entry(0, wgpu::ShaderStages::COMPUTE, false),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: OUTPUT_FORMAT,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                uniform_entry(2, wgpu::ShaderStages::COMPUTE),
-                uniform_entry(3, wgpu::ShaderStages::COMPUTE),
-                texture_entry(4, wgpu::ShaderStages::COMPUTE, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                texture_entry(6, wgpu::ShaderStages::COMPUTE, true),
-                texture_entry(7, wgpu::ShaderStages::COMPUTE, true),
-                texture_entry(8, wgpu::ShaderStages::COMPUTE, true),
-                texture_entry(9, wgpu::ShaderStages::COMPUTE, true),
-                texture_entry(10, wgpu::ShaderStages::COMPUTE, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 11,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                texture_entry(12, wgpu::ShaderStages::COMPUTE, true),
-                texture_entry(13, wgpu::ShaderStages::COMPUTE, true),
-            ],
-        });
-        let develop_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("develop"),
-                bind_group_layouts: &[Some(&develop_layout)],
-                immediate_size: 0,
-            });
-        let develop_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("develop"),
-            layout: Some(&develop_pipeline_layout),
-            module: &develop_module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
 
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blit"),
@@ -246,8 +195,8 @@ impl Renderer {
         Self {
             device,
             queue,
-            develop_pipeline,
-            develop_layout,
+            develop,
+            deep_develop: OnceLock::new(),
             blit_pipeline,
             blit_layout,
             sampler,
@@ -565,6 +514,57 @@ impl Renderer {
         adjustments: &Adjustments,
         tile_size: u32,
     ) -> Result<Vec<u8>, GpuError> {
+        let mut out = vec![0u8; image.width as usize * image.height as usize * 3];
+        let stride = image.width as usize * 3;
+        self.export_tiles(image, adjustments, tile_size, &self.develop, OUTPUT_FORMAT, OUTPUT_BYTES_PER_PIXEL, |row, x, y| {
+            let dst = &mut out[y * stride + x * 3..][..row.len() / 4 * 3];
+            for (rgba, rgb) in row.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+                rgb.copy_from_slice(&rgba[..3]);
+            }
+        })
+        .await?;
+        Ok(out)
+    }
+
+    /// Like [`Self::export_rgb8`], but with 16 bits per channel, still sRGB-encoded.
+    pub async fn export_rgb16(
+        &self,
+        image: &LinearImage,
+        adjustments: &Adjustments,
+        tile_size: u32,
+    ) -> Result<Vec<u16>, GpuError> {
+        let pass = self.deep_develop.get_or_init(|| {
+            develop_pass(&self.device, DEEP_OUTPUT_FORMAT, &DEVELOP_SHADER.replace("rgba8unorm", "rgba32float"))
+        });
+        let mut out = vec![0u16; image.width as usize * image.height as usize * 3];
+        let stride = image.width as usize * 3;
+        self.export_tiles(image, adjustments, tile_size, pass, DEEP_OUTPUT_FORMAT, DEEP_OUTPUT_BYTES_PER_PIXEL, |row, x, y| {
+            let dst = &mut out[y * stride + x * 3..][..row.len() / 16 * 3];
+            for (rgba, rgb) in row.chunks_exact(16).zip(dst.chunks_exact_mut(3)) {
+                for (bytes, value) in rgba.chunks_exact(4).zip(rgb.iter_mut()) {
+                    let sample = f32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    // Unlike the 8-bit target, a float target does not clamp by itself.
+                    *value = (sample.clamp(0.0, 1.0) * 65535.0).round() as u16;
+                }
+            }
+        })
+        .await?;
+        Ok(out)
+    }
+
+    /// Runs `pass` over the image tile by tile, calling `store` for each row of output
+    /// with its bytes and its position in the image.
+    #[allow(clippy::too_many_arguments)]
+    async fn export_tiles(
+        &self,
+        image: &LinearImage,
+        adjustments: &Adjustments,
+        tile_size: u32,
+        pass: &DevelopPass,
+        format: wgpu::TextureFormat,
+        bytes_per_pixel: u32,
+        mut store: impl FnMut(&[u8], usize, usize),
+    ) -> Result<(), GpuError> {
         // The tint is an on-screen editing aid and must never reach a delivered file.
         let adjustments = &Adjustments { mask_overlay: 0.0, local_overlay: 0.0, ..*adjustments };
         // Small images, like thumbnails, do not need full-size tile textures.
@@ -573,12 +573,12 @@ impl Renderer {
             .min(self.device.limits().max_texture_dimension_2d - 2 * TILE_MARGIN);
         let source_size = tile_size + 2 * TILE_MARGIN;
         let source = self.create_source_texture(source_size, source_size);
-        let output = self.create_output_texture(tile_size, tile_size);
+        let output = self.create_output_texture_as(format, tile_size, tile_size);
         let source_view = source.create_view(&Default::default());
         let output_view = output.create_view(&Default::default());
-        let bind_group = self.develop_bind_group(&source_view, &output_view);
+        let bind_group = self.bind_develop(&pass.layout, &source_view, &output_view);
 
-        let row_pitch = align_to(tile_size * OUTPUT_BYTES_PER_PIXEL, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let row_pitch = align_to(tile_size * bytes_per_pixel, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("export readback"),
             size: u64::from(row_pitch) * u64::from(tile_size),
@@ -587,8 +587,6 @@ impl Renderer {
         });
 
         let (full_w, full_h) = (image.width, image.height);
-        let out_stride = full_w as usize * 3;
-        let mut out = vec![0u8; out_stride * full_h as usize];
 
         for tile_y in (0..full_h).step_by(tile_size as usize) {
             for tile_x in (0..full_w).step_by(tile_size as usize) {
@@ -610,7 +608,7 @@ impl Renderer {
                 );
 
                 let mut encoder = self.device.create_command_encoder(&Default::default());
-                self.dispatch(&mut encoder, &bind_group, w, h);
+                self.dispatch_pass(&pass.pipeline, &mut encoder, &bind_group, w, h);
                 encoder.copy_texture_to_buffer(
                     output.as_image_copy(),
                     wgpu::TexelCopyBufferInfo {
@@ -629,18 +627,14 @@ impl Renderer {
                 {
                     let mapped = readback.slice(..).get_mapped_range()?;
                     for row in 0..h as usize {
-                        let src = &mapped[row * row_pitch as usize..][..w as usize * 4];
-                        let dst_start = (tile_y as usize + row) * out_stride + tile_x as usize * 3;
-                        let dst = &mut out[dst_start..dst_start + w as usize * 3];
-                        for (rgba, rgb) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
-                            rgb.copy_from_slice(&rgba[..3]);
-                        }
+                        let src = &mapped[row * row_pitch as usize..][..(w * bytes_per_pixel) as usize];
+                        store(src, tile_x as usize, tile_y as usize + row);
                     }
                 }
                 readback.unmap();
             }
         }
-        Ok(out)
+        Ok(())
     }
 
     fn create_source_texture(&self, width: u32, height: u32) -> wgpu::Texture {
@@ -657,13 +651,17 @@ impl Renderer {
     }
 
     fn create_output_texture(&self, width: u32, height: u32) -> wgpu::Texture {
+        self.create_output_texture_as(OUTPUT_FORMAT, width, height)
+    }
+
+    fn create_output_texture_as(&self, format: wgpu::TextureFormat, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output"),
             size: extent(width, height),
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: OUTPUT_FORMAT,
+            format,
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -689,9 +687,18 @@ impl Renderer {
         source: &wgpu::TextureView,
         output: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
+        self.bind_develop(&self.develop.layout, source, output)
+    }
+
+    fn bind_develop(
+        &self,
+        layout: &wgpu::BindGroupLayout,
+        source: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("develop"),
-            layout: &self.develop_layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -802,8 +809,19 @@ impl Renderer {
         width: u32,
         height: u32,
     ) {
+        self.dispatch_pass(&self.develop.pipeline, encoder, bind_group, width, height);
+    }
+
+    fn dispatch_pass(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        encoder: &mut wgpu::CommandEncoder,
+        bind_group: &wgpu::BindGroup,
+        width: u32,
+        height: u32,
+    ) {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&self.develop_pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.dispatch_workgroups(width.div_ceil(WORKGROUP_SIZE), height.div_ceil(WORKGROUP_SIZE), 1);
     }
@@ -824,6 +842,75 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
+}
+
+/// The develop shader compiled for one output format.
+struct DevelopPass {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+}
+
+fn develop_pass(device: &wgpu::Device, format: wgpu::TextureFormat, shader: &str) -> DevelopPass {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("develop"),
+        source: wgpu::ShaderSource::Wgsl(shader.into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("develop"),
+        entries: &[
+            texture_entry(0, wgpu::ShaderStages::COMPUTE, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            uniform_entry(2, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(3, wgpu::ShaderStages::COMPUTE),
+            texture_entry(4, wgpu::ShaderStages::COMPUTE, true),
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            texture_entry(6, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(7, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(8, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(9, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(10, wgpu::ShaderStages::COMPUTE, true),
+            wgpu::BindGroupLayoutEntry {
+                binding: 11,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            texture_entry(12, wgpu::ShaderStages::COMPUTE, true),
+            texture_entry(13, wgpu::ShaderStages::COMPUTE, true),
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("develop"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("develop"),
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    DevelopPass { layout, pipeline }
 }
 
 /// Encodes tightly packed RGB8 as a baseline JPEG. `quality` is 1..=100.
@@ -1167,6 +1254,45 @@ mod tests {
         let plain = export(&renderer, &image, &Adjustments::default(), 64);
         let tinted = Adjustments { mask_overlay: 1.0, ..Default::default() };
         assert_eq!(plain, export(&renderer, &image, &tinted, 64));
+    }
+
+    /// A shallow ramp, which 8 bits can only show as a few visible steps.
+    fn shallow_ramp() -> LinearImage {
+        let (width, height) = (1024u32, 8u32);
+        let mut pixels = Vec::new();
+        for _ in 0..height {
+            for x in 0..width {
+                pixels.extend([f16::from_f32(0.18 + 0.02 * x as f32 / width as f32).to_bits(); 3]);
+            }
+        }
+        LinearImage::new(width, height, pixels)
+    }
+
+    #[test]
+    fn a_sixteen_bit_export_matches_eight_bit_with_finer_steps() {
+        let renderer = renderer();
+        let image = shallow_ramp();
+        let adj = Adjustments { exposure: 0.2, contrast: 0.2, ..Default::default() };
+        let shallow = pollster::block_on(renderer.export_rgb8(&image, &adj, 512)).unwrap();
+        let deep = pollster::block_on(renderer.export_rgb16(&image, &adj, 512)).unwrap();
+        assert_eq!(deep.len(), shallow.len());
+        for (index, (&d, &s)) in deep.iter().zip(&shallow).enumerate() {
+            assert!((f32::from(d) / 257.0 - f32::from(s)).abs() <= 0.51, "sample {index}: {d} against {s}");
+        }
+        let levels = |row: Vec<u32>| row.windows(2).filter(|pair| pair[0] != pair[1]).count() + 1;
+        let shallow_levels = levels(shallow[..1024 * 3].iter().step_by(3).map(|&v| u32::from(v)).collect());
+        let deep_levels = levels(deep[..1024 * 3].iter().step_by(3).map(|&v| u32::from(v)).collect());
+        assert!(deep_levels > shallow_levels * 5, "{deep_levels} levels against {shallow_levels}");
+    }
+
+    #[test]
+    fn sixteen_bit_tiles_are_identical_to_one_pass() {
+        let renderer = renderer();
+        let image = ramp(300, 170);
+        let adj = Adjustments { exposure: 0.4, contrast: 0.3, vignette: -0.6, ..Default::default() };
+        let tiled = pollster::block_on(renderer.export_rgb16(&image, &adj, 64)).unwrap();
+        let whole = pollster::block_on(renderer.export_rgb16(&image, &adj, 512)).unwrap();
+        assert_eq!(tiled, whole);
     }
 
     fn export_gray(renderer: &Renderer, value: f32) -> u8 {
