@@ -92,6 +92,66 @@ impl LinearImage {
         out
     }
 
+    /// Upsamples a low-resolution matte to this image's size with a guided filter
+    /// (He, Sun & Tang, 2010), so its edges follow the image's own edges and fine
+    /// structure such as hair. Returns `(width, height, mask)`.
+    pub fn refine_mask(&self, mask: &[u8], mask_width: u32, mask_height: u32) -> (u32, u32, Vec<u8>) {
+        const RADIUS: usize = 8;
+        const EPSILON: f32 = 1e-4;
+        assert_eq!(mask.len(), mask_width as usize * mask_height as usize);
+
+        let (width, height) = (self.width as usize, self.height as usize);
+        let guide: Vec<f32> = self
+            .pixels
+            .chunks_exact(3)
+            .map(|rgb| {
+                let [r, g, b] = [rgb[0], rgb[1], rgb[2]].map(|bits| f16::from_bits(bits).to_f32());
+                linear_to_srgb(0.2126 * r + 0.7152 * g + 0.0722 * b)
+            })
+            .collect();
+        let input = resize_plane_bilinear(mask, mask_width as usize, mask_height as usize, width, height);
+
+        let box_of = |plane: &[f32]| box_filter(plane, width, height, RADIUS);
+        let product = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).collect::<Vec<f32>>();
+
+        let mean_guide = box_of(&guide);
+        let mean_input = box_of(&input);
+        let correlation = box_of(&product(&guide, &input));
+        let variance = box_of(&product(&guide, &guide));
+
+        let mut slope = vec![0.0f32; width * height];
+        let mut offset = vec![0.0f32; width * height];
+        for i in 0..slope.len() {
+            let spread = (variance[i] - mean_guide[i] * mean_guide[i]).max(0.0);
+            slope[i] = (correlation[i] - mean_guide[i] * mean_input[i]) / (spread + EPSILON);
+            offset[i] = mean_input[i] - slope[i] * mean_guide[i];
+        }
+        let mean_slope = box_of(&slope);
+        let mean_offset = box_of(&offset);
+
+        let refined = guide
+            .iter()
+            .zip(mean_slope.iter().zip(&mean_offset))
+            .map(|(value, (a, b))| ((a * value + b).clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect();
+        (self.width, self.height, refined)
+    }
+
+    /// A heavily blurred luminance image, as `(width, height, half-float bits)`, that
+    /// the GPU samples by position to tell local contrast from overall brightness.
+    pub fn blurred_luma(&self, long_edge: u32) -> (u32, u32, Vec<u16>) {
+        let small = self.proxy(long_edge);
+        let luma = small
+            .pixels
+            .chunks_exact(3)
+            .map(|rgb| {
+                let [r, g, b] = [rgb[0], rgb[1], rgb[2]].map(|bits| f16::from_bits(bits).to_f32());
+                f16::from_f32(0.2126 * r + 0.7152 * g + 0.0722 * b).to_bits()
+            })
+            .collect();
+        (small.width, small.height, luma)
+    }
+
     /// Copies a rectangle out as tightly packed RGBA half floats, with alpha 1.
     pub fn rgba_region(&self, x: u32, y: u32, w: u32, h: u32) -> Vec<u16> {
         assert!(x + w <= self.width && y + h <= self.height, "region out of bounds");
@@ -113,9 +173,109 @@ fn linear_to_srgb(linear: f32) -> f32 {
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
+/// Bilinear resize of an 8-bit plane to floats in 0..=1.
+fn resize_plane_bilinear(plane: &[u8], width: usize, height: usize, out_w: usize, out_h: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(out_w * out_h);
+    let sample = |x: usize, y: usize| f32::from(plane[y * width + x]) / 255.0;
+    for row in 0..out_h {
+        let fy = ((row as f32 + 0.5) * height as f32 / out_h as f32 - 0.5).max(0.0);
+        let (y0, ty) = (fy as usize, fy.fract());
+        let y1 = (y0 + 1).min(height - 1);
+        for col in 0..out_w {
+            let fx = ((col as f32 + 0.5) * width as f32 / out_w as f32 - 0.5).max(0.0);
+            let (x0, tx) = (fx as usize, fx.fract());
+            let x1 = (x0 + 1).min(width - 1);
+            let top = sample(x0, y0) * (1.0 - tx) + sample(x1, y0) * tx;
+            let bottom = sample(x0, y1) * (1.0 - tx) + sample(x1, y1) * tx;
+            out.push(top * (1.0 - ty) + bottom * ty);
+        }
+    }
+    out
+}
+
+/// Mean over a square window, in time independent of the radius. The window shrinks
+/// at the image edges.
+fn box_filter(plane: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+    let along = |input: &[f32], len: usize, stride: usize, lines: usize, step: usize| -> Vec<f32> {
+        let mut output = vec![0.0f32; input.len()];
+        for line in 0..lines {
+            let at = |i: usize| line * stride + i * step;
+            let mut sum = 0.0f32;
+            let mut count = 0usize;
+            for i in 0..len.min(radius + 1) {
+                sum += input[at(i)];
+                count += 1;
+            }
+            for i in 0..len {
+                output[at(i)] = sum / count as f32;
+                if i + radius + 1 < len {
+                    sum += input[at(i + radius + 1)];
+                    count += 1;
+                }
+                if i >= radius {
+                    sum -= input[at(i - radius)];
+                    count -= 1;
+                }
+            }
+        }
+        output
+    };
+    let horizontal = along(plane, width, width, height, 1);
+    along(&horizontal, height, 1, width, width)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn box_filter_averages_and_handles_edges() {
+        let plane = [0.0, 0.0, 3.0, 0.0, 0.0];
+        let out = box_filter(&plane, 5, 1, 1);
+        let expected = [0.0, 1.0, 1.0, 1.0, 0.0];
+        for (value, wanted) in out.iter().zip(expected) {
+            assert!((value - wanted).abs() < 1e-5, "{out:?}");
+        }
+    }
+
+    #[test]
+    fn refined_mask_snaps_to_the_image_edge() {
+        // A hard vertical edge at x = 100, and a coarse matte that blurs across it.
+        let (width, height) = (200u32, 40u32);
+        let (dark, bright) = (f16::from_f32(0.02).to_bits(), f16::from_f32(0.8).to_bits());
+        let mut pixels = Vec::new();
+        for _ in 0..height {
+            for x in 0..width {
+                pixels.extend([if x < 100 { dark } else { bright }; 3]);
+            }
+        }
+        let image = LinearImage::new(width, height, pixels);
+        let coarse: Vec<u8> = (0..10u32 * 25)
+            .map(|i| {
+                let x = (i % 25) as f32;
+                (((x - 12.5) / 3.0 + 0.5).clamp(0.0, 1.0) * 255.0) as u8
+            })
+            .collect();
+
+        let (w, _, refined) = image.refine_mask(&coarse, 25, 10);
+        let middle_row = &refined[20 * w as usize..21 * w as usize];
+        let refined_step = f32::from(middle_row[104]) - f32::from(middle_row[96]);
+
+        let upsampled = resize_plane_bilinear(&coarse, 25, 10, 200, 40);
+        let coarse_step = (upsampled[20 * 200 + 104] - upsampled[20 * 200 + 96]) * 255.0;
+        assert!(
+            refined_step > coarse_step + 20.0,
+            "transition across the edge should steepen: refined {refined_step}, coarse {coarse_step}"
+        );
+    }
+
+    #[test]
+    fn blurred_luma_fits_the_requested_size() {
+        let (width, height, luma) = gray(400, 200, 0.5).blurred_luma(100);
+        assert_eq!((width, height), (100, 50));
+        assert_eq!(luma.len(), 100 * 50);
+        assert_eq!(f16::from_bits(luma[0]).to_f32(), 0.5);
+    }
 
     #[test]
     fn model_tensor_is_normalised_nchw() {

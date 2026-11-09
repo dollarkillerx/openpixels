@@ -65,8 +65,18 @@ impl Plane {
         mirrored.clamp(0, last) as usize
     }
 
-    #[inline]
+    #[inline(always)]
     fn at(&self, x: isize, y: isize) -> f32 {
+        // A negative index wraps to a huge value, so this one test covers both sides.
+        let (ux, uy) = (x as usize, y as usize);
+        if ux < self.width && uy < self.height {
+            return self.data[uy * self.width + ux];
+        }
+        self.at_edge(x, y)
+    }
+
+    #[cold]
+    fn at_edge(&self, x: isize, y: isize) -> f32 {
         let x = Self::reflect(x, self.width);
         let y = Self::reflect(y, self.height);
         self.data[y * self.width + x]

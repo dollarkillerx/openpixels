@@ -1,9 +1,8 @@
 // Global develop pass. Reads scene-linear RGB (sRGB primaries), writes display sRGB.
 //
-// Evaluated per pixel with no neighbourhood access to the source (the mask is sampled
-// by whole-image position), so a tile needs no overlap and renders identically to
-// the same area of the full image. Anything spatial added
-// later (clarity, sharpening) will need tile overlap in `Renderer::export_rgb8`.
+// Tiles render identically to the same area of the full image: the only source
+// neighbours read are within `Renderer`'s tile margin, and the mask and blurred
+// luminance are sampled by whole-image position.
 
 struct Adjustments {
     temperature: f32,
@@ -19,6 +18,12 @@ struct Adjustments {
     vignette: f32,
     background_exposure: f32,
     mask_overlay: f32,
+    clarity: f32,
+    sharpen: f32,
+    padding: f32,
+    hsl_hue: array<vec4<f32>, 2>,
+    hsl_saturation: array<vec4<f32>, 2>,
+    hsl_luminance: array<vec4<f32>, 2>,
 }
 
 struct Region {
@@ -31,6 +36,10 @@ struct Region {
     // Default RAW look: exposure offset in EV, and whether to apply the look at all.
     base_exposure: f32,
     has_base_look: f32,
+    // Position of output (0, 0) in the source texture, which can hold extra margin.
+    source_offset: vec2<f32>,
+    // Pixels of valid data in the source texture.
+    source_size: vec2<f32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -40,6 +49,8 @@ struct Region {
 // Subject mask spanning the whole image; 1 is subject, 0 is background.
 @group(0) @binding(4) var subject_mask: texture_2d<f32>;
 @group(0) @binding(5) var mask_sampler: sampler;
+// Heavily blurred scene-linear luminance of the whole image, for clarity.
+@group(0) @binding(6) var blurred_luma: texture_2d<f32>;
 
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 const TONE_GAMMA = 2.2;
@@ -117,6 +128,101 @@ fn apply_color(rgb: vec3<f32>) -> vec3<f32> {
     return max(mix(vec3<f32>(luma), rgb, amount), vec3<f32>(0.0));
 }
 
+fn source_at(pixel: vec2<i32>) -> vec3<f32> {
+    let last = vec2<i32>(region.source_size) - vec2<i32>(1);
+    return textureLoad(source, clamp(pixel, vec2<i32>(0), last), 0).rgb;
+}
+
+// Unsharp mask on perceptual luminance, which avoids colour fringes.
+fn apply_sharpen(rgb: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
+    if adj.sharpen == 0.0 {
+        return rgb;
+    }
+    let neighbours = source_at(pixel + vec2<i32>(1, 0)) + source_at(pixel - vec2<i32>(1, 0))
+        + source_at(pixel + vec2<i32>(0, 1)) + source_at(pixel - vec2<i32>(0, 1));
+    let luma = max(dot(rgb, LUMA), 1e-5);
+    let tone = pow(luma, 1.0 / TONE_GAMMA);
+    let around = pow(max(dot(neighbours * 0.25, LUMA), 1e-5), 1.0 / TONE_GAMMA);
+    let sharpened = max(tone + (tone - around) * adj.sharpen * 2.5, 0.0);
+    return rgb * pow(sharpened / tone, TONE_GAMMA);
+}
+
+// Boosts local contrast, weighted to midtones so it does not halo the extremes.
+fn apply_clarity(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
+    if adj.clarity == 0.0 {
+        return rgb;
+    }
+    let luma = max(dot(rgb, LUMA), 1e-5);
+    let surround = max(textureSampleLevel(blurred_luma, mask_sampler, uv, 0.0).r, 0.0) * scene_gain;
+    let tone = pow(luma, 1.0 / TONE_GAMMA);
+    let around = pow(max(apply_base_look(vec3<f32>(surround)).g, 1e-5), 1.0 / TONE_GAMMA);
+    let midtones = 1.0 - pow(abs(tone * 2.0 - 1.0), 2.0);
+    let shaped = max(tone + (tone - around) * adj.clarity * midtones, 0.0);
+    return rgb * pow(shaped / tone, TONE_GAMMA);
+}
+
+const HSL_CENTERS = array<f32, 8>(0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0);
+
+fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
+    let peak = max(max(c.r, c.g), c.b);
+    let span = peak - min(min(c.r, c.g), c.b);
+    if span <= 1e-6 {
+        return vec3<f32>(0.0, 0.0, peak);
+    }
+    var hue: f32;
+    if peak == c.r {
+        hue = (c.g - c.b) / span;
+    } else if peak == c.g {
+        hue = 2.0 + (c.b - c.r) / span;
+    } else {
+        hue = 4.0 + (c.r - c.g) / span;
+    }
+    return vec3<f32>(fract(hue / 6.0 + 1.0) * 360.0, span / peak, peak);
+}
+
+fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
+    let h = fract(c.x / 360.0) * 6.0;
+    let k = vec3<f32>(5.0, 3.0, 1.0);
+    let wave = clamp(min(fract((k + h) / 6.0) * 6.0, 4.0 - fract((k + h) / 6.0) * 6.0), vec3<f32>(0.0), vec3<f32>(1.0));
+    return c.z * (vec3<f32>(1.0) - c.y * wave);
+}
+
+fn band_shift(band: u32) -> vec3<f32> {
+    let group = band / 4u;
+    let item = band % 4u;
+    return vec3<f32>(
+        adj.hsl_hue[group][item],
+        adj.hsl_saturation[group][item],
+        adj.hsl_luminance[group][item],
+    );
+}
+
+fn apply_hsl(rgb: vec3<f32>) -> vec3<f32> {
+    let hsv = rgb_to_hsv(max(rgb, vec3<f32>(0.0)));
+    if hsv.y < 1e-4 {
+        return rgb;
+    }
+    // Interpolate between the two bands around this hue, so a colour at a band's
+    // centre answers to that band alone.
+    var centers = HSL_CENTERS;
+    var lower = 0u;
+    for (var band = 1u; band < 8u; band++) {
+        if centers[band] <= hsv.x {
+            lower = band;
+        }
+    }
+    let upper = (lower + 1u) % 8u;
+    let span_end = select(centers[upper], 360.0, upper == 0u);
+    let blend = smoothstep(0.0, 1.0, (hsv.x - centers[lower]) / (span_end - centers[lower]));
+    let shift = mix(band_shift(lower), band_shift(upper), blend);
+    let out = vec3<f32>(
+        hsv.x + shift.x * 30.0,
+        clamp(hsv.y * (1.0 + shift.y), 0.0, 1.0),
+        hsv.z * pow(2.0, shift.z * hsv.y),
+    );
+    return hsv_to_rgb(out);
+}
+
 fn apply_vignette(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let centered = (pixel + 0.5 - region.full_size * 0.5) / (region.full_size * 0.5);
     let falloff = smoothstep(0.35, 1.45, length(centered));
@@ -141,11 +247,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let uv = (pixel + 0.5) / region.full_size;
     let background = 1.0 - textureSampleLevel(subject_mask, mask_sampler, uv, 0.0).r;
 
-    var rgb = textureLoad(source, id.xy, 0).rgb;
+    let source_pixel = vec2<i32>(id.xy) + vec2<i32>(region.source_offset);
+    var rgb = apply_sharpen(source_at(source_pixel), source_pixel);
     rgb = white_balance(rgb);
-    rgb *= pow(2.0, adj.exposure + adj.background_exposure * background);
+    let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background);
+    rgb *= scene_gain;
     rgb = apply_base_look(rgb);
+    rgb = apply_clarity(rgb, uv, scene_gain);
     rgb = apply_tone(rgb);
+    rgb = apply_hsl(rgb);
     rgb = apply_color(rgb);
     rgb = apply_vignette(rgb, pixel);
 

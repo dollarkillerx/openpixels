@@ -147,7 +147,13 @@ impl Engine {
 
     /// Sets the subject mask, `width * height` bytes covering the whole image.
     pub fn set_mask(&mut self, width: u32, height: u32, mask: &[u8]) {
-        self.renderer.set_mask(width, height, mask);
+        match &self.proxy {
+            Some(proxy) => {
+                let (refined_w, refined_h, refined) = proxy.refine_mask(mask, width, height);
+                self.renderer.set_mask(refined_w, refined_h, &refined);
+            }
+            None => self.renderer.set_mask(width, height, mask),
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -175,6 +181,24 @@ impl Engine {
             .map_err(js_error)?;
         self.renderer.present(frame);
         self.renderer.wait_idle().await.map_err(js_error)
+    }
+
+    /// Renders the proxy at thumbnail size, with the current adjustments, as RGB8.
+    pub async fn thumbnail(&mut self, max_long_edge: u32) -> Result<Vec<u8>, JsError> {
+        let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let thumbnail = proxy.proxy(max_long_edge);
+        self.renderer
+            .export_rgb8(&thumbnail, &self.adjustments, EXPORT_TILE_SIZE)
+            .await
+            .map_err(js_error)
+    }
+
+    /// Size of [`Self::thumbnail`] for the same `max_long_edge`, as JSON.
+    pub fn thumbnail_size(&self, max_long_edge: u32) -> Result<String, JsError> {
+        let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
+        let thumbnail = proxy.proxy(max_long_edge);
+        let info = ProxyInfo { width: thumbnail.width, height: thumbnail.height };
+        serde_json::to_string(&info).map_err(js_error)
     }
 
     /// Develops the full-resolution image and returns JPEG bytes.

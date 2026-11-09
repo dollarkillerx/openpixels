@@ -15,6 +15,32 @@ html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); }
 
 .app { display: flex; height: 100%; }
+.workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+
+.strip {
+  display: flex; gap: 6px; flex: none; height: 88px; padding: 8px;
+  overflow-x: auto; background: var(--panel); border-top: 1px solid var(--line);
+}
+.thumb {
+  flex: none; width: 88px; height: 100%; padding: 0; overflow: hidden;
+  border: 2px solid transparent; border-radius: 4px;
+  background: var(--bg); color: var(--muted); font-size: 11px; cursor: pointer;
+}
+.thumb.current { border-color: var(--accent); }
+.thumb:disabled { cursor: default; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.thumb span { display: block; padding: 4px; overflow-wrap: anywhere; }
+
+.bands { display: flex; gap: 6px; margin-bottom: 10px; }
+.band { width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.band.current { border-color: var(--text); }
+
+.history, .row { display: flex; gap: 6px; margin-top: 8px; }
+.row input, .row select {
+  flex: 1; min-width: 0; padding: 5px 6px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.progress { margin: 8px 0 0; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .stage { position: relative; flex: 1; min-width: 0; overflow: hidden; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

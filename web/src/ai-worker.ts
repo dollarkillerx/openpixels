@@ -3,7 +3,7 @@
 // WebGPU execution provider) runs MODNet without any error but returns a wrong matte.
 import * as ort from "onnxruntime-web/all";
 import { MODEL } from "./model";
-import type { FromAi, ToAi } from "./protocol";
+import type { SegmentReply, SegmentRequest } from "./protocol";
 
 // Absolute on purpose: the Vite dev server rejects dynamic imports of root-relative
 // public files, and leaves absolute URLs alone.
@@ -14,10 +14,10 @@ ort.env.wasm.numThreads = 1;
 
 let session: ort.InferenceSession | null = null;
 
-const post = (message: FromAi, transfer: Transferable[] = []) =>
+const post = (message: SegmentReply, transfer: Transferable[] = []) =>
   self.postMessage(message, { transfer });
 
-async function segment({ tensor, width, height, generation }: ToAi) {
+async function segment({ id, tensor, width, height }: SegmentRequest) {
   let loadMs = 0;
   if (!session) {
     const start = performance.now();
@@ -36,11 +36,11 @@ async function segment({ tensor, width, height, generation }: ToAi) {
 
   // Alpha matte in 0..1. The clamped array rounds and saturates for us.
   const { buffer: mask } = Uint8ClampedArray.from(data, (alpha) => alpha * 255);
-  post({ type: "mask", mask, width, height, loadMs, inferMs, generation }, [mask]);
+  post({ id, mask, width, height, loadMs, inferMs }, [mask]);
 }
 
-self.onmessage = ({ data }: MessageEvent<ToAi>) => {
+self.onmessage = ({ data }: MessageEvent<SegmentRequest>) => {
   segment(data).catch((error: unknown) => {
-    post({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    post({ id: data.id, error: error instanceof Error ? error.message : String(error) });
   });
 };

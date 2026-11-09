@@ -8,6 +8,9 @@ const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const SOURCE_BYTES_PER_PIXEL: u32 = 8;
 const OUTPUT_BYTES_PER_PIXEL: u32 = 4;
 const WORKGROUP_SIZE: u32 = 16;
+/// Source pixels each export tile can see beyond its own area, for sharpening.
+const TILE_MARGIN: u32 = 2;
+const BLURRED_LUMA_LONG_EDGE: u32 = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GpuError {
@@ -31,6 +34,8 @@ struct Region {
     extent: [f32; 2],
     base_exposure: f32,
     has_base_look: f32,
+    source_offset: [f32; 2],
+    source_size: [f32; 2],
 }
 
 struct Preview {
@@ -56,6 +61,7 @@ pub struct Renderer {
     region_buffer: wgpu::Buffer,
     blit_buffer: wgpu::Buffer,
     mask_view: wgpu::TextureView,
+    blurred_luma_view: wgpu::TextureView,
     base_exposure: Option<f32>,
     preview: Option<Preview>,
 }
@@ -89,6 +95,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                texture_entry(6, wgpu::ShaderStages::COMPUTE, true),
             ],
         });
         let develop_pipeline_layout =
@@ -160,6 +167,7 @@ impl Renderer {
         let region_buffer = uniform_buffer(&device, "region", size_of::<Region>());
         let blit_buffer = uniform_buffer(&device, "blit", size_of::<[f32; 2]>());
         let mask_view = create_mask_view(&device, &queue, 1, 1, &[255]);
+        let blurred_luma_view = create_luma_view(&device, &queue, 1, 1, &[0]);
 
         Self {
             device,
@@ -173,6 +181,7 @@ impl Renderer {
             region_buffer,
             blit_buffer,
             mask_view,
+            blurred_luma_view,
             base_exposure: None,
             preview: None,
         }
@@ -198,6 +207,8 @@ impl Renderer {
     /// mask belonging to the previous image.
     pub fn set_preview(&mut self, proxy: &LinearImage) {
         self.mask_view = create_mask_view(&self.device, &self.queue, 1, 1, &[255]);
+        let (luma_width, luma_height, luma) = proxy.blurred_luma(BLURRED_LUMA_LONG_EDGE);
+        self.blurred_luma_view = create_luma_view(&self.device, &self.queue, luma_width, luma_height, &luma);
         let (width, height) = (proxy.width, proxy.height);
         let source = self.create_source_texture(width, height);
         self.upload_source(&source, &proxy.rgba_region(0, 0, width, height), width, height);
@@ -235,7 +246,8 @@ impl Renderer {
         target_size: (u32, u32),
     ) -> Result<(), GpuError> {
         let preview = self.preview.as_ref().ok_or(GpuError::NoImage)?;
-        self.write_params(adjustments, preview.width, preview.height, 0, 0, preview.width, preview.height);
+        let (width, height) = (preview.width as f32, preview.height as f32);
+        self.write_params(adjustments, [width, height], [0.0; 2], [width, height], [0.0; 2], [width, height]);
         let scale = letterbox((preview.width, preview.height), target_size);
         self.queue.write_buffer(&self.blit_buffer, 0, bytes_of(&scale));
 
@@ -291,8 +303,12 @@ impl Renderer {
     ) -> Result<Vec<u8>, GpuError> {
         // The tint is an on-screen editing aid and must never reach a delivered file.
         let adjustments = &Adjustments { mask_overlay: 0.0, ..*adjustments };
-        let tile_size = tile_size.min(self.device.limits().max_texture_dimension_2d);
-        let source = self.create_source_texture(tile_size, tile_size);
+        // Small images, like thumbnails, do not need full-size tile textures.
+        let tile_size = tile_size
+            .min(image.width.max(image.height))
+            .min(self.device.limits().max_texture_dimension_2d - 2 * TILE_MARGIN);
+        let source_size = tile_size + 2 * TILE_MARGIN;
+        let source = self.create_source_texture(source_size, source_size);
         let output = self.create_output_texture(tile_size, tile_size);
         let source_view = source.create_view(&Default::default());
         let output_view = output.create_view(&Default::default());
@@ -315,8 +331,19 @@ impl Renderer {
                 let w = tile_size.min(full_w - tile_x);
                 let h = tile_size.min(full_h - tile_y);
 
-                self.upload_source(&source, &image.rgba_region(tile_x, tile_y, w, h), w, h);
-                self.write_params(adjustments, full_w, full_h, tile_x, tile_y, w, h);
+                let (source_x, source_y) = (tile_x.saturating_sub(TILE_MARGIN), tile_y.saturating_sub(TILE_MARGIN));
+                let source_w = (tile_x + w + TILE_MARGIN).min(full_w) - source_x;
+                let source_h = (tile_y + h + TILE_MARGIN).min(full_h) - source_y;
+                let pixels = image.rgba_region(source_x, source_y, source_w, source_h);
+                self.upload_source(&source, &pixels, source_w, source_h);
+                self.write_params(
+                    adjustments,
+                    [full_w as f32, full_h as f32],
+                    [tile_x as f32, tile_y as f32],
+                    [w as f32, h as f32],
+                    [(tile_x - source_x) as f32, (tile_y - source_y) as f32],
+                    [source_w as f32, source_h as f32],
+                );
 
                 let mut encoder = self.device.create_command_encoder(&Default::default());
                 self.dispatch(&mut encoder, &bind_group, w, h);
@@ -426,28 +453,32 @@ impl Renderer {
                     binding: 5,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&self.blurred_luma_view),
+                },
             ],
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn write_params(
         &self,
         adjustments: &Adjustments,
-        full_w: u32,
-        full_h: u32,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
+        full_size: [f32; 2],
+        offset: [f32; 2],
+        extent: [f32; 2],
+        source_offset: [f32; 2],
+        source_size: [f32; 2],
     ) {
         self.queue.write_buffer(&self.adjust_buffer, 0, bytes_of(adjustments));
         let region = Region {
-            full_size: [full_w as f32, full_h as f32],
-            offset: [x as f32, y as f32],
-            extent: [w as f32, h as f32],
+            full_size,
+            offset,
+            extent,
             base_exposure: self.base_exposure.unwrap_or(0.0),
             has_base_look: f32::from(u8::from(self.base_exposure.is_some())),
+            source_offset,
+            source_size,
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
     }
@@ -518,6 +549,36 @@ fn create_mask_view(
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(width),
+            rows_per_image: Some(height),
+        },
+        extent(width, height),
+    );
+    texture.create_view(&Default::default())
+}
+
+fn create_luma_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    luma: &[u16],
+) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("blurred luma"),
+        size: extent(width, height),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        cast_slice(luma),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 2),
             rows_per_image: Some(height),
         },
         extent(width, height),
@@ -701,6 +762,53 @@ mod tests {
         let bits = f16::from_f32(value).to_bits();
         let image = LinearImage::new(1, 1, vec![bits; 3]);
         export(renderer, &image, &Adjustments::default(), 64)[0]
+    }
+
+    fn checker(width: u32, height: u32) -> LinearImage {
+        let (dark, bright) = (f16::from_f32(0.1).to_bits(), f16::from_f32(0.4).to_bits());
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 3);
+        for y in 0..height {
+            for x in 0..width {
+                let value = if (x + y) % 2 == 0 { dark } else { bright };
+                pixels.extend([value, value, value]);
+            }
+        }
+        LinearImage::new(width, height, pixels)
+    }
+
+    #[test]
+    fn tiles_stay_identical_with_spatial_adjustments() {
+        let mut renderer = renderer();
+        let image = checker(300, 170);
+        renderer.set_preview(&image);
+        let adj = Adjustments { sharpen: 0.6, clarity: 0.5, ..Default::default() };
+        assert_eq!(export(&renderer, &image, &adj, 64), export(&renderer, &image, &adj, 512));
+    }
+
+    #[test]
+    fn sharpen_raises_edge_contrast() {
+        let renderer = renderer();
+        let image = checker(32, 32);
+        let flat = export(&renderer, &image, &Adjustments::default(), 64);
+        let adj = Adjustments { sharpen: 0.5, ..Default::default() };
+        let sharp = export(&renderer, &image, &adj, 64);
+        let spread = |out: &[u8]| i32::from(out[3 * 16 * 32 + 3 * 17]) - i32::from(out[3 * 16 * 32 + 3 * 16]);
+        assert!(spread(&sharp).abs() > spread(&flat).abs());
+    }
+
+    #[test]
+    fn hsl_only_changes_the_targeted_band() {
+        let renderer = renderer();
+        let pixel = |r: f32, g: f32, b: f32| {
+            LinearImage::new(1, 1, vec![f16::from_f32(r).to_bits(), f16::from_f32(g).to_bits(), f16::from_f32(b).to_bits()])
+        };
+        // Band 0 is red; desaturate it fully.
+        let adj = Adjustments { hsl_saturation: [[-1.0, 0.0, 0.0, 0.0], [0.0; 4]], ..Default::default() };
+        let red = export(&renderer, &pixel(0.6, 0.05, 0.05), &adj, 64);
+        assert!((i32::from(red[0]) - i32::from(red[1])).abs() <= 2, "red should turn grey: {red:?}");
+        let blue_plain = export(&renderer, &pixel(0.05, 0.05, 0.6), &Adjustments::default(), 64);
+        let blue = export(&renderer, &pixel(0.05, 0.05, 0.6), &adj, 64);
+        assert_eq!(blue_plain, blue, "blue is outside the red band");
     }
 
     #[test]

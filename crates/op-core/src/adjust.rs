@@ -25,6 +25,17 @@ pub struct Adjustments {
     pub background_exposure: f32,
     /// 0..=1 opacity of the on-screen mask tint. Never included in exports.
     pub mask_overlay: f32,
+    /// Large-radius local contrast.
+    pub clarity: f32,
+    /// Small-radius edge contrast, 0..=1.
+    pub sharpen: f32,
+    #[serde(skip)]
+    pub _padding: f32,
+    /// Hue, saturation and luminance shift per colour band (red, orange, yellow,
+    /// green, aqua, blue, purple, magenta), in two groups of four for the GPU.
+    pub hsl_hue: [[f32; 4]; 2],
+    pub hsl_saturation: [[f32; 4]; 2],
+    pub hsl_luminance: [[f32; 4]; 2],
 }
 
 #[cfg(test)]
@@ -39,6 +50,6 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 13 * 4);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 16 * 4 + 6 * 16);
     }
 }
