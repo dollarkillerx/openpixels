@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck.workspace = true
+op-core = { path = "../op-core" }
 op-engine = { path = "../op-engine" }
 op-gpu = { path = "../op-gpu" }
 pollster.workspace = true

@@ -7,8 +7,8 @@ public sealed record Verdict(int Score, bool Best, bool Reject);
 
 /// <summary>
 /// Scores photos for culling and groups the ones taken of the same moment. Ported from
-/// web/src/analysis.ts; the desktop edition has no face finder yet, so sharpness is judged
-/// on the middle of the frame and closed eyes are not detected.
+/// web/src/analysis.ts. Sharpness is judged on the largest face, or on the middle of the
+/// frame when there is none.
 /// </summary>
 public static class Analysis
 {
@@ -40,8 +40,9 @@ public static class Analysis
         return count > 0 ? squares / count - Math.Pow(sum / count, 2) : 0;
     }
 
-    public static PhotoAnalysis Analyze(byte[] rgb, int width, int height, double time, bool timeKnown)
+    public static PhotoAnalysis Analyze(byte[] rgb, int width, int height, double time, bool timeKnown, IReadOnlyList<FaceMesh>? faces = null)
     {
+        faces ??= [];
         var clippedPixels = 0;
         var cells = new double[SignatureGrid * SignatureGrid * 3];
         var counts = new int[SignatureGrid * SignatureGrid];
@@ -63,9 +64,16 @@ public static class Analysis
             }
         }
         var signature = cells.Select((value, index) => Math.Round(value / Math.Max(1, counts[index / 3]) * 1000) / 1000).ToArray();
-        var sharpness = LaplacianVariance(rgb, width, (int)Math.Round(width * CentreMargin), (int)Math.Round(height * CentreMargin),
-            (int)Math.Round(width * (1 - CentreMargin)), (int)Math.Round(height * (1 - CentreMargin)));
-        return new PhotoAnalysis(time, timeKnown, sharpness, clippedPixels / (double)(width * height), 0, false, signature);
+        var (left, top, right, bottom) = (CentreMargin, CentreMargin, 1 - CentreMargin, 1 - CentreMargin);
+        if (faces.Count > 0)
+        {
+            // The largest face is the subject: its focus is what matters.
+            (left, top, right, bottom) = faces.Select(face => face.Box).MaxBy(box => (box.Right - box.Left) * (box.Bottom - box.Top));
+            (left, top, right, bottom) = (Math.Max(0, left), Math.Max(0, top), Math.Min(1, right), Math.Min(1, bottom));
+        }
+        var sharpness = LaplacianVariance(rgb, width, (int)Math.Round(width * left), (int)Math.Round(height * top), (int)Math.Round(width * right), (int)Math.Round(height * bottom));
+        var eyesClosed = faces.Any(face => FaceRegions.EyesClosed(face, width, height));
+        return new PhotoAnalysis(time, timeKnown, sharpness, clippedPixels / (double)(width * height), faces.Count, eyesClosed, signature);
     }
 
     public static double SignatureDistance(double[] a, double[] b)

@@ -673,5 +673,8 @@
   "在画面上拖动以变形": "Drag on the photo to warp it",
   "撤销上一次液化": "Undo last warp",
   "清除全部液化": "Clear all warps",
-  "用作参考": "Use as reference"
+  "用作参考": "Use as reference",
+  "打开 HEIC 需要 libheif，请先安装（例如 sudo apt install libheif1）": "Opening HEIC needs libheif. Please install it first (for example: sudo apt install libheif1)",
+  "人像": "Portrait",
+  "自动识别人脸，只处理皮肤，避开眼睛、眉毛和嘴唇。": "Finds faces automatically and retouches only skin, leaving eyes, brows and lips alone."
 }

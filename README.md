@@ -42,7 +42,7 @@
 - AI 主体、背景、天空蒙版，可添加到蒙版或从蒙版减去
 
 **输出**
-- JPEG、8/16 位 PNG 和 TIFF；色彩空间可选 sRGB、Display P3、Adobe RGB、ProPhoto RGB
+- JPEG、8/16 位 PNG 和 TIFF；色彩空间可选 sRGB、Display P3、Adobe RGB、ProPhoto RGB。超出 sRGB 的颜色（RAW 的饱和色、带 P3 或 Adobe RGB 配置的照片）全程保留，导出到更宽的色彩空间时不会被裁掉
 - 内嵌色彩配置和拍摄信息，可设尺寸、质量、文件名规则、文字或图片水印、导出预设
 - 批量导出：支持的浏览器直接写入文件夹，否则打包为 ZIP
 - 软打样：导入打印机或显示器的 ICC 配置，预览打印效果，可选渲染方式、纸张和油墨模拟、色域警告
@@ -131,20 +131,21 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 
 目前已有：
 
-- **导入**：打开照片或整个文件夹，也可以拖进窗口；RAW（全尺寸冲洗多线程）、JPEG、PNG、TIFF；macOS 上用系统解码器打开 HEIC。胶片条缩略图在后台生成，调色后自动更新。
+- **导入**：打开照片或整个文件夹，也可以拖进窗口；RAW（全尺寸冲洗多线程）、JPEG、PNG、TIFF；HEIC 在 macOS 上用系统解码器，Windows 上用随包的 libheif，Linux 上用系统的 libheif（`sudo apt install libheif1`）。带色彩配置的照片按其配置读入，广色域照片保留 16 位和超出 sRGB 的颜色。胶片条缩略图在后台生成，调色后自动更新。
 - **查看**：直方图和溢出警告，适合窗口、100% 和滚轮缩放，放大后显示全分辨率细节，前后对比。
 - **调色**：白平衡和吸管，影调、可自由加点的曲线（背后显示直方图）和参数曲线，HSL，颜色混合点，色调分离色轮，色彩与效果，校准，智能调色。
 - **滤镜**：24 种内置风格滤镜，与网页版效果一致；可导入 `.cube` LUT。
 - **相机与镜头**：相机匹配色彩配置，文件内的镜头数据或 Lensfun 镜头库自动校正，手动镜头校正和透视矫正。
 - **构图**：裁剪（固定比例或自由）、旋转、90° 转向。
 - **历史**：撤销、重做、历史记录和快照。
-- **选片**：星标、旗标、色标及筛选，网格视图，多选；智能分组（按拍摄时间和画面相似度）和自动选片。桌面版还没有人脸定位，闭眼检测暂不可用，清晰度按画面中部判断。
+- **选片**：星标、旗标、色标及筛选，网格视图，多选；智能分组（按拍摄时间和画面相似度）和自动选片；有人脸时按最大的人脸判断清晰度，并识别闭眼。
 - **预设与同步**：预设、复制粘贴设置、同步到选中或全部，裁剪等只属于一张照片的设置不会带过去。
 - **批量导出**：导出选中的或列表里的全部照片，在后台进行，不影响继续修图。
 - **软打样**：直接列出系统里的 ICC 配置（macOS 的 ColorSync 目录、Windows 和 Linux 的系统目录），也可导入；可选渲染方式、纸张和油墨模拟、色域警告。
 - **项目**：把一组照片存为项目，下次启动可继续上次的照片。
 - **修饰**：污点修复、仿制图章、红眼去除，以及用 LaMa 模型的 AI 消除（在本机 CPU 上运行，一次约 4 秒）。
 - **局部调整**：线性、径向、画笔、全图，以及 AI 主体、背景、天空蒙版；可加亮度或颜色范围、反相、涂抹加入或去掉，最多 4 个图层，图层形状也能撤销。
+- **人像**：自动识别人脸（MediaPipe 的 BlazeFace 和 Face Mesh，ONNX 版），只对皮肤磨皮、祛斑，避开眼睛、眉毛和嘴唇；找不到完整人脸时按画面中的肤色处理。
 - **完整版功能**：液化（推动、膨胀、收缩）、换背景和换天（内置或导入图片，可调融合、亮度、位置和前景融合）、追色（用照片库里的照片或任意图片作参考，RAW 也可以）。
 - **导出**：JPEG、8/16 位 PNG 和 TIFF，四种色彩空间，尺寸、质量、文件名规则、文字或图片水印，导出预设。
 
@@ -169,8 +170,6 @@ GitHub Actions 的“Desktop packages”工作流会在四个系统上打包并�
 快捷键：`⌘Z` / `⇧⌘Z` 撤销和重做（Windows 用 `Ctrl+Z` / `Ctrl+Y`），`⌘O` 打开，`⌘E` 导出，`⇧⌘C` / `⇧⌘V` 复制和粘贴设置，`0`–`5` 星标，`6`–`9` 色标，`P` / `X` / `U` 旗标，`G` / `E` 网格和单张，`Z` 缩放，`J` 溢出警告，`R` 裁剪，`W` 白平衡吸管，`S` 软打样，按住 `\` 看修图前，`←` / `→` 切换照片，`Esc` 退出当前工具。
 
 AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同，需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
-
-还没有移植的：人脸定位，所以选片还不检测闭眼，也还没有磨皮祛斑。
 
 ## 构建与部署
 
@@ -222,9 +221,10 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 ## 已知限制
 
 - 只在 Chrome 系浏览器（含 Edge）上测试过；Safari 和 Firefox 的 WebGPU 支持还在变化。
-- 调色管线在 sRGB 原色下工作。导出到 P3、Adobe RGB 或 ProPhoto 时转换和配置都正确，但不会保留超出 sRGB 的颜色。
+- 调色管线用 sRGB 原色的线性浮点数，超出 sRGB 的颜色以负值或大于 1 的值保留。屏幕预览仍按 sRGB 显示，广色域显示器上看不到这部分颜色；曲线、风格滤镜等只定义在 0–1 的调整作用于收进 sRGB 的颜色，多出的饱和度原样加回。
+- 桌面版的人脸识别只用近距离人脸模型，戴口罩、侧脸或很小的人脸可能找不到。
 - 网页无法读取系统的 ICC 文件，软打样需要手动导入配置。
-- 桌面版目前只在 macOS 上测试过；Windows 和 Linux 上暂时不能打开 HEIC。
+- 桌面版目前只在 macOS 上测试过；Windows 和 Linux 的 HEIC 走 libheif，还没有在这两个系统上实测。
 - AI 消除单线程运行，一次约 10–20 秒。
 
 ## 贡献约定：第三方代码
@@ -238,5 +238,6 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - LaMa 的代码和 ONNX 导出都标注 Apache-2.0，但没有单独说明权重。商业发布前要核实其训练数据（Places2）的使用条款。
 - Canon、Nikon、Fuji 等 RAW 的自动镜头校正用 [Lensfun](https://github.com/lensfun/lensfun) 数据库（CC BY-SA 3.0）。只用数据，不用其 LGPL 代码；转换后的 `web/public/lensfun/lensfun.json` 要按同样的许可证分发并署名，说明在同目录的 `NOTICE.txt`。
 - 换天用 [SkyWater-Seg](https://huggingface.co/Realcat/skywater_seg)，仓库标注 MIT，但它用 ADE20K 训练，商业发布前要核实该数据集的使用条款。
-- HEIC 解码使用 [libheif-js](https://github.com/catdad-experiments/libheif-js)（LGPL-3.0），作为独立文件按需加载。HEVC 涉及专利授权，商业发布前要单独评估。
+- HEIC 解码：网页版使用 [libheif-js](https://github.com/catdad-experiments/libheif-js)（LGPL-3.0），作为独立文件按需加载；桌面版在 Windows 上随包附带 [libheif](https://github.com/strukturag/libheif) 和 [libde265](https://github.com/strukturag/libde265)（均为 LGPL-3.0，动态加载，许可证放在 `licenses/`），只装解码所需部分，不含 GPL 的 x265 编码器。HEVC 涉及专利授权，商业发布前要单独评估。
+- 人脸模型是 MediaPipe 的 BlazeFace（短距离）和 Face Mesh V2，使用 [fernandotonon](https://huggingface.co/fernandotonon) 转换的 ONNX 版（Apache-2.0）。
 - 测试素材放在不进版本库的 `web/public/fixtures/`，其中的系统 ICC 配置和网上下载的照片不随项目分发。

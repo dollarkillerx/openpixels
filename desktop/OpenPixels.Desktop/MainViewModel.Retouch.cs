@@ -36,6 +36,7 @@ public sealed partial class MainViewModel
 
     private readonly RetouchStore _retouch = new();
     private readonly Lazy<AiModels> _ai = new(() => new AiModels());
+    private readonly Lazy<FaceFinder> _faces = new(() => new FaceFinder());
     /// <summary>Model masks per photo, at the main proxy's size, so they are found once.</summary>
     private readonly Dictionary<string, Dictionary<string, ModelMask>> _modelMasks = [];
     private List<LocalLayer> _locals = [];
@@ -228,6 +229,7 @@ public sealed partial class MainViewModel
         await ApplyRetouchAsync(_engine, photo.Id, _locals, _heals, _erases, _proxySize, main: true, _warps, _edit);
         ActiveLayer = _locals.Count > 0 ? 0 : -1;
         SyncLayerRows();
+        ShowSkinStatus(photo.Id, _edit);
     }
 
     /// <summary>Sends heals, erases and local masks to an engine with an open photo.</summary>

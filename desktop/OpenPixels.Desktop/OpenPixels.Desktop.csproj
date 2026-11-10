@@ -60,7 +60,7 @@
 
   <!-- The AI models, if scripts/fetch-model.sh has fetched them. Checked licences are in the README. -->
   <ItemGroup>
-    <None Include="$(RepoRoot)web/public/models/modnet.onnx;$(RepoRoot)web/public/models/skywater.onnx;$(RepoRoot)web/public/models/lama.onnx"
+    <None Include="$(RepoRoot)web/public/models/modnet.onnx;$(RepoRoot)web/public/models/skywater.onnx;$(RepoRoot)web/public/models/lama.onnx;$(RepoRoot)web/public/models/face_detector.onnx;$(RepoRoot)web/public/models/face_landmarks.onnx"
           Condition="Exists('$(RepoRoot)web/public/models/modnet.onnx')"
           Link="models/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

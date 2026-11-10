@@ -72,6 +72,10 @@ jobs:
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: scripts/package-macos.sh
+      - name: libheif for HEIC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install "libheif[core,libde265]:x64-windows"
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

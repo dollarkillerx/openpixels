@@ -59,6 +59,8 @@ public static partial class Edits
         new("pointSatShift", I18n.T("混合点饱和度"), -1, 1), new("pointLumShift", I18n.T("混合点明度"), -1, 1),
     ]);
 
+    public static readonly SliderGroupSpec Skin = new(I18n.T("皮肤"), [new("skinSmooth", I18n.T("磨皮"), 0, 1), new("skinBlemish", I18n.T("祛斑"), 0, 1)]);
+
     public static readonly SliderGroupSpec BackgroundReplace = new(I18n.T("换背景"),
     [
         new("backgroundAmount", I18n.T("融合强度"), 0, 1, 1), new("backgroundFillExposure", I18n.T("亮度"), -3, 3),
@@ -161,7 +163,7 @@ public static partial class Edits
     // History names, as in the web edition's describeChange.
 
     private static readonly Dictionary<string, string> SliderLabels =
-        new[] { WhiteBalance, Tone, Parametric, Effects, Calibration, Lens, Perspective, Point, BackgroundReplace, SkyReplace }
+        new[] { WhiteBalance, Tone, Parametric, Effects, Calibration, Lens, Perspective, Point, Skin, BackgroundReplace, SkyReplace }
             .SelectMany(group => group.Sliders).Concat(HslSliders()).Concat([LookAmount, Rotate])
             .ToDictionary(slider => slider.Key, slider => slider.Label);
 

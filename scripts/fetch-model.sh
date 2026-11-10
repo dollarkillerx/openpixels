@@ -40,3 +40,14 @@ fetch "https://huggingface.co/opencv/inpainting_lama/resolve/aee6d22f0a13e5e35af
 fetch "https://huggingface.co/Realcat/skywater_seg/resolve/dac255883ec5faf508561a47172096bfd8708db0/skywater_segformer_b2_fp16.onnx" \
   a4f518e6ace87b3ee473ea2578d00f0fb5f7bf8e4e6a3a49ae368c048c4e47c3 \
   web/public/models/skywater.onnx
+
+# The desktop edition's face finder: MediaPipe's BlazeFace short-range detector and Face
+# Mesh V2 landmarks from the Face Landmarker bundle above, converted to ONNX
+# (Apache-2.0, code and weights) by the QtMeshEditor project with a parity check.
+fetch "https://huggingface.co/fernandotonon/QtMeshEditor-blazeface-onnx/resolve/50f2c66ffbdf84beae8c267df2b49e5c5a5162e9/face_detector.onnx" \
+  02a04d5d37c3558dc4d5274f7f8f0f0f01ac94e46c5ffb2cee82395d47e23181 \
+  web/public/models/face_detector.onnx
+
+fetch "https://huggingface.co/fernandotonon/QtMeshEditor-facemesh-onnx/resolve/32714088ed9830a98df6ee653ad406a3b83ef014/face_landmarks.onnx" \
+  d16e5a55e6a480284d468ee32469692464049518c311662ab3956681de31e3e9 \
+  web/public/models/face_landmarks.onnx

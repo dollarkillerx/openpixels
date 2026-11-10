@@ -1,4 +1,11 @@
-// Global develop pass. Reads scene-linear RGB (sRGB primaries), writes display sRGB.
+// Global develop pass. Reads scene-linear RGB (sRGB primaries), writes display sRGB,
+// or for an export another colour space.
+//
+// Colours outside sRGB arrive as negative or over-one values, from a wide-gamut file or
+// a RAW's camera matrix, and are carried through: tone maps work on signed values, and
+// curves and looks, which are defined over 0..1, act on the colour desaturated into
+// range and get the excess chroma back after (`gamut_excess`). A wide export can then
+// keep them; the 8-bit screen target clips them as it always did.
 //
 // Tiles render identically to the same area of the full image: the only source
 // neighbours read are within `Renderer`'s tile margin, and the mask and blurred
@@ -66,7 +73,7 @@ struct Adjustments {
     point_hue_shift: f32,
     point_sat_shift: f32,
     point_lum_shift: f32,
-    point_padding_0: f32,
+    output_space: f32,
     point_padding_1: f32,
     point_padding_2: f32,
 }
@@ -97,6 +104,11 @@ struct Region {
     airlight: vec4<f32>,
     // Colour of the new sky relative to neutral, for relighting the rest of the photo.
     sky_tint: vec4<f32>,
+    // Export colour space: rows of the matrix from linear sRGB, with the transfer curve
+    // in the first row's w. 0 leaves sRGB as it is.
+    output_red: vec4<f32>,
+    output_green: vec4<f32>,
+    output_blue: vec4<f32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -136,6 +148,26 @@ const MID_GRAY_TONE = 0.4586; // 0.18 ^ (1 / 2.2)
 const LOOK_CONTRAST = 1.5;
 const LOOK_KNEE = 0.348;
 
+// A power that keeps the sign, so values below 0 survive a trip through gamma.
+fn signed_pow(v: vec3<f32>, exponent: f32) -> vec3<f32> {
+    return sign(v) * pow(abs(v), vec3<f32>(exponent));
+}
+
+// The chroma that desaturating a colour towards its own luminance would have to remove
+// to bring it inside the 0..1 cube: what lies outside sRGB. Colours too dark or too
+// bright to fit at any saturation, such as noise below black, have none and are left
+// to be clipped as before.
+fn gamut_excess(c: vec3<f32>) -> vec3<f32> {
+    let luma = dot(c, LUMA);
+    if luma <= 0.0 || luma >= 1.0 {
+        return vec3<f32>(0.0);
+    }
+    let below = select(vec3<f32>(1.0), luma / (luma - c), c < vec3<f32>(0.0));
+    let above = select(vec3<f32>(1.0), (1.0 - luma) / (c - luma), c > vec3<f32>(1.0));
+    let fits = min(min(min(below.x, below.y), below.z), min(min(above.x, above.y), above.z));
+    return (c - vec3<f32>(luma)) * (1.0 - fits);
+}
+
 fn look_curve(x: f32) -> f32 {
     let toe = pow(max(x, 0.0), LOOK_CONTRAST);
     return toe / (toe + LOOK_KNEE);
@@ -162,12 +194,13 @@ fn apply_base_look(rgb: vec3<f32>) -> vec3<f32> {
         return rgb;
     }
     let boost = pow(2.0, region.base_exposure);
-    let scaled = max(rgb * boost, vec3<f32>(0.0));
+    let scaled = rgb * boost;
     let peak = max(max(max(scaled.r, scaled.g), scaled.b), 1e-5);
     // Curving the peak keeps hue; curving each channel desaturates bright colours as
     // film does. A blend of the two avoids both neon highlights and hue shifts.
     let hue_kept = scaled * look_curve(peak) / peak;
-    let per_channel = vec3<f32>(look_curve(scaled.r), look_curve(scaled.g), look_curve(scaled.b));
+    // A channel below 0, outside sRGB, has no curve of its own and follows the peak.
+    let per_channel = select(vec3<f32>(look_curve(scaled.r), look_curve(scaled.g), look_curve(scaled.b)), hue_kept, scaled < vec3<f32>(0.0));
     // Normalised so that a saturated photosite reaches pure white.
     return mix(hue_kept, per_channel, 0.5) / look_curve(boost);
 }
@@ -207,12 +240,16 @@ fn shape_tone(input: f32) -> f32 {
 // Blacks and Shadows can lift pure black without multiplying sensor noise without limit.
 const MAX_TONE_GAIN = 16.0;
 
-fn apply_tone(rgb: vec3<f32>) -> vec3<f32> {
+fn apply_tone(input: vec3<f32>) -> vec3<f32> {
+    // Below black there is only noise, which lifted blacks must not turn into dark specks.
+    let rgb = select(input, max(input, vec3<f32>(0.0)), dot(input, LUMA) <= 0.0);
     let luma = dot(rgb, LUMA);
     let wanted = pow(max(shape_tone(pow(max(luma, 1e-5), 1.0 / TONE_GAMMA)), 0.0), TONE_GAMMA);
-    // Scale RGB together so hue survives tone edits.
+    // Scale RGB together so hue survives tone edits. Chroma outside sRGB is not
+    // amplified, for in the shadows it is mostly noise.
     let ratio = min(wanted / max(luma, 1e-5), MAX_TONE_GAIN);
-    return rgb * ratio + vec3<f32>(max(wanted - max(luma, 0.0) * ratio, 0.0));
+    let excess = gamut_excess(rgb);
+    return (rgb - excess) * ratio + excess * min(ratio, 1.0) + vec3<f32>(max(wanted - max(luma, 0.0) * ratio, 0.0));
 }
 
 fn apply_color(rgb: vec3<f32>) -> vec3<f32> {
@@ -222,7 +259,7 @@ fn apply_color(rgb: vec3<f32>) -> vec3<f32> {
     let chroma = clamp((peak - trough) / max(peak, 1e-5), 0.0, 1.0);
     // Vibrance acts mostly on muted colours, saturation on all of them equally.
     let amount = max(1.0 + adj.saturation + local_values.z, 0.0) * (1.0 + adj.vibrance * (1.0 - chroma));
-    return max(mix(vec3<f32>(luma), rgb, amount), vec3<f32>(0.0));
+    return mix(vec3<f32>(luma), rgb, amount);
 }
 
 fn apply_skin(rgb: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
@@ -306,7 +343,7 @@ fn apply_dehaze(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
         return rgb;
     }
     let exponent = vec3<f32>(1.0 / TONE_GAMMA);
-    let tone = pow(max(rgb, vec3<f32>(0.0)), exponent);
+    let tone = signed_pow(rgb, 1.0 / TONE_GAMMA);
     let air = pow(max(apply_base_look(white_balance(region.airlight.rgb) * scene_gain), vec3<f32>(0.0)), exponent);
     var out: vec3<f32>;
     if adj.dehaze > 0.0 {
@@ -317,7 +354,7 @@ fn apply_dehaze(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
     } else {
         out = mix(tone, air, -adj.dehaze * 0.6);
     }
-    return pow(max(out, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+    return signed_pow(out, TONE_GAMMA);
 }
 
 // How far a pixel falls inside a layer's tone and colour limits, judged on the
@@ -383,8 +420,14 @@ fn band_shift(band: u32) -> vec3<f32> {
     );
 }
 
+// Saturation above 1 is a colour outside sRGB. Edits may lower it, or raise an sRGB
+// colour to 1, but do not push colours further out than they were.
+fn shifted_saturation(saturation: f32, shift: f32) -> f32 {
+    return clamp(saturation * (1.0 + shift), 0.0, max(saturation, 1.0));
+}
+
 fn apply_hsl(rgb: vec3<f32>) -> vec3<f32> {
-    let hsv = rgb_to_hsv(max(rgb, vec3<f32>(0.0)));
+    let hsv = rgb_to_hsv(rgb);
     if hsv.y < 1e-4 {
         return rgb;
     }
@@ -403,8 +446,8 @@ fn apply_hsl(rgb: vec3<f32>) -> vec3<f32> {
     let shift = mix(band_shift(lower), band_shift(upper), blend);
     let out = vec3<f32>(
         hsv.x + shift.x * 30.0,
-        clamp(hsv.y * (1.0 + shift.y), 0.0, 1.0),
-        hsv.z * pow(2.0, shift.z * hsv.y),
+        shifted_saturation(hsv.y, shift.y),
+        hsv.z * pow(2.0, shift.z * min(hsv.y, 1.0)),
     );
     return hsv_to_rgb(out);
 }
@@ -415,14 +458,15 @@ fn apply_curve(rgb: vec3<f32>) -> vec3<f32> {
     if adj.curve_active == 0.0 {
         return rgb;
     }
-    let tone = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / TONE_GAMMA));
-    let at = (tone * (CURVE_SIZE - 1.0) + 0.5) / CURVE_SIZE;
+    let tone = signed_pow(rgb, 1.0 / TONE_GAMMA);
+    let excess = gamut_excess(tone);
+    let at = (clamp(tone - excess, vec3<f32>(0.0), vec3<f32>(1.0)) * (CURVE_SIZE - 1.0) + 0.5) / CURVE_SIZE;
     let mapped = vec3<f32>(
         textureSampleLevel(curve_lut, mask_sampler, vec2<f32>(at.r, 0.5), 0.0).r,
         textureSampleLevel(curve_lut, mask_sampler, vec2<f32>(at.g, 0.5), 0.0).g,
         textureSampleLevel(curve_lut, mask_sampler, vec2<f32>(at.b, 0.5), 0.0).b,
     );
-    return pow(max(mapped, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+    return signed_pow(mapped + excess, TONE_GAMMA);
 }
 
 const GRADE_STRENGTH = 0.15;
@@ -437,14 +481,16 @@ fn apply_grading(rgb: vec3<f32>) -> vec3<f32> {
     if adj.grade[0].y == 0.0 && adj.grade[1].y == 0.0 && adj.grade[2].y == 0.0 {
         return rgb;
     }
-    let display = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / TONE_GAMMA));
+    let signed = signed_pow(rgb, 1.0 / TONE_GAMMA);
+    let excess = gamut_excess(signed);
+    let display = max(signed - excess, vec3<f32>(0.0));
     let tone = dot(display, LUMA);
     let shadows = 1.0 - smoothstep(0.0, 0.5, tone);
     let highlights = smoothstep(0.5, 1.0, tone);
     let midtones = 1.0 - shadows - highlights;
     let tinted = display + tint_of(adj.grade[0]) * shadows + tint_of(adj.grade[1]) * midtones
         + tint_of(adj.grade[2]) * highlights;
-    return pow(max(tinted, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+    return signed_pow(max(tinted, vec3<f32>(0.0)) + excess, TONE_GAMMA);
 }
 
 const DENOISE_OFFSETS = array<vec2<i32>, 24>(
@@ -462,8 +508,7 @@ fn apply_denoise(centre: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
     if adj.denoise_luma == 0.0 && adj.denoise_chroma == 0.0 {
         return centre;
     }
-    let exponent = vec3<f32>(1.0 / TONE_GAMMA);
-    let toned = pow(max(centre, vec3<f32>(0.0)), exponent);
+    let toned = signed_pow(centre, 1.0 / TONE_GAMMA);
     let luma = dot(toned, LUMA);
     let sigma_luma = max(adj.denoise_luma * 0.12, 1e-3);
     let sigma_chroma = max(adj.denoise_chroma * 0.25, 1e-3);
@@ -474,7 +519,7 @@ fn apply_denoise(centre: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
     var chroma_total = toned;
     var chroma_weight = 1.0;
     for (var i = 0u; i < 24u; i++) {
-        let sample_tone = pow(max(source_at(pixel + offsets[i]), vec3<f32>(0.0)), exponent);
+        let sample_tone = signed_pow(source_at(pixel + offsets[i]), 1.0 / TONE_GAMMA);
         let sample_luma = dot(sample_tone, LUMA);
         let difference = sample_luma - luma;
         let for_luma = exp(-difference * difference / (2.0 * sigma_luma * sigma_luma));
@@ -488,7 +533,7 @@ fn apply_denoise(centre: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
     let smoothed_luma = mix(luma, luma_total / luma_weight, min(adj.denoise_luma * 1.5, 1.0));
     let smoothed_colour = mix(toned, chroma_total / chroma_weight, min(adj.denoise_chroma * 1.5, 1.0));
     let result = smoothed_colour + vec3<f32>(smoothed_luma - dot(smoothed_colour, LUMA));
-    return pow(max(result, vec3<f32>(0.0)), vec3<f32>(TONE_GAMMA));
+    return signed_pow(result, TONE_GAMMA);
 }
 
 fn apply_look(display: vec3<f32>) -> vec3<f32> {
@@ -542,11 +587,38 @@ fn apply_grain(display: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     return display + vec3<f32>(noise * adj.grain * STRENGTH * weight * min(cell, 1.0));
 }
 
+// The sRGB curve, extended to negative and over-one values by symmetry and continuation.
 fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
-    let c = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
+    let c = abs(linear);
     let low = c * 12.92;
     let high = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, c <= vec3<f32>(0.0031308));
+    return sign(linear) * select(high, low, c <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(encoded: vec3<f32>) -> vec3<f32> {
+    let c = abs(encoded);
+    let low = c / 12.92;
+    let high = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return sign(encoded) * select(high, low, c <= vec3<f32>(0.04045));
+}
+
+// For an export to a wider space: from extended sRGB to that space, clipped to its gamut.
+fn encode_output(display: vec3<f32>) -> vec3<f32> {
+    let transfer = region.output_red.w;
+    if transfer == 0.0 {
+        return display;
+    }
+    let linear = srgb_to_linear(display);
+    let c = clamp(vec3<f32>(dot(region.output_red.xyz, linear), dot(region.output_green.xyz, linear), dot(region.output_blue.xyz, linear)),
+        vec3<f32>(0.0), vec3<f32>(1.0));
+    if transfer == 1.0 {
+        return linear_to_srgb(c);
+    }
+    if transfer == 2.0 {
+        return pow(c, vec3<f32>(256.0 / 563.0));
+    }
+    // ProPhoto's ROMM curve, linear near black.
+    return select(pow(c, vec3<f32>(1.0 / 1.8)), c * 16.0, c < vec3<f32>(1.0 / 512.0));
 }
 
 // 16 * 16 = 256 invocations, the WebGPU default limit per workgroup.
@@ -570,10 +642,10 @@ fn apply_point_colour(rgb: vec3<f32>, source_rgb: vec3<f32>) -> vec3<f32> {
     if weight == 0.0 {
         return rgb;
     }
-    let hsv = rgb_to_hsv(max(rgb, vec3<f32>(0.0)));
+    let hsv = rgb_to_hsv(rgb);
     let shifted = hsv_to_rgb(vec3<f32>(
         hsv.x + adj.point_hue_shift * 40.0,
-        clamp(hsv.y * (1.0 + adj.point_sat_shift), 0.0, 1.0),
+        shifted_saturation(hsv.y, adj.point_sat_shift),
         hsv.z * pow(2.0, adj.point_lum_shift),
     ));
     return mix(rgb, shifted, weight);
@@ -651,10 +723,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = apply_replacement(rgb, uv, background);
 
     let tint = vec3<f32>(0.95, 0.2, 0.35);
-    var display = mix(apply_grain(apply_look(linear_to_srgb(rgb)), pixel), tint, adj.mask_overlay * background * 0.65);
+    // The look and grain see the colour as it fits in sRGB; what lies outside rejoins after.
+    let encoded = linear_to_srgb(rgb);
+    let excess = gamut_excess(encoded);
+    let fitted = clamp(encoded - excess, vec3<f32>(0.0), vec3<f32>(1.0));
+    var display = mix(apply_grain(apply_look(fitted), pixel) + excess, tint, adj.mask_overlay * background * 0.65);
     if adj.local_overlay > 0.0 {
         let layer = min(u32(max(adj.local_overlay, 1.0)) - 1u, 3u);
         display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);
     }
-    textureStore(target_image, id.xy, vec4<f32>(display, 1.0));
+    textureStore(target_image, id.xy, vec4<f32>(encode_output(display), 1.0));
 }

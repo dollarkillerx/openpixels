@@ -52,6 +52,7 @@ struct Region {
     camera: [[f32; 4]; 3],
     airlight: [f32; 4],
     sky_tint: [f32; 4],
+    output: [[f32; 4]; 3],
 }
 
 #[repr(C)]
@@ -772,7 +773,8 @@ impl Renderer {
         Ok(out)
     }
 
-    /// Like [`Self::export_rgb8`], but with 16 bits per channel, still sRGB-encoded.
+    /// Like [`Self::export_rgb8`], but with 16 bits per channel, encoded in the colour
+    /// space `adjustments.output_space` names. Colours outside sRGB reach a wider space.
     pub async fn export_rgb16(
         &self,
         image: &LinearImage,
@@ -1043,6 +1045,7 @@ impl Renderer {
             camera: self.camera_rows(adjustments),
             airlight: [self.airlight[0], self.airlight[1], self.airlight[2], 0.0],
             sky_tint: [self.sky_tint[0], self.sky_tint[1], self.sky_tint[2], 0.0],
+            output: op_core::OutputSpace::from_shader_code(adjustments.output_space).shader_rows(),
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
     }
@@ -1760,6 +1763,41 @@ mod tests {
         let tiled = pollster::block_on(renderer.export_rgb16(&image, &adj, 64)).unwrap();
         let whole = pollster::block_on(renderer.export_rgb16(&image, &adj, 512)).unwrap();
         assert_eq!(tiled, whole);
+    }
+
+    fn export_colour16(renderer: &Renderer, rgb: [f32; 3], adj: &Adjustments) -> [u16; 3] {
+        let image = LinearImage::new(1, 1, rgb.map(|v| f16::from_f32(v).to_bits()).to_vec());
+        let out = pollster::block_on(renderer.export_rgb16(&image, adj, 64)).unwrap();
+        [out[0], out[1], out[2]]
+    }
+
+    #[test]
+    fn colours_outside_srgb_reach_a_wide_export() {
+        let renderer = renderer();
+        // Display P3's red, in linear sRGB.
+        let p3_red = [1.2249, -0.0421, -0.0196];
+        let p3 = Adjustments { output_space: op_core::OutputSpace::P3.shader_code(), ..Default::default() };
+        let [r, g, b] = export_colour16(&renderer, p3_red, &p3);
+        assert!(r > 65000 && g < 600 && b < 600, "P3 red in a P3 export: {r} {g} {b}");
+        // In sRGB it can only be clipped.
+        let [r, g, b] = export_colour16(&renderer, p3_red, &Adjustments::default());
+        assert_eq!((r, g, b), (65535, 0, 0));
+        // Edits on 0..1, such as a look or curve, keep it outside sRGB.
+        let edited = Adjustments { contrast: 0.2, saturation: -0.1, ..p3 };
+        let [r, g, _] = export_colour16(&renderer, p3_red, &edited);
+        let srgb_red_in_p3 = export_colour16(&renderer, [1.0, 0.0, 0.0], &edited);
+        assert!(r > srgb_red_in_p3[0] && g < srgb_red_in_p3[1], "{r} {g} vs {srgb_red_in_p3:?}");
+    }
+
+    #[test]
+    fn noise_below_black_stays_black() {
+        let renderer = renderer();
+        let lifted = Adjustments { blacks: 0.6, ..Default::default() };
+        let noise = export_colour16(&renderer, [-0.01, -0.02, -0.01], &lifted);
+        let black = export_colour16(&renderer, [0.0, 0.0, 0.0], &lifted);
+        for c in 0..3 {
+            assert!(noise[c].abs_diff(black[c]) < 700, "{noise:?} vs {black:?}");
+        }
     }
 
     fn export_gray(renderer: &Renderer, value: f32) -> u8 {

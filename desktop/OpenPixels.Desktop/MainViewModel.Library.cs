@@ -238,7 +238,8 @@ public sealed partial class MainViewModel
                         var rgb = (await engine.CallAsync("thumbnail", new { maxLongEdge = AnalysisLongEdge })).Data;
                         var captured = Analysis.CaptureMillis(info["captureTime"]?.GetValue<string>());
                         var fileTime = (File.GetLastWriteTimeUtc(photo.Path) - DateTime.UnixEpoch).TotalMilliseconds;
-                        return await Task.Run(() => Analysis.Analyze(rgb, (int)size["width"]!, (int)size["height"]!, captured ?? fileTime, captured is not null));
+                        var (width, height) = ((int)size["width"]!, (int)size["height"]!);
+                        return await Task.Run(() => Analysis.Analyze(rgb, width, height, captured ?? fileTime, captured is not null, FindFaces(rgb, width, height)));
                     });
                 }
                 catch (Exception)

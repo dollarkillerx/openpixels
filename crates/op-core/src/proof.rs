@@ -345,6 +345,15 @@ impl IccProfile {
         }
     }
 
+    /// For a matrix/TRC profile: each channel's linear value at `levels` evenly spaced
+    /// codes, and the matrix from those linear values to D50 XYZ.
+    pub fn matrix_shaper(&self, levels: usize) -> Option<([Vec<f32>; 3], [[f32; 3]; 3])> {
+        let Model::Matrix(shaper) = &self.model else { return None };
+        let last = levels.max(2) - 1;
+        let tables = std::array::from_fn(|c| (0..=last).map(|code| shaper.curves[c].eval(code as f32 / last as f32)).collect());
+        Some((tables, shaper.to_xyz))
+    }
+
     /// The D50 XYZ colour of device values in 0..=1, relative colorimetric.
     pub fn xyz_of(&self, device: &[f32]) -> [f32; 3] {
         self.to_pcs(device)

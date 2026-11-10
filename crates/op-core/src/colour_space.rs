@@ -122,8 +122,45 @@ impl OutputSpace {
             .collect()
     }
 
+    /// How the develop shader is told to encode into this space.
+    pub fn shader_code(self) -> f32 {
+        match self {
+            Self::Srgb => 0.0,
+            Self::P3 => 1.0,
+            Self::Adobe => 2.0,
+            Self::Prophoto => 3.0,
+        }
+    }
+
+    pub fn from_shader_code(code: f32) -> Self {
+        match code as u32 {
+            1 => Self::P3,
+            2 => Self::Adobe,
+            3 => Self::Prophoto,
+            _ => Self::Srgb,
+        }
+    }
+
+    /// Rows of the matrix from linear sRGB, with the shader's transfer curve in the first
+    /// row's fourth place: 0 leaves sRGB as it is, 1 is the sRGB curve, 2 Adobe's gamma, 3 ROMM.
+    pub fn shader_rows(self) -> [[f32; 4]; 3] {
+        let transfer = match self.definition().transfer {
+            _ if self == Self::Srgb => 0.0,
+            Transfer::Srgb => 1.0,
+            Transfer::Gamma(_) => 2.0,
+            Transfer::Romm => 3.0,
+        };
+        let m = if self == Self::Srgb { [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] } else { self.matrix_from_srgb_linear() };
+        std::array::from_fn(|row| [m[row][0], m[row][1], m[row][2], if row == 0 { transfer } else { 0.0 }])
+    }
+
+    /// D50 XYZ, as ICC profiles give colours, to linear values in this space.
+    pub fn matrix_from_xyz_d50(self) -> [[f64; 3]; 3] {
+        invert(self.to_xyz_d50())
+    }
+
     /// Linear sRGB to linear values in this space.
-    fn matrix_from_srgb_linear(self) -> [[f32; 3]; 3] {
+    pub fn matrix_from_srgb_linear(self) -> [[f32; 3]; 3] {
         let to_xyz = OutputSpace::Srgb.to_xyz_d50();
         let from_xyz = invert(self.to_xyz_d50());
         std::array::from_fn(|row| std::array::from_fn(|col| (0..3).map(|k| from_xyz[row][k] * to_xyz[k][col]).sum::<f64>() as f32))

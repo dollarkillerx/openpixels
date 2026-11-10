@@ -113,8 +113,12 @@ pub struct Adjustments {
     pub point_hue_shift: f32,
     pub point_sat_shift: f32,
     pub point_lum_shift: f32,
+    /// Set only for an export: the colour space the develop pass encodes into, as
+    /// [`crate::OutputSpace::shader_code`] gives it. 0 is sRGB.
     #[serde(skip)]
-    pub _point_padding: [f32; 3],
+    pub output_space: f32,
+    #[serde(skip)]
+    pub _point_padding: [f32; 2],
 }
 
 /// The white balance sliders' travel either way.

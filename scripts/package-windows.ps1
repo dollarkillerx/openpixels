@@ -15,6 +15,21 @@ dotnet publish desktop/OpenPixels.Desktop -c Release -r win-x64 --self-contained
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 Copy-Item LICENSE $app
 
+# HEIC: libheif and its HEVC decoder libde265 (both LGPL, loaded at run time), from
+# vcpkg when installed with `vcpkg install "libheif[core,libde265]:x64-windows"`. The
+# default features would add the GPL x265 encoder, which is not needed.
+$vcpkg = if ($env:OPENPIXELS_VCPKG_ROOT) { $env:OPENPIXELS_VCPKG_ROOT } else { $env:VCPKG_INSTALLATION_ROOT }
+$heif = if ($vcpkg) { Join-Path $vcpkg "installed/x64-windows" } else { $null }
+if ($heif -and (Test-Path "$heif/bin/heif.dll")) {
+  Copy-Item "$heif/bin/heif.dll", "$heif/bin/libde265.dll" $app
+  New-Item -ItemType Directory -Force "$app/licenses" | Out-Null
+  Copy-Item "$heif/share/libheif/copyright" "$app/licenses/libheif.txt"
+  Copy-Item "$heif/share/libde265/copyright" "$app/licenses/libde265.txt"
+  Write-Output "bundled libheif for HEIC"
+} else {
+  Write-Output "libheif not found in vcpkg; this build cannot open HEIC"
+}
+
 $zip = "artifacts/OpenPixels-$version-windows-x64.zip"
 Remove-Item -Force $zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $app -DestinationPath $zip

@@ -132,7 +132,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly CullStore _cull = new();
     private readonly PresetStore _presets = new();
     private readonly ProjectStore _projects = new();
-    private readonly JsonFile<Dictionary<string, PhotoAnalysis>> _analysisFile = new("analyses.json");
+    /// <summary>Version 2 judges faces; earlier results, made without them, are measured again.</summary>
+    private readonly JsonFile<Dictionary<string, PhotoAnalysis>> _analysisFile = new("analyses-v2.json");
     private readonly JsonFile<ProofSettings> _proofFile = new("proof.json");
     private readonly EditStore _store = new();
     private readonly LookLibrary _looks = new();
@@ -175,6 +176,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         RotateSlider = Make(Edits.Rotate);
         MakeLocalSliders();
         MakeFullSliders();
+        MakePortraitSliders();
         Groups = [WhiteBalanceGroup, ToneGroup, ParametricGroup, EffectsGroup, CalibrationGroup, LensGroup, PerspectiveGroup, PointGroup, new("HSL", HslAll), new(I18n.T("其他"), [LookAmount, RotateSlider])];
         Grades = Edits.GradeRanges.Select(range => new GradeItem(range.Key, range.Label)).ToList();
         RefreshLookChoices();
@@ -633,6 +635,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var lookId = (int)_edit.GetValueOrDefault("lutId");
         if (lookId != (int)before.GetValueOrDefault("lutId")) _ = Fire(() => SetLookAsync(_engine, lookId));
         if (ReplacementChanged(before, _edit)) _ = UpdateReplacementAsync();
+        if (NeedsSkin(before) != NeedsSkin(_edit)) _ = UpdateSkinAsync();
+        else ShowSkinStatus(SelectedPhoto.Id, _edit);
         ShowEdit();
         SyncHistory();
         _editChanged = true;
@@ -1319,6 +1323,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveSession();
         _engine.Dispose();
         if (_ai.IsValueCreated) _ai.Value.Dispose();
+        if (_faces.IsValueCreated) _faces.Value.Dispose();
         if (_thumbnailer.IsValueCreated) _thumbnailer.Value.Dispose();
     }
 }

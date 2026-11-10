@@ -338,6 +338,14 @@
               </StackPanel>
             </Expander>
 
+            <Expander Header="{local:Tr '人像'}">
+              <StackPanel Spacing="8">
+                <ItemsControl ItemsSource="{Binding SkinGroup.Sliders}" />
+                <TextBlock Classes="hint" Text="{Binding SkinStatus}" IsVisible="{Binding SkinStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Classes="hint" Text="{local:Tr '自动识别人脸，只处理皮肤，避开眼睛、眉毛和嘴唇。'}" />
+              </StackPanel>
+            </Expander>
+
             <Expander Header="{local:Tr '局部调整'}">
               <StackPanel Spacing="8">
                 <UniformGrid Columns="3" ColumnSpacing="4" RowSpacing="4">

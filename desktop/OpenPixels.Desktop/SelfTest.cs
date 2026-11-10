@@ -56,6 +56,15 @@ public static class SelfTest
                 return $"{new FileInfo(Path.Combine(AiModels.Folder, file)).Length / 1048576} MB";
             });
         }
+        Check("faces", () =>
+        {
+            if (!FaceFinder.Available) throw new FileNotFoundException("not bundled");
+            using var finder = new FaceFinder();
+            var found = finder.Find(new byte[64 * 48 * 3], 64, 48);
+            return $"ran on an empty frame, {found.Count} faces";
+        });
+        Check("heic", () => PlatformDecoder.CanDecodeHeic ? (OperatingSystem.IsMacOS() ? "system decoder" : "libheif")
+            : OperatingSystem.IsLinux() ? "needs the system's libheif1" : throw new DllNotFoundException("libheif not bundled"));
         Check("lensfun", () => File.Exists(Lensfun.DatabasePath) ? $"{new FileInfo(Lensfun.DatabasePath).Length / 1024} KB" : throw new FileNotFoundException("not bundled"));
         Check("languages", () => string.Join(", ", I18n.Languages.Select(language => language.Code)) + $"; using {I18n.Language}");
         Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");

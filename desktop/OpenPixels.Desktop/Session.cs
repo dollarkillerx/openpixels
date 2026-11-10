@@ -22,11 +22,15 @@ public static class PhotoLoader
         if (PlatformDecoder.IsHeic(bytes))
         {
             var raster = await Task.Run(() => PlatformDecoder.Decode(bytes));
-            // The original file follows the pixels, so its metadata can be kept.
-            var data = new byte[raster.Rgba.Length + bytes.Length];
+            // The colour profile, then the original file follow the pixels, so the colours
+            // are read in their own space and the metadata can be kept.
+            var icc = raster.Icc ?? [];
+            var data = new byte[raster.Rgba.Length + icc.Length + bytes.Length];
             raster.Rgba.CopyTo(data, 0);
-            bytes.CopyTo(data, raster.Rgba.Length);
-            return (await engine.CallAsync("decodeRgba", new { width = raster.Width, height = raster.Height }, data)).Json ?? new JsonObject();
+            icc.CopyTo(data, raster.Rgba.Length);
+            bytes.CopyTo(data, raster.Rgba.Length + icc.Length);
+            var args = new { width = raster.Width, height = raster.Height, depth = raster.Depth, space = raster.Space, iccLength = icc.Length };
+            return (await engine.CallAsync("decodeRgba", args, data)).Json ?? new JsonObject();
         }
         return (await engine.CallAsync("decode", null, bytes)).Json ?? new JsonObject();
     }

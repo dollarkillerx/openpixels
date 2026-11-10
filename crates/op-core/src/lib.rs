@@ -8,6 +8,7 @@ pub mod exif;
 pub mod geometry;
 pub mod heal;
 pub mod icc;
+pub mod input_profile;
 pub mod lens;
 pub mod output;
 pub mod proof;
@@ -24,10 +25,11 @@ pub use colour_space::OutputSpace;
 pub use proof::{ColourSpace, IccError, IccProfile, Intent, ProofOptions, apply_proof_lut, proof_lut};
 pub use decode::{
     DecodeError, DevelopJob, LensQuery, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
-    process_tile, open_rgba8};
+    process_tile, open_rgba, open_rgba8, RgbaSamples};
 pub use exif::{capture_time, export_exif, mark_uncalibrated};
 pub use geometry::Geometry;
 pub use icc::{rgb_icc_profile, srgb_icc_profile};
+pub use input_profile::InputProfile;
 pub use lens::{LensMap, LensProfile, LensfunCalibration};
 pub use output::{OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, fit_long_edge, post_crop_vignette, resize_rgb};
 pub use heal::{ErasePatch, HealSpot, apply_erases, apply_heals, find_heal_source};

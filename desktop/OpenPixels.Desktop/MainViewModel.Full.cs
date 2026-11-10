@@ -213,6 +213,7 @@ public sealed partial class MainViewModel
             var image = await Task.Run(() => _replacements.Resolve(asset));
             if (image is not null) await engine.CallAsync("setReplaceImage", new { sky = isSky, width = image.Width, height = image.Height }, image.Rgba);
         }
+        await ApplySkinAsync(engine, id, edit, proxy);
     }
 
     private async Task<ModelMask> RawMaskAsync(EngineClient engine, string id, string model, (int Width, int Height) proxy)

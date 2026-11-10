@@ -91,11 +91,22 @@ impl NativeEngine {
         Ok(match method {
             "decode" => (parsed(e.decode(data)?)?, vec![]),
             "decodeRgba" => {
-                // RGBA pixels, then optionally the original file, for its metadata.
+                // RGBA pixels, 8 or 16 bits (`depth`), then `iccLength` bytes of colour
+                // profile, then optionally the original file, for its metadata. Without a
+                // profile, `space` may name one: "p3"; otherwise the pixels are sRGB.
                 let (width, height) = (int("width")?, int("height")?);
-                let pixels = (width as usize) * (height as usize) * 4;
-                let (rgba, source) = data.split_at_checked(pixels).ok_or_else(|| error("decodeRgba: data too short"))?;
-                (parsed(e.decode_rgba(rgba, width, height, source)?)?, vec![])
+                let deep = args.get("depth").and_then(Value::as_u64) == Some(16);
+                let pixels = (width as usize) * (height as usize) * if deep { 8 } else { 4 };
+                let icc_length = args.get("iccLength").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let (rgba, rest) = data.split_at_checked(pixels).ok_or_else(|| error("decodeRgba: data too short"))?;
+                let (icc, source) = rest.split_at_checked(icc_length).ok_or_else(|| error("decodeRgba: data too short"))?;
+                let profile = if icc.is_empty() {
+                    (args.get("space").and_then(Value::as_str) == Some("p3")).then(op_core::InputProfile::display_p3)
+                } else {
+                    op_core::InputProfile::from_icc(icc)
+                };
+                let samples = if deep { op_core::RgbaSamples::Sixteen(rgba) } else { op_core::RgbaSamples::Eight(rgba) };
+                (parsed(e.decode_rgba_samples(samples, width, height, profile.as_ref(), source)?)?, vec![])
             }
             "buildProxy" => (parsed(e.build_proxy(int("maxLongEdge")?)?)?, vec![]),
             "setAdjustments" => {

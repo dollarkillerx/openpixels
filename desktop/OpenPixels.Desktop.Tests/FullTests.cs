@@ -148,6 +148,26 @@ public sealed class FullTests : IDisposable
         Assert.False(model.HasBackground);
     }
 
+    /// <summary>Uses the git-ignored acne fixture and the face models when both are present.</summary>
+    [AvaloniaFact]
+    public async Task Skin_smoothing_finds_the_face_and_changes_only_skin()
+    {
+        var portrait = Path.Combine(Root, "web/public/fixtures/people/01-acne.jpg");
+        if (!File.Exists(portrait) || !FaceFinder.Available) return;
+        var (_, model) = await Open(portrait);
+        var points = Enumerable.Range(0, 64).Select(i => (U: 0.3 + i % 8 * 0.04, V: 0.15 + i / 8 * 0.04)).ToList();
+        var before = points.Select(p => PixelAt(model, p.U, p.V)).ToList();
+        var corner = PixelAt(model, 0.97, 0.9);
+        foreach (var slider in model.SkinGroup.Sliders) slider.Value = 1;
+        await WaitFor(() => model.SkinStatus.StartsWith("检测到 1 张人脸"), "one face", model);
+        double Change() => points.Select((p, i) => PixelAt(model, p.U, p.V) is var (r, g, b) ? Math.Abs(r - before[i].R) + Math.Abs(g - before[i].G) + Math.Abs(b - before[i].B) : 0).Average();
+        await WaitFor(() => Change() > 2, "smoother skin", model);
+        Assert.Equal(corner, PixelAt(model, 0.97, 0.9));
+        model.Undo();
+        model.Undo();
+        await WaitFor(() => model.SkinStatus == "", "no skin status", model);
+    }
+
     [AvaloniaFact]
     public async Task A_new_sky_replaces_the_old_one()
     {

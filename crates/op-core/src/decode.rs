@@ -9,6 +9,7 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
 use crate::LinearImage;
+use crate::input_profile::InputProfile;
 use crate::lens::LensProfile;
 use crate::demosaic::{BayerPattern, Cfa, TILE_MARGIN, demosaic_block};
 use crate::look::{DEFAULT_BASE_EXPOSURE, estimate_base_exposure, fit_camera_matrix};
@@ -77,13 +78,57 @@ pub fn open(bytes: &[u8]) -> Result<Opened, DecodeError> {
 
 /// Opens a finished image already decoded to sRGB RGBA8, as from a browser-side codec.
 pub fn open_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<Opened, DecodeError> {
-    if rgba.len() != width as usize * height as usize * 4 {
-        return Err(DecodeError::UnexpectedRawLayout);
-    }
-    let table = srgb_to_linear_table();
-    let pixels = rgba.chunks_exact(4).flat_map(|p| [table[p[0] as usize], table[p[1] as usize], table[p[2] as usize]]).collect();
+    open_rgba(width, height, RgbaSamples::Eight(rgba), None)
+}
+
+/// RGBA from a system codec, 8 or 16 bits per channel; 16-bit samples are native-endian.
+pub enum RgbaSamples<'a> {
+    Eight(&'a [u8]),
+    Sixteen(&'a [u8]),
+}
+
+/// Opens a finished image decoded by another codec, in the colour space `profile`
+/// describes, or sRGB without one.
+pub fn open_rgba(width: u32, height: u32, samples: RgbaSamples, profile: Option<&InputProfile>) -> Result<Opened, DecodeError> {
+    let count = width as usize * height as usize * 4;
+    let pixels = match samples {
+        RgbaSamples::Eight(rgba) => {
+            if rgba.len() != count {
+                return Err(DecodeError::UnexpectedRawLayout);
+            }
+            let rgb: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+            linearise_rgb8(&rgb, profile)
+        }
+        RgbaSamples::Sixteen(bytes) => {
+            if bytes.len() != count * 2 {
+                return Err(DecodeError::UnexpectedRawLayout);
+            }
+            let rgb: Vec<u16> = bytes.chunks_exact(8).flat_map(|p| [0, 2, 4].map(|at| u16::from_ne_bytes([p[at], p[at + 1]]))).collect();
+            linearise_rgb16(&rgb, profile)
+        }
+    };
     let working = LinearImage::new(width, height, pixels);
     Ok(Opened { working, is_raw: false, camera: None, width, height, base_exposure: None, lens: None, lens_query: None, camera_matrix: None })
+}
+
+fn linearise_rgb8(rgb: &[u8], profile: Option<&InputProfile>) -> Vec<u16> {
+    match profile {
+        Some(profile) => profile.linearise_u8(rgb),
+        None => {
+            let table = srgb_to_linear_table();
+            rgb.iter().map(|&v| table[v as usize]).collect()
+        }
+    }
+}
+
+fn linearise_rgb16(rgb: &[u16], profile: Option<&InputProfile>) -> Vec<u16> {
+    match profile {
+        Some(profile) => profile.linearise_u16(rgb),
+        None => {
+            let table = srgb16_to_linear_table();
+            rgb.iter().map(|&v| table[v as usize]).collect()
+        }
+    }
 }
 
 fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
@@ -393,6 +438,8 @@ fn decode_raster(bytes: &[u8]) -> Result<LinearImage, DecodeError> {
         .map_err(image::ImageError::IoError)?
         .into_decoder()?;
     let orientation = decoder.orientation()?;
+    // A tagged Display P3 or Adobe RGB file would look dull if read as sRGB.
+    let profile = decoder.icc_profile().ok().flatten().and_then(|icc| InputProfile::from_icc(&icc));
     let mut decoded = DynamicImage::from_decoder(decoder)?;
     decoded.apply_orientation(orientation);
 
@@ -400,16 +447,12 @@ fn decode_raster(bytes: &[u8]) -> Result<LinearImage, DecodeError> {
     if decoded.color().bytes_per_pixel() / decoded.color().channel_count() == 2 {
         let rgb = decoded.into_rgb16();
         let (width, height) = rgb.dimensions();
-        let table = srgb16_to_linear_table();
-        let pixels = rgb.as_raw().iter().map(|&v| table[v as usize]).collect();
-        return Ok(LinearImage::new(width, height, pixels));
+        return Ok(LinearImage::new(width, height, linearise_rgb16(rgb.as_raw(), profile.as_ref())));
     }
 
     let rgb = decoded.into_rgb8();
     let (width, height) = rgb.dimensions();
-    let table = srgb_to_linear_table();
-    let pixels = rgb.as_raw().iter().map(|&v| table[v as usize]).collect();
-    Ok(LinearImage::new(width, height, pixels))
+    Ok(LinearImage::new(width, height, linearise_rgb8(rgb.as_raw(), profile.as_ref())))
 }
 
 /// 8-bit sRGB code value to linear half-float bit pattern.
@@ -478,6 +521,24 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_tagged_display_p3_file_keeps_its_wider_red() {
+        use image::ImageEncoder;
+        let mut file = Vec::new();
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut file);
+        encoder.set_icc_profile(crate::OutputSpace::P3.icc_profile()).unwrap();
+        encoder.write_image(&[255, 0, 0, 255, 255, 255], 2, 1, image::ExtendedColorType::Rgb8).unwrap();
+        let decoded = open(&file).unwrap().working;
+        let linear: Vec<f32> = decoded.pixels.iter().map(|&bits| f16::from_bits(bits).to_f32()).collect();
+        assert!(linear[0] > 1.15 && linear[1] < -0.02, "P3 red read as {:?}", &linear[..3]);
+        assert!(linear[3..].iter().all(|v| (v - 1.0).abs() < 2e-3), "white {:?}", &linear[3..]);
+        // Untagged, the same codes are sRGB red.
+        let mut plain = Cursor::new(Vec::new());
+        image::RgbImage::from_raw(1, 1, vec![255, 0, 0]).unwrap().write_to(&mut plain, image::ImageFormat::Png).unwrap();
+        let red = open(plain.get_ref()).unwrap().working.pixels;
+        assert_eq!(red.iter().map(|&b| f16::from_bits(b).to_f32()).collect::<Vec<_>>(), [1.0, 0.0, 0.0]);
+    }
 
     /// 2x1 image whose red channel holds the source index of each pixel.
     fn two_pixels() -> LinearImage {

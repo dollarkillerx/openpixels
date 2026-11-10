@@ -183,8 +183,20 @@ impl Engine {
     /// Opens an image a browser-side codec already decoded. Returns JSON metadata.
     /// `source` is the original file, for its capture details.
     pub fn decode_rgba(&mut self, rgba: &[u8], width: u32, height: u32, source: &[u8]) -> Result<String> {
+        self.decode_rgba_samples(op_core::RgbaSamples::Eight(rgba), width, height, None, source)
+    }
+
+    /// Like [`Self::decode_rgba`], for 8- or 16-bit samples in the space `profile` describes.
+    pub fn decode_rgba_samples(
+        &mut self,
+        samples: op_core::RgbaSamples,
+        width: u32,
+        height: u32,
+        profile: Option<&op_core::InputProfile>,
+        source: &[u8],
+    ) -> Result<String> {
         self.release_image();
-        let opened = op_core::open_rgba8(width, height, rgba).map_err(to_error)?;
+        let opened = op_core::open_rgba(width, height, samples, profile).map_err(to_error)?;
         self.source_exif = Some(export_exif(source));
         self.finish_open(opened, None)
     }
@@ -716,16 +728,17 @@ impl Engine {
         let exif = exif.as_deref();
 
         if wide || space != OutputSpace::Srgb {
-            // Another colour space is converted from 16 bits, so 8-bit files are rounded once.
-            let rgb = self.renderer.export_rgb16(image, &self.adjustments, EXPORT_TILE_SIZE).await.map_err(to_error)?;
+            // The develop pass encodes into the space itself, so colours outside sRGB that
+            // the photo holds survive; 8-bit files are rounded once, from 16 bits.
+            let adjustments = Adjustments { output_space: space.shader_code(), ..self.adjustments };
+            let rgb = self.renderer.export_rgb16(image, &adjustments, EXPORT_TILE_SIZE).await.map_err(to_error)?;
             // The source is no longer needed, and the steps below each allocate a copy.
             drop(developed);
             let (finished, width, height) = self.finish(rgb, image_width, image_height, settings.long_edge, &overlay);
             if wide {
-                let converted: Vec<u16> = if space == OutputSpace::Srgb { finished } else { space.convert_from_srgb(&finished) };
-                return encode_lossless(settings.format, &converted, width, height, &icc, exif);
+                return encode_lossless(settings.format, &finished, width, height, &icc, exif);
             }
-            let converted: Vec<u8> = space.convert_from_srgb(&finished);
+            let converted: Vec<u8> = finished.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect();
             drop(finished);
             return match settings.format {
                 OutputFormat::Jpeg => encode_jpeg(&converted, width, height, settings.quality.clamp(1, 100), &icc, exif.map(<[u8]>::to_vec)).map_err(to_error),
