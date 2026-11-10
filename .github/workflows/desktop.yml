@@ -1,0 +1,129 @@
+name: Desktop packages
+
+# Builds the desktop app for macOS (Apple silicon and Intel), Windows and Linux.
+# Run it from the Actions tab, or push a tag like v0.1.0 to also publish a release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # The models and the lens database are fetched once and shared with every build.
+  assets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/cache@v4
+        with:
+          path: |
+            web/public/models
+            .tools/lensfun
+          key: runtime-assets-${{ hashFiles('scripts/fetch-model.sh', 'scripts/fetch-lensfun.sh') }}
+      - run: scripts/fetch-model.sh
+      - run: scripts/fetch-lensfun.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-assets
+          path: |
+            web/public/models/*.onnx
+            web/public/lensfun
+          retention-days: 3
+
+  package:
+    needs: assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-15
+          - name: macos-x64
+            os: macos-15-intel
+          - name: windows-x64
+            os: windows-2022
+          - name: linux-x64
+            # The oldest supported image, so the build runs on older glibc too.
+            os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: desktop-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-assets
+          path: web/public
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/package-macos.sh
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/package-windows.ps1
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/package-linux.sh
+
+      # Loads the engine, renders and exports, and runs a model, without a window.
+      # Hosted runners may have no usable GPU, so a failure here is reported, not fatal.
+      - name: Self-test (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: artifacts/macos-*/OpenPixels.app/Contents/MacOS/OpenPixels --self-test
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $output = & artifacts/windows-x64/OpenPixels/OpenPixels.exe --self-test 2>&1
+          $output
+          exit $LASTEXITCODE
+      - name: Self-test (Linux)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          # Mesa's software Vulkan driver stands in for a GPU.
+          sudo apt-get update -qq && sudo apt-get install -y -qq mesa-vulkan-drivers
+          artifacts/linux-x64/OpenPixels/OpenPixels --self-test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenPixels-${{ matrix.name }}
+          path: |
+            artifacts/OpenPixels-*.dmg
+            artifacts/OpenPixels-*.zip
+            artifacts/OpenPixels-*.exe
+            artifacts/OpenPixels-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: OpenPixels-*
+          path: packages
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*
+          draft: true
+          generate_release_notes: true

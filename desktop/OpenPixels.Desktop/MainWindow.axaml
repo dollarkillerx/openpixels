@@ -153,7 +153,7 @@
                       <Flyout Placement="BottomEdgeAlignedLeft">
                         <DockPanel Width="260" MaxHeight="420">
               <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
-                <TextBox Text="{Binding NewProjectName}" Watermark="{local:Tr '项目名称'}" />
+                <TextBox Text="{Binding NewProjectName}" PlaceholderText="{local:Tr '项目名称'}" />
                 <Button Content="{local:Tr '把当前照片存为项目'}" Command="{Binding SaveProjectCommand}" IsEnabled="{Binding HasPhotos}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
               <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="{local:Tr '项目只记住是哪些照片；照片本身和修图参数仍在原处。'}" Margin="0,8,0,0" />
@@ -591,7 +591,7 @@
                   </DockPanel>
                   <DockPanel>
                     <Button DockPanel.Dock="Right" Content="{local:Tr '保存当前'}" Command="{Binding SavePresetCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />
-                    <TextBox Text="{Binding NewPresetName}" Watermark="{local:Tr '新预设名称'}" />
+                    <TextBox Text="{Binding NewPresetName}" PlaceholderText="{local:Tr '新预设名称'}" />
                   </DockPanel>
                   <TextBlock Classes="hint" Text="{local:Tr '预设、粘贴和同步不包括裁剪、旋转等只属于一张照片的设置。'}" />
                   <UniformGrid Columns="2" ColumnSpacing="6" RowSpacing="6">

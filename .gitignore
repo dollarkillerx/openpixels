@@ -13,3 +13,6 @@ web/public/mediapipe/
 # Desktop (.NET) build output
 desktop/**/bin/
 desktop/**/obj/
+
+# Desktop packages
+artifacts/

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OpenPixels
+GenericName=Photo Editor
+GenericName[zh_CN]=修图
+Comment=Open-source RAW photo editor
+Comment[zh_CN]=开源的 RAW 修图工具
+Exec=OpenPixels %F
+Icon=openpixels
+Terminal=false
+Categories=Graphics;Photography;RasterGraphics;
+MimeType=image/jpeg;image/png;image/tiff;image/heic;image/x-adobe-dng;image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;image/x-sony-arw;image/x-fuji-raf;

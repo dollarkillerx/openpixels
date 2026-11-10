@@ -10,6 +10,11 @@
     <AssemblyName>OpenPixels</AssemblyName>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+    <!-- The release version; packaging scripts and the macOS Info.plist read it from here. -->
+    <Version>0.1.0</Version>
+    <Product>OpenPixels</Product>
+    <Copyright>OpenPixels contributors, Apache-2.0</Copyright>
+    <ApplicationIcon>Assets/app-icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,6 +42,11 @@
 
   <Target Name="CopyNativeEngine" AfterTargets="Build">
     <Copy SourceFiles="$(NativeLibPath)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Published builds carry the engine too; it is built for the machine doing the publish. -->
+  <Target Name="PublishNativeEngine" AfterTargets="Publish">
+    <Copy SourceFiles="$(NativeLibPath)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>

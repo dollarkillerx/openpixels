@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")/.."
 if command -v cargo >/dev/null 2>&1; then
-  CARGO=cargo
+  CARGO="$(command -v cargo)"
 else
   CARGO="$(rustup which cargo)"
   PATH="$(dirname "$CARGO"):$PATH"

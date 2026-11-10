@@ -19,7 +19,7 @@
           <Button Content="{local:Tr '删除'}" Command="{Binding DeletePresetCommand}" />
         </StackPanel>
         <StackPanel Orientation="Horizontal" Spacing="6">
-          <TextBox Text="{Binding NewPresetName}" Watermark="{local:Tr '新预设名称'}" Width="170" />
+          <TextBox Text="{Binding NewPresetName}" PlaceholderText="{local:Tr '新预设名称'}" Width="170" />
           <Button Content="{local:Tr '保存为预设'}" Command="{Binding SavePresetCommand}" />
         </StackPanel>
       </StackPanel>
@@ -54,7 +54,7 @@
         <CheckBox Content="{local:Tr '添加水印'}" IsChecked="{Binding WatermarkEnabled}" />
         <Grid ColumnDefinitions="86,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" IsEnabled="{Binding WatermarkEnabled}">
           <TextBlock Text="{local:Tr '文字'}" VerticalAlignment="Center" />
-          <TextBox Grid.Column="1" Text="{Binding WatermarkText}" Watermark="{local:Tr '例如 © 你的名字'}" />
+          <TextBox Grid.Column="1" Text="{Binding WatermarkText}" PlaceholderText="{local:Tr '例如 © 你的名字'}" />
           <TextBlock Grid.Row="1" Text="{local:Tr '图片'}" VerticalAlignment="Center" />
           <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6">
             <Button Content="{local:Tr '选择图片…'}" Click="OnPickLogo" />

@@ -150,6 +150,22 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 
 修图参数、快照、导入的 LUT 和导出设置保存在用户数据目录，可用 `OPENPIXELS_DATA_DIR` 指定。编辑参数的键与网页版相同。Lensfun 镜头库需要先运行 `scripts/fetch-lensfun.sh`，构建时会一起复制。
 
+### 打包和发布
+
+打包前先运行 `scripts/fetch-model.sh` 和 `scripts/fetch-lensfun.sh`，模型和镜头库会一起打进安装包。Rust 引擎只能在目标系统上构建，所以每个系统的安装包要在对应系统上生成。
+
+| 系统 | 命令 | 产物（在 `artifacts/`） |
+|---|---|---|
+| macOS（Apple 芯片或 Intel） | `scripts/package-macos.sh` | `OpenPixels.app` 和 `.dmg` |
+| Windows x64 | `scripts/package-windows.ps1` | `.zip`，装有 Inno Setup 6 时还有安装程序 |
+| Linux x64 | `scripts/package-linux.sh` | `.tar.gz`，附桌面入口文件和图标 |
+
+macOS 默认临时签名，只能在本机直接打开；发给别人前，设置 `OPENPIXELS_SIGN_IDENTITY`（“Developer ID Application”证书）和 `OPENPIXELS_NOTARY_PROFILE`（`xcrun notarytool store-credentials` 保存的配置），脚本会签名、公证并装订。Linux 版需要 Vulkan 驱动和 X11 或 XWayland。
+
+打包好的程序可以用 `OpenPixels --self-test` 自检：不开窗口，检查引擎能否渲染和导出、模型和镜头库是否齐全。
+
+GitHub Actions 的“Desktop packages”工作流会在四个系统上打包并自检；推送 `v0.1.0` 这样的标签时，还会把安装包放进一个 Release 草稿。版本号在 `desktop/OpenPixels.Desktop/OpenPixels.Desktop.csproj` 的 `<Version>`。
+
 快捷键：`⌘Z` / `⇧⌘Z` 撤销和重做（Windows 用 `Ctrl+Z` / `Ctrl+Y`），`⌘O` 打开，`⌘E` 导出，`⇧⌘C` / `⇧⌘V` 复制和粘贴设置，`0`–`5` 星标，`6`–`9` 色标，`P` / `X` / `U` 旗标，`G` / `E` 网格和单张，`Z` 缩放，`J` 溢出警告，`R` 裁剪，`W` 白平衡吸管，`S` 软打样，按住 `\` 看修图前，`←` / `→` 切换照片，`Esc` 退出当前工具。
 
 AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同，需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
