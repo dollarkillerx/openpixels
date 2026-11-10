@@ -48,6 +48,13 @@ export interface LensQuery {
 }
 
 /** Pixel counts per 8-bit level, for red, green and blue. */
+/** What an ICC profile is, as the engine reads it. */
+export interface ProfileInfo {
+  name: string;
+  space: "RGB" | "CMYK" | "GRAY";
+  isOutput: boolean;
+}
+
 export interface HistogramData {
   channels: [Uint32Array, Uint32Array, Uint32Array];
   total: number;
@@ -112,6 +119,9 @@ export type EngineRequest =
   | { type: "setErases"; erases: ErasePatch[] }
   | { type: "inpaintInput"; x: number; y: number; width: number; height: number; size: number }
   | { type: "whiteBalanceAt"; x: number; y: number; stageWidth: number; stageHeight: number }
+  | { type: "autoTone" }
+  | { type: "setProof"; icc: ArrayBuffer | null; perceptual: boolean; paper: boolean; gamut: boolean }
+  | { type: "describeProfile"; icc: ArrayBuffer }
   | { type: "hueAt"; x: number; y: number; stageWidth: number; stageHeight: number }
   | { type: "setWarps"; strokes: WarpStroke[] }
   | {

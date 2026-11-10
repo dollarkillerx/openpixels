@@ -2,15 +2,19 @@
 //! not call a method while an async one is still pending.
 
 use op_core::{
-    Adjustments, DevelopJob, ErasePatch, LensfunCalibration, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
-    OutputFormat, Sample, composite_overlay, post_crop_vignette, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
-    neutral_white_balance, resize_rgb,
+    Adjustments, AutoTone, DevelopJob, ErasePatch, LensfunCalibration, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
+    OutputFormat, Sample, ToneStats, auto_exposure, auto_finish, trim_exposure, composite_overlay, post_crop_vignette, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
+    neutral_white_balance, resize_rgb, IccProfile, Intent, ProofOptions, proof_lut,
 };
 use op_gpu::{Renderer, ViewTransform, encode_jpeg};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
 
+/// Grid points per side of the soft proof table.
+const PROOF_LUT_SIZE: u32 = 33;
+/// Long edge of the renders that automatic tone measures.
+const AUTO_TONE_LONG_EDGE: u32 = 512;
 const EXPORT_TILE_SIZE: u32 = 2048;
 /// The largest side of the full-resolution layer. Beyond this the proxy is detailed enough.
 const MAX_DETAIL_SIDE: f32 = 4096.0;
@@ -384,6 +388,20 @@ impl Engine {
         self.renderer.set_look((size > 0).then_some((size, rgb)));
     }
 
+    /// Shows the preview as it would come out through an ICC profile. Returns JSON
+    /// describing the profile. Exports are unaffected.
+    pub fn set_proof(&mut self, icc: &[u8], perceptual: bool, simulate_paper: bool, gamut_warning: bool) -> Result<String, JsError> {
+        let profile = IccProfile::parse(icc).map_err(js_error)?;
+        let intent = if perceptual { Intent::Perceptual } else { Intent::Relative };
+        let lut = proof_lut(&profile, ProofOptions { intent, simulate_paper }, PROOF_LUT_SIZE);
+        self.renderer.set_proof(Some((PROOF_LUT_SIZE, &lut)), gamut_warning);
+        describe(&profile)
+    }
+
+    pub fn clear_proof(&mut self) {
+        self.renderer.set_proof(None, false);
+    }
+
     /// Sets the local adjustment masks, one layer per RGBA channel, covering the image.
     pub fn set_local_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
         self.renderer.set_local_mask(width, height, rgba);
@@ -585,6 +603,15 @@ impl Engine {
             .export_rgb8(&thumbnail, &self.adjustments, EXPORT_TILE_SIZE)
             .await
             .map_err(js_error)
+    }
+
+    /// Suggests tone sliders for the photo as framed, as JSON. Leaves the edit as it was.
+    /// Measures without creative effects, so it reads the photo rather than undoing them.
+    pub async fn auto_tone(&mut self) -> Result<String, JsError> {
+        let original = self.adjustments;
+        let suggestion = self.measure_auto_tone().await;
+        self.adjustments = original;
+        serde_json::to_string(&suggestion?.rounded()).map_err(js_error)
     }
 
     /// Renders the proxy with crop and rotation applied, as RGB8.
@@ -829,9 +856,57 @@ impl Engine {
         self.healed_proxy = Some(healed);
     }
 
+    async fn tone_stats(&mut self) -> Result<ToneStats, JsError> {
+        Ok(ToneStats::from_rgb8(&self.framed_thumbnail(AUTO_TONE_LONG_EDGE).await?))
+    }
+
+    async fn measure_auto_tone(&mut self) -> Result<AutoTone, JsError> {
+        let adj = &mut self.adjustments;
+        (adj.exposure, adj.contrast, adj.highlights, adj.shadows) = (0.0, 0.0, 0.0, 0.0);
+        (adj.whites, adj.blacks, adj.vibrance) = (0.0, 0.0, 0.0);
+        (adj.vignette, adj.post_crop_vignette, adj.grain, adj.lut_amount, adj.curve_active) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        (adj.local, adj.local_overlay, adj.mask_overlay) = ([[0.0; 4]; 4], 0.0, 0.0);
+
+        let stats = self.tone_stats().await?;
+        self.adjustments.exposure = auto_exposure(&stats);
+        let stats = self.tone_stats().await?;
+        let mut tone = auto_finish(&stats, self.adjustments.exposure);
+
+        let adj = &mut self.adjustments;
+        (adj.contrast, adj.highlights, adj.shadows) = (tone.contrast, tone.highlights, tone.shadows);
+        (adj.whites, adj.blacks, adj.vibrance) = (tone.whites, tone.blacks, tone.vibrance);
+        let stats = self.tone_stats().await?;
+        tone.exposure = trim_exposure(tone.exposure, &stats);
+        Ok(tone)
+    }
+
     fn thumbnail_dimensions(&self, max_long_edge: u32) -> Result<(u32, u32), JsError> {
         let proxy = self.proxy.as_ref().ok_or_else(|| JsError::new("no image loaded"))?;
         let thumbnail = proxy.proxy(max_long_edge);
         Ok((thumbnail.width, thumbnail.height))
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileInfo {
+    name: String,
+    /// "RGB", "CMYK" or "GRAY".
+    space: &'static str,
+    is_output: bool,
+}
+
+fn describe(profile: &IccProfile) -> Result<String, JsError> {
+    let space = match profile.space {
+        op_core::ColourSpace::Rgb => "RGB",
+        op_core::ColourSpace::Cmyk => "CMYK",
+        op_core::ColourSpace::Gray => "GRAY",
+    };
+    serde_json::to_string(&ProfileInfo { name: profile.name.clone(), space, is_output: profile.is_output }).map_err(js_error)
+}
+
+/// Checks an ICC file can be used for soft proofing, and describes it as JSON.
+#[wasm_bindgen]
+pub fn describe_profile(icc: &[u8]) -> Result<String, JsError> {
+    describe(&IccProfile::parse(icc).map_err(js_error)?)
 }

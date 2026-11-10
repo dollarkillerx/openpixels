@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { decodeHeic, isHeic } from "./heic";
 import { renderWatermark } from "./output";
-import init, { Engine } from "./wasm-pkg/op_wasm";
+import init, { Engine, describe_profile } from "./wasm-pkg/op_wasm";
 import { engineJson } from "./library";
 import { lensfunCalibration } from "./lensfun";
 import type {
@@ -298,6 +298,20 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       const { x, y, stageWidth, stageHeight } = request;
       return [JSON.parse(engine!.white_balance_at(x, y, stageWidth, stageHeight)), []];
     }
+
+    case "setProof": {
+      const { icc, perceptual, paper, gamut } = request;
+      const info = icc ? JSON.parse(engine!.set_proof(new Uint8Array(icc), perceptual, paper, gamut)) : null;
+      if (!icc) engine!.clear_proof();
+      scheduleRender(false);
+      return [info, []];
+    }
+
+    case "describeProfile":
+      return [JSON.parse(describe_profile(new Uint8Array(request.icc))), []];
+
+    case "autoTone":
+      return [JSON.parse(await engine!.auto_tone()), []];
 
     case "hueAt": {
       const { x, y, stageWidth, stageHeight } = request;

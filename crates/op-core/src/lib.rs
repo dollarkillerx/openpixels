@@ -1,4 +1,5 @@
 pub mod adjust;
+pub mod auto_tone;
 pub mod curve;
 pub mod decode;
 pub mod demosaic;
@@ -8,6 +9,7 @@ pub mod heal;
 pub mod icc;
 pub mod lens;
 pub mod output;
+pub mod proof;
 pub mod image_buf;
 pub mod look;
 pub mod retouch;
@@ -15,7 +17,9 @@ pub mod warp;
 mod xtrans;
 
 pub use adjust::{Adjustments, neutral_white_balance};
+pub use auto_tone::{AutoTone, ToneStats, auto_exposure, auto_finish, trim_exposure};
 pub use curve::{CURVE_LUT_SIZE, ToneCurve};
+pub use proof::{ColourSpace, IccError, IccProfile, Intent, ProofOptions, proof_lut};
 pub use decode::{
     DecodeError, DevelopJob, LensQuery, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
     process_tile, open_rgba8};

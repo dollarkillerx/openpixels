@@ -22,6 +22,7 @@ struct Blit {
     // Where the full-resolution layer sits in source UV: minimum then maximum.
     detail_rect: vec4<f32>,
     // x: the full-resolution layer is valid. y and z: warn about clipped highlights, shadows.
+    // w: soft proof, 1 to show it and 2 to also mark colours it cannot reproduce.
     flags: vec4<f32>,
 }
 
@@ -34,6 +35,20 @@ struct Blit {
 @group(0) @binding(4) var before: texture_2d<f32>;
 // Part of the image developed at full resolution, for viewing up close.
 @group(0) @binding(5) var detail: texture_2d<f32>;
+// Screen colour to proofed colour; alpha is 1 outside the proof's gamut.
+@group(0) @binding(6) var proof: texture_3d<f32>;
+
+const GAMUT_WARNING = vec3<f32>(1.0, 0.25, 0.75);
+
+fn apply_proof(colour: vec3<f32>) -> vec3<f32> {
+    let size = f32(textureDimensions(proof).x);
+    let at = (clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * (size - 1.0) + 0.5) / size;
+    let proofed = textureSampleLevel(proof, image_sampler, at, 0.0);
+    if blit.flags.w > 1.5 && proofed.a > 0.5 {
+        return GAMUT_WARNING;
+    }
+    return proofed.rgb;
+}
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -92,6 +107,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if blit.perspective.w != 0.0 {
         let falloff = smoothstep(0.4, 1.4, length((in.framed - 0.5) * 2.0));
         colour = vec4<f32>(clamp(colour.rgb * (1.0 + blit.perspective.w * falloff), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
+    if blit.flags.w > 0.0 {
+        colour = vec4<f32>(apply_proof(colour.rgb), 1.0);
     }
     let brightest = max(colour.r, max(colour.g, colour.b));
     if blit.flags.y > 0.0 && brightest >= 0.998 {

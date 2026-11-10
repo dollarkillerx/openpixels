@@ -10,7 +10,8 @@
     "dev": "pnpm assets && vite",
     "build": "pnpm assets && tsc --noEmit && vite build --mode lite",
     "dev:lite": "pnpm assets && vite --mode lite",
-    "build:full": "pnpm assets && tsc --noEmit && vite build"
+    "build:full": "pnpm assets && tsc --noEmit && vite build",
+    "test": "node --test tests/"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.2",

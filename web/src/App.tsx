@@ -6,8 +6,8 @@ import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import { FIT_VIEW, FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, sourceToOutput, viewBox, type Crop, type View } from "./frame";
 import { Histogram } from "./Histogram";
-import { BUILT_IN_LOOKS, builtInLut, parseCube } from "./lut";
-import { deleteProject, forgetHandle, getAsset, getLut, listAssets, listLuts, listProjects, loadAnalyses, loadErases, recallHandle, recallHandleEntries, rememberHandle, saveAnalysis, saveAsset, saveErases, saveLut, saveProject, type Project, type StoredAsset, type StoredLut } from "./store";
+import { BUILT_IN_LOOKS, LOOK_GROUPS, builtInLut, parseCube } from "./lut";
+import { deleteProfile, deleteProject, forgetHandle, getAsset, getLut, listAssets, listLuts, listProfiles, listProjects, loadAnalyses, loadErases, recallHandle, recallHandleEntries, rememberHandle, saveAnalysis, saveAsset, saveErases, saveLut, saveProfile, saveProject, type Project, type StoredAsset, type StoredLut, type StoredProfile } from "./store";
 import { analyzeImage, groupPhotos, judgeGroup, type PhotoAnalysis, type Verdict } from "./analysis";
 import { matchColours } from "./colormatch";
 import { locateFaces } from "./face";
@@ -39,6 +39,9 @@ import {
   loadRatings,
   loadWarps,
   persistable,
+  loadProof,
+  saveProof,
+  type ProofSettings,
   saveHeals,
   saveFlag,
   saveLocals,
@@ -159,6 +162,8 @@ interface SettingName {
 }
 
 const CURVE_CHANNELS: Record<string, string> = { M: "RGB 曲线", R: "红色曲线", G: "绿色曲线", B: "蓝色曲线" };
+/** History names for edits made by one action rather than by moving a setting. */
+const ACTION_LABELS = new WeakMap<Adjustments, string>();
 const CROP_GROUP = "裁剪与旋转";
 const POINT_GROUP = "颜色混合点";
 
@@ -184,7 +189,7 @@ function nameOfSetting(key: string): SettingName | null {
     const channel = HSL_CHANNELS.find((item) => item.prefix === `hsl${hsl[1]}`)!;
     return { label: `${HSL_BANDS[Number(hsl[2])].name}${channel.label}`, numeric: true };
   }
-  const curve = key.match(/^curve([MRGB])\d$/);
+  const curve = key.match(/^curve([MRGB])(?:\d|N|[XY]\d+)$/);
   if (curve) return { label: CURVE_CHANNELS[curve[1]], group: CURVE_CHANNELS[curve[1]] };
   const grade = key.match(/^grade(Shadow|Mid|High)(Hue|Amount)$/);
   if (grade) {
@@ -204,6 +209,8 @@ function nameOfSetting(key: string): SettingName | null {
 function describeChange(before: Adjustments, after: Adjustments) {
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => (before[key] ?? 0) !== (after[key] ?? 0));
   if (changed.length === 0) return "无变化";
+  const action = ACTION_LABELS.get(after);
+  if (action) return action;
   if (changed.every((key) => /^local\d/.test(key))) {
     // A layer always has an exposure, so that key coming or going means the layer did.
     const exposures = changed.filter((key) => /^local\dExposure$/.test(key));
@@ -460,6 +467,9 @@ export function App() {
   const [compare, setCompare] = useState(0);
   const compareHeldRef = useRef<number | null>(null);
   const compareDragRef = useRef(false);
+  const [autoToning, setAutoToning] = useState(false);
+  const [proof, setProof] = useState<ProofSettings>(loadProof);
+  const [profiles, setProfiles] = useState<StoredProfile[]>([]);
   const [picker, setPicker] = useState<"white" | "point" | null>(null);
   const pickingWhite = picker === "white";
   const [toolHint, setToolHint] = useState("");
@@ -571,6 +581,7 @@ export function App() {
 
   useEffect(() => {
     listLuts().then(setImportedLuts).catch(() => {});
+    listProfiles().then(setProfiles).catch(() => {});
     Promise.all([listProjects(), recallHandleEntries()])
       .then(([stored, entries]) => {
         projectsRef.current = stored;
@@ -902,6 +913,7 @@ export function App() {
     const onRate = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "SELECT" || event.metaKey || event.ctrlKey) return;
+      if (event.key.toLowerCase() === "s") toggleProofRef.current();
       if (/^[0-5]$/.test(event.key) && currentId) rate(currentId, Number(event.key));
       if (/^[6-9]$/.test(event.key) && currentId) {
         const value = Number(event.key) - 5;
@@ -1219,6 +1231,63 @@ export function App() {
         />
       </label>
     );
+  };
+
+  const updateProof = (patch: Partial<ProofSettings>) =>
+    setProof((current) => {
+      const next = { ...current, ...patch };
+      saveProof(next);
+      return next;
+    });
+  const proofProfile = profiles.find((profile) => profile.id === proof.profileId) ?? null;
+  const proofActive = proof.on && proofProfile !== null;
+  const toggleProofRef = useRef(() => {});
+  toggleProofRef.current = () => proofProfile && updateProof({ on: !proof.on });
+
+  useEffect(() => {
+    if (!ready) return;
+    const engine = engineRef.current!;
+    const options = { perceptual: proof.perceptual, paper: proof.paper, gamut: proof.gamut };
+    engine.setProof(proofActive ? proofProfile.bytes : null, options).catch((reason: Error) => setError(`软打样失败：${reason.message}`));
+  }, [ready, proofActive, proofProfile, proof.perceptual, proof.paper, proof.gamut]);
+
+  const importProfile = async (file: File) => {
+    try {
+      const bytes = await file.arrayBuffer();
+      const info = await engineRef.current!.describeProfile(bytes);
+      const stored = await saveProfile({ ...info, name: info.name || file.name.replace(/\.(icc|icm)$/i, ""), bytes });
+      setProfiles((list) => [...list, stored]);
+      updateProof({ profileId: stored.id, on: true });
+    } catch (reason) {
+      setError(`导入 ICC 失败：${(reason as Error).message}`);
+    }
+  };
+
+  const removeProfile = async (id: number) => {
+    await deleteProfile(id).catch(() => {});
+    setProfiles((list) => list.filter((profile) => profile.id !== id));
+    if (proof.profileId === id) updateProof({ profileId: null, on: false });
+  };
+
+  const runAutoTone = async () => {
+    const photoId = currentId;
+    const ticket = openTicketRef.current;
+    if (!photoId) return;
+    setAutoToning(true);
+    setError("");
+    try {
+      const suggestion = await engineRef.current!.autoTone();
+      // Another photo was opened while this one was measured.
+      if (ticket !== openTicketRef.current) return;
+      // Keeps edits made while waiting; only the suggested settings change.
+      const next = { ...(editsRef.current[photoId] ?? adjustments), ...suggestion };
+      ACTION_LABELS.set(next, "智能调色");
+      applyEdit(next, true);
+    } catch (reason) {
+      setError(`智能调色失败：${(reason as Error).message}`);
+    } finally {
+      setAutoToning(false);
+    }
   };
 
   const updateOutput = (patch: Partial<OutputSettings>) => {
@@ -2253,6 +2322,15 @@ export function App() {
           <button className="button ghost" disabled={!history?.past.length || locked} onClick={() => stepHistory("undo")}>撤销</button>
           <button className="button ghost" disabled={!history?.future.length || locked} onClick={() => stepHistory("redo")}>重做</button>
           <button className="button ghost" disabled={!loaded || locked} onClick={reset}>重置</button>
+          <button
+            className={`button ${proofActive ? "" : "ghost"}`}
+            aria-pressed={proofActive}
+            disabled={!proofProfile || locked}
+            title={proofProfile ? "按打样配置预览（S）" : "先在“输出”页导入 ICC 配置"}
+            onClick={() => updateProof({ on: !proof.on })}
+          >
+            软打样
+          </button>
           <button className={`button ${compare > 0 ? "" : "ghost"}`} title="按住 \\ 键可查看整张修图前" disabled={!loaded || locked} onClick={() => setCompare((split) => (split > 0 ? 0 : 0.5))}>对比</button>
         </div>
         {exported && <a className="download" href={exported.url} download={exported.name} title={exported.name}>下载 {exported.name}</a>}
@@ -2335,6 +2413,12 @@ export function App() {
           }}
         >
           {toolHint && <p className="stage-hint" data-testid="tool-hint">{toolHint}</p>}
+          {proofActive && loaded && (
+            <p className="proof-badge" data-testid="proof-badge">
+              软打样：{proofProfile.name}
+              {proof.gamut && "（粉色为超出色域）"}
+            </p>
+          )}
           {loaded && !cropEditing && (
             <div className="zoom-bar" role="group" aria-label="缩放" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
               <button type="button" className={view.zoom === 1 ? "current" : ""} title="适合窗口（Z 在适合和 100% 之间切换）" onClick={() => applyView(FIT_VIEW)}>适合</button>
@@ -2603,6 +2687,13 @@ export function App() {
                 </button>
               </div>
             )}
+            {group.title === "影调" && (
+              <div className="row">
+                <button className="button secondary" disabled={!loaded || locked || autoToning} onClick={() => void runAutoTone()}>
+                  {autoToning ? "计算中…" : "智能调色"}
+                </button>
+              </div>
+            )}
             {group.title === "透视矫正" && (
               <label className="check">
                 <input
@@ -2657,7 +2748,7 @@ export function App() {
         </Section>
 
         <Section id="curve" title="曲线" active={panelTab}>
-          <ToneCurve adjustments={adjustments} disabled={!loaded || locked} onChange={setValue} />
+          <ToneCurve adjustments={adjustments} histogram={loaded ? histogram : null} disabled={!loaded || locked} onChange={applyEdit} />
           {PARAMETRIC_SLIDERS.map(renderSlider)}
         </Section>
 
@@ -2665,8 +2756,12 @@ export function App() {
           <div className="row">
             <select aria-label="滤镜" value={lookId} disabled={!loaded || locked} onChange={(event) => chooseLook(Number(event.target.value))}>
               <option value={0}>无</option>
-              {BUILT_IN_LOOKS.map((look) => (
-                <option key={look.id} value={look.id}>{look.name}</option>
+              {LOOK_GROUPS.map((group) => (
+                <optgroup key={group} label={group}>
+                  {BUILT_IN_LOOKS.filter((look) => look.group === group).map((look) => (
+                    <option key={look.id} value={look.id}>{look.name}</option>
+                  ))}
+                </optgroup>
               ))}
               {importedLuts.map((lut) => (
                 <option key={lut.id} value={lut.id}>{lut.name}</option>
@@ -3173,6 +3268,63 @@ export function App() {
             </p>
           )}
           {batchUrl && <a className="download" data-stat="batch-zip" href={batchUrl} download="openpixels-export.zip">下载 ZIP</a>}
+        </Section>
+
+        <Section id="proof" title="软打样" active={panelTab}>
+          <label className="check">
+            <input type="checkbox" aria-label="显示软打样" checked={proofActive} disabled={!proofProfile || locked} onChange={() => updateProof({ on: !proof.on })} />
+            按打样配置预览（S）
+          </label>
+          <div className="row">
+            <select aria-label="打样配置" value={proof.profileId ?? ""} disabled={locked || profiles.length === 0} onChange={(event) => updateProof({ profileId: event.target.value ? Number(event.target.value) : null })}>
+              <option value="">{profiles.length ? "选择配置…" : "尚未导入配置"}</option>
+              {profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}（{profile.isOutput ? "打印" : "显示"} {profile.space}）
+                </option>
+              ))}
+            </select>
+            <label className={`button secondary ${locked ? "disabled" : ""}`}>
+              导入 ICC
+              <input
+                type="file"
+                hidden
+                accept=".icc,.icm"
+                aria-label="导入 ICC 配置"
+                disabled={locked}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void importProfile(file);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+            {proofProfile && (
+              <button className="button secondary" disabled={locked} onClick={() => void removeProfile(proofProfile.id)}>
+                删除
+              </button>
+            )}
+          </div>
+          <label className="field">
+            <span>渲染方式</span>
+            <select aria-label="渲染方式" value={proof.perceptual ? "perceptual" : "relative"} disabled={locked} onChange={(event) => updateProof({ perceptual: event.target.value === "perceptual" })}>
+              <option value="perceptual">可感知</option>
+              <option value="relative">相对比色</option>
+            </select>
+          </label>
+          <label className="check">
+            <input type="checkbox" aria-label="模拟纸张和油墨" checked={proof.paper} disabled={locked} onChange={() => updateProof({ paper: !proof.paper })} />
+            模拟纸张和油墨
+          </label>
+          <label className="check">
+            <input type="checkbox" aria-label="目标色域警告" checked={proof.gamut} disabled={locked} onChange={() => updateProof({ gamut: !proof.gamut })} />
+            目标色域警告（粉色标出无法还原的颜色）
+          </label>
+          {profiles.length === 0 && (
+            <p className="progress">
+              导入打印机或另一台显示器的 ICC 文件。macOS 在 /System/Library/ColorSync/Profiles，Windows 在 C:\Windows\System32\spool\drivers\color。打样只影响预览，不改变导出。
+            </p>
+          )}
         </Section>
 
         <Section id="export" title="导出设置" active={panelTab}>

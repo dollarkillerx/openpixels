@@ -23,6 +23,7 @@ import type {
   Thumbnail,
   ToWorker,
   WarpStroke,
+  ProfileInfo,
 } from "./protocol";
 
 export interface MaskStats {
@@ -177,6 +178,23 @@ export class EngineClient {
   /** Shows the unedited image on this fraction of the frame, from the left. 0 is off. */
   compare(split: number) {
     this.worker.postMessage({ type: "compare", split } satisfies ToWorker);
+  }
+
+  /** Shows the preview through an ICC profile, or stops when `icc` is null. Exports are unaffected. */
+  setProof(icc: ArrayBuffer | null, options: { perceptual: boolean; paper: boolean; gamut: boolean }) {
+    const copy = icc ? icc.slice(0) : null;
+    return this.call<ProfileInfo | null>({ type: "setProof", icc: copy, ...options }, copy ? [copy] : []);
+  }
+
+  /** Checks an ICC file can be used for soft proofing. Rejects with the reason if not. */
+  describeProfile(icc: ArrayBuffer) {
+    const copy = icc.slice(0);
+    return this.call<ProfileInfo>({ type: "describeProfile", icc: copy }, [copy]);
+  }
+
+  /** Tone sliders suggested for the photo as framed. */
+  autoTone() {
+    return this.call<Adjustments>({ type: "autoTone" });
   }
 
   /** The hue at a stage position in degrees, or a negative number if it has none. */

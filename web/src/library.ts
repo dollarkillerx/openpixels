@@ -1,3 +1,4 @@
+import { CURVE_CHANNELS, curvePoints, parametricAmounts } from "./curve";
 import type { LocalLayer } from "./local";
 import { DEFAULT_OUTPUT, type OutputSettings } from "./output";
 import type { Adjustments, HealSpot, WarpStroke } from "./protocol";
@@ -34,14 +35,22 @@ function write(key: string, value: unknown) {
   }
 }
 
-/** How far the parametric curve sliders move the master curve at each of its five points. */
-export function parametricOffset(adjustments: Adjustments, point: number): number {
-  const amount = (key: string) => adjustments[key] ?? 0;
-  if (point === 1) return amount("curveShadows") * 0.1 + amount("curveDarks") * 0.04;
-  if (point === 2) return amount("curveDarks") * 0.06 + amount("curveLights") * 0.06;
-  if (point === 3) return amount("curveLights") * 0.04 + amount("curveHighlights") * 0.1;
-  return 0; // The ends stay pinned, as black and white do on a parametric curve.
+/** How the preview simulates an ICC profile. A viewing option, not part of any edit. */
+export interface ProofSettings {
+  on: boolean;
+  profileId: number | null;
+  perceptual: boolean;
+  /** Shows the paper's white and the ink's black instead of the screen's. */
+  paper: boolean;
+  /** Marks colours the profile cannot reproduce. */
+  gamut: boolean;
 }
+
+const PROOF_KEY = "openpixels.proof.v1";
+const DEFAULT_PROOF: ProofSettings = { on: false, profileId: null, perceptual: true, paper: false, gamut: false };
+
+export const loadProof = (): ProofSettings => ({ ...DEFAULT_PROOF, ...read<Partial<ProofSettings>>(PROOF_KEY, {}) });
+export const saveProof = (settings: ProofSettings) => write(PROOF_KEY, settings);
 
 /** Serialises edits for the engine, which takes the HSL bands as two groups of four. */
 export function engineJson(adjustments: Adjustments): string {
@@ -52,9 +61,8 @@ export function engineJson(adjustments: Adjustments): string {
     hslHue: bands("hslHue"),
     hslSaturation: bands("hslSat"),
     hslLuminance: bands("hslLum"),
-    curve: ["M", "R", "G", "B"].map((channel) =>
-      [0, 1, 2, 3, 4].map((i) => (adjustments[`curve${channel}${i}`] ?? 0) + (channel === "M" ? parametricOffset(adjustments, i) : 0)),
-    ),
+    curve: CURVE_CHANNELS.map((channel) => curvePoints(adjustments, channel).map((point) => [point.x, point.y])),
+    parametric: parametricAmounts(adjustments),
     lensManual: [adjustments.lensDistortion ?? 0, adjustments.lensVignette ?? 0, adjustments.lensCaRed ?? 0, adjustments.lensCaBlue ?? 0],
     perspective: [adjustments.perspectiveV ?? 0, adjustments.perspectiveH ?? 0],
     replaceBackground: adjustments.backgroundAsset ? (adjustments.backgroundAmount ?? 1) : 0,

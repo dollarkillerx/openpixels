@@ -172,6 +172,9 @@ pub struct Renderer {
     clip_warnings: [bool; 2],
     detail: Option<Detail>,
     no_detail_view: wgpu::TextureView,
+    /// The soft proof table, and 0 for off, 1 to show it, 2 to also warn about gamut.
+    proof_view: wgpu::TextureView,
+    proof_mode: f32,
     base_exposure: Option<f32>,
     lens_profile: Option<LensProfile>,
     camera_matrix: Option<[[f32; 3]; 3]>,
@@ -197,6 +200,16 @@ impl Renderer {
                 texture_entry(3, wgpu::ShaderStages::FRAGMENT, true),
                 texture_entry(4, wgpu::ShaderStages::FRAGMENT, true),
                 texture_entry(5, wgpu::ShaderStages::FRAGMENT, true),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let blit_pipeline_layout =
@@ -262,6 +275,7 @@ impl Renderer {
         let sky_image_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
         let sky_mask_view = create_mask_view(&device, &queue, 1, 1, &[0]);
         let no_detail_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
+        let proof_view = create_proof_view(&device, &queue, 2, &IDENTITY_PROOF);
 
         Self {
             device,
@@ -293,6 +307,8 @@ impl Renderer {
             clip_warnings: [false; 2],
             detail: None,
             no_detail_view,
+            proof_view,
+            proof_mode: 0.0,
             base_exposure: None,
             lens_profile: None,
             camera_matrix: None,
@@ -468,6 +484,7 @@ impl Renderer {
                 texture(3, warp),
                 texture(4, before),
                 texture(5, detail),
+                texture(6, &self.proof_view),
             ],
         })
     }
@@ -485,6 +502,22 @@ impl Renderer {
 
     pub fn view(&self) -> ViewTransform {
         self.view
+    }
+
+    /// Shows the preview as it would look through a soft proof: a `size`^3 RGBA table,
+    /// red fastest, alpha 1 outside the proof's gamut. `None` turns the proof off.
+    pub fn set_proof(&mut self, proof: Option<(u32, &[f32])>, gamut_warning: bool) {
+        match proof {
+            Some((size, rgba)) => {
+                self.proof_view = create_proof_view(&self.device, &self.queue, size, rgba);
+                self.proof_mode = if gamut_warning { 2.0 } else { 1.0 };
+            }
+            None => {
+                self.proof_view = create_proof_view(&self.device, &self.queue, 2, &IDENTITY_PROOF);
+                self.proof_mode = 0.0;
+            }
+        }
+        self.rebuild_blit();
     }
 
     /// Marks clipped highlights and shadows on the canvas.
@@ -651,7 +684,7 @@ impl Renderer {
                 f32::from(self.detail.is_some()),
                 f32::from(self.clip_warnings[0]),
                 f32::from(self.clip_warnings[1]),
-                0.0,
+                self.proof_mode,
             ],
         };
         self.queue.write_buffer(&self.blit_buffer, 0, bytes_of(&blit));
@@ -1266,6 +1299,32 @@ fn create_luma_view(
 const IDENTITY_LOOK: [f32; 24] = [
     0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0,
 ];
+
+const IDENTITY_PROOF: [f32; 32] = [
+    0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+];
+
+fn create_proof_view(device: &wgpu::Device, queue: &wgpu::Queue, size: u32, rgba: &[f32]) -> wgpu::TextureView {
+    let dimensions = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: size };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("proof"),
+        size: dimensions,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: SOURCE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let bits: Vec<u16> = rgba.iter().map(|&v| half::f16::from_f32(v).to_bits()).collect();
+    queue.write_texture(
+        texture.as_image_copy(),
+        cast_slice(&bits),
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size * SOURCE_BYTES_PER_PIXEL), rows_per_image: Some(size) },
+        dimensions,
+    );
+    texture.create_view(&Default::default())
+}
 
 fn create_look_view(device: &wgpu::Device, queue: &wgpu::Queue, size: u32, rgb: &[f32]) -> wgpu::TextureView {
     let dimensions = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: size };
@@ -1979,7 +2038,7 @@ mod tests {
         let renderer = renderer();
         let image = flat_gray(4, 4);
         let mut curve = ToneCurve::default();
-        curve.curve[0][2] = 0.2;
+        curve.curve[0] = vec![[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]];
         renderer.set_curve(&curve);
         let adj = Adjustments { curve_active: 1.0, ..Default::default() };
         let out = export(&renderer, &image, &adj, 64);

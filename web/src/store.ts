@@ -1,15 +1,16 @@
 import type { PhotoAnalysis } from "./analysis";
 import type { Lut } from "./lut";
-import type { ErasePatch } from "./protocol";
+import type { ErasePatch, ProfileInfo } from "./protocol";
 
 const DB_NAME = "openpixels";
-const VERSION = 4;
+const VERSION = 5;
 const HANDLES = "handles";
 const LUTS = "luts";
 const PROJECTS = "projects";
 const ERASES = "erases";
 const ASSETS = "assets";
 const ANALYSES = "analyses";
+const PROFILES = "profiles";
 
 export interface StoredLut extends Lut {
   id: number;
@@ -27,6 +28,7 @@ function open(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(ERASES)) db.createObjectStore(ERASES);
       if (!db.objectStoreNames.contains(ASSETS)) db.createObjectStore(ASSETS, { keyPath: "id", autoIncrement: true });
       if (!db.objectStoreNames.contains(ANALYSES)) db.createObjectStore(ANALYSES);
+      if (!db.objectStoreNames.contains(PROFILES)) db.createObjectStore(PROFILES, { keyPath: "id", autoIncrement: true });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -43,6 +45,20 @@ async function run<T>(store: string, mode: IDBTransactionMode, work: (s: IDBObje
     request.onerror = () => reject(request.error);
   });
 }
+
+/** An imported ICC profile for soft proofing. */
+export interface StoredProfile extends ProfileInfo {
+  id: number;
+  bytes: ArrayBuffer;
+}
+
+export async function saveProfile(profile: Omit<StoredProfile, "id">): Promise<StoredProfile> {
+  const id = await run<IDBValidKey>(PROFILES, "readwrite", (s) => s.add(profile));
+  return { ...profile, id: Number(id) };
+}
+
+export const listProfiles = () => run<StoredProfile[]>(PROFILES, "readonly", (s) => s.getAll());
+export const deleteProfile = (id: number) => run(PROFILES, "readwrite", (s) => s.delete(id));
 
 /** Imported LUT ids start here, clear of the built-in looks. */
 const FIRST_IMPORTED_ID = 100;

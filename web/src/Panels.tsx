@@ -34,9 +34,10 @@ const SECTIONS = {
   // Lite has no 智能 tab, since this is all that would be left on it.
   subject: { tab: IS_LITE ? "retouch" : "smart", order: IS_LITE ? 5 : 1 },
   replace: { tab: "smart", order: 2 },
-  export: { tab: "output", order: 1 },
-  batch: { tab: "output", order: 2 },
-  stats: { tab: "output", order: 3 },
+  proof: { tab: "output", order: 1 },
+  export: { tab: "output", order: 2 },
+  batch: { tab: "output", order: 3 },
+  stats: { tab: "output", order: 4 },
 } as const;
 
 export type SectionId = keyof typeof SECTIONS;
