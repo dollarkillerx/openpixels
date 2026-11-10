@@ -135,6 +135,7 @@ impl NativeEngine {
             "histogramThumbnail" => (none, pollster::block_on(e.histogram_thumbnail(int("maxLongEdge")?))?),
             "autoTone" => (parsed(pollster::block_on(e.auto_tone())?)?, vec![]),
             "whiteBalanceAt" => (parsed(e.white_balance_at(num("x")? as f32, num("y")? as f32, int("stageWidth")?, int("stageHeight")?)?)?, vec![]),
+            "sourceAt" => (parsed(e.source_at(num("x")? as f32, num("y")? as f32, int("stageWidth")?, int("stageHeight")?))?, vec![]),
             "hueAt" => (json!(e.hue_at(num("x")? as f32, num("y")? as f32, int("stageWidth")?, int("stageHeight")?)), vec![]),
             "healAt" => (parsed(e.heal_at(num("x")? as f32, num("y")? as f32, int("stageWidth")?, int("stageHeight")?, num("radius")? as f32)?)?, vec![]),
             "setHeals" => {

@@ -240,6 +240,14 @@
     <Setter Property="Foreground" Value="{StaticResource OpTextBrush}" />
   </Style>
 
+  <!-- Local layer rows: the active one is tinted. -->
+  <Style Selector="Border.layer">
+    <Setter Property="Background" Value="{StaticResource OpRaisedBrush}" />
+  </Style>
+  <Style Selector="Border.layer.active">
+    <Setter Property="Background" Value="{StaticResource OpAccentSoftBrush}" />
+  </Style>
+
   <Style Selector="ComboBox">
     <Setter Property="FontSize" Value="12" />
     <Setter Property="MinHeight" Value="28" />

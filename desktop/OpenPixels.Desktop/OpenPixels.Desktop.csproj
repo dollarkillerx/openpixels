@@ -17,6 +17,8 @@
     <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- Runs MODNet, SkyWater-Seg and LaMa for AI masks and AI erase. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
   </ItemGroup>
 
   <!-- The engine is the Rust crate op-native, built by cargo and copied next to the app. -->
@@ -39,6 +41,13 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/app-icon.png" />
+  </ItemGroup>
+
+  <!-- The AI models, if scripts/fetch-model.sh has fetched them. Checked licences are in the README. -->
+  <ItemGroup>
+    <None Include="$(RepoRoot)web/public/models/modnet.onnx;$(RepoRoot)web/public/models/skywater.onnx;$(RepoRoot)web/public/models/lama.onnx"
+          Condition="Exists('$(RepoRoot)web/public/models/modnet.onnx')"
+          Link="models/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- The Lensfun database (CC BY-SA 3.0), if scripts/fetch-lensfun.sh has fetched it. -->

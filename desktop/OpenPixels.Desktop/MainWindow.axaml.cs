@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _model = new();
     private (Point Start, View View)? _pan;
     private bool _draggingDivider;
+    private bool _toolDrag;
 
     public MainWindow()
     {
@@ -131,6 +132,9 @@ public partial class MainWindow : Window
         CropLayer.FrameWidth = frameWidth;
         CropLayer.FrameHeight = frameHeight;
         CropLayer.InvalidateVisual();
+        ToolLayer.State = _model.OverlayState();
+        ToolLayer.Scaling = RenderScaling;
+        ToolLayer.InvalidateVisual();
 
         var (width, height) = (Stage.Bounds.Width, Stage.Bounds.Height);
         var x = _model.CompareSplit * width;
@@ -154,6 +158,14 @@ public partial class MainWindow : Window
             await _model.PickAtAsync(device.X, device.Y);
             return;
         }
+        var at = DevicePoint(position);
+        e.Pointer.Capture(Stage);
+        if (await _model.ToolPressAsync(at.X, at.Y, e.KeyModifiers.HasFlag(KeyModifiers.Alt)))
+        {
+            _toolDrag = true;
+            return;
+        }
+        e.Pointer.Capture(null);
         if (_model.CropEditing) return;
         if (_model.CompareOn && Math.Abs(position.X - _model.CompareSplit * Stage.Bounds.Width) <= DividerGrab)
         {
@@ -169,9 +181,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnStageMoved(object? sender, PointerEventArgs e)
+    private async void OnStageMoved(object? sender, PointerEventArgs e)
     {
         var position = e.GetPosition(Stage);
+        ToolLayer.Pointer = position;
+        ToolLayer.InvalidateVisual();
+        if (_toolDrag)
+        {
+            var at = DevicePoint(position);
+            await _model.ToolMoveAsync(at.X, at.Y);
+            return;
+        }
         if (_draggingDivider)
         {
             _model.CompareSplit = Math.Clamp(position.X / Math.Max(1, Stage.Bounds.Width), 0, 1);
@@ -182,6 +202,11 @@ public partial class MainWindow : Window
 
     private void OnStageReleased(object? sender, PointerReleasedEventArgs e)
     {
+        if (_toolDrag)
+        {
+            _toolDrag = false;
+            _model.ToolRelease();
+        }
         _pan = null;
         _draggingDivider = false;
         Stage.Cursor = null;
@@ -198,7 +223,7 @@ public partial class MainWindow : Window
 
     private void OnStageDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (!_model.CanEdit || _model.Picker != Picker.None || _model.CropEditing) return;
+        if (!_model.CanEdit || _model.Picker != Picker.None || _model.CropEditing || _model.Tool != RetouchTool.None) return;
         if (_model.IsZoomed)
         {
             _model.FitViewCommand.Execute(null);

@@ -173,6 +173,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         HslAll = Edits.HslSliders().Select(Make).ToList();
         LookAmount = Make(Edits.LookAmount);
         RotateSlider = Make(Edits.Rotate);
+        MakeLocalSliders();
         Groups = [WhiteBalanceGroup, ToneGroup, ParametricGroup, EffectsGroup, CalibrationGroup, LensGroup, PerspectiveGroup, PointGroup, new("HSL", HslAll), new("其他", [LookAmount, RotateSlider])];
         Grades = Edits.GradeRanges.Select(range => new GradeItem(range.Key, range.Label)).ToList();
         RefreshLookChoices();
@@ -256,7 +257,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AutoToneCommand), nameof(ResetCommand), nameof(UndoCommand), nameof(RedoCommand), nameof(TakeSnapshotCommand))]
-    [NotifyPropertyChangedFor(nameof(HasOthersSelected))]
+    [NotifyPropertyChangedFor(nameof(HasOthersSelected), nameof(CanAddLayer))]
     private bool _canEdit;
 
     [ObservableProperty]
@@ -331,6 +332,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnPickerChanged(Picker value)
     {
+        if (value != Picker.None) Tool = RetouchTool.None;
         OnPropertyChanged(nameof(PickingWhiteBalance));
         OnPropertyChanged(nameof(PickingPoint));
         ToolHint = value switch
@@ -469,12 +471,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             var started = Environment.TickCount64;
             var info = await PhotoLoader.DecodeAsync(_engine, photo.Path);
-            await _engine.CallAsync("buildProxy", new { maxLongEdge = ProxyLongEdge });
+            var proxy = (await _engine.CallAsync("buildProxy", new { maxLongEdge = ProxyLongEdge })).Json!;
             await PhotoLoader.ApplyLensDatabaseAsync(_engine, info);
             if (ticket != _openTicket) return;
             _info = info;
             _edit = _store.Load(photo.Id);
-            if (!_histories.TryGetValue(photo.Id, out var history)) _histories[photo.Id] = history = new EditHistory(_edit);
+            if (!_histories.TryGetValue(photo.Id, out var history)) _histories[photo.Id] = history = new EditHistory(_edit, _retouch.Locals(photo.Id));
             _history = history;
             _edit = history.Current;
             _view = View.Fit;
@@ -482,6 +484,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             SyncHistory();
             ShowSnapshots();
             ShowCameraAndLens();
+            Tool = RetouchTool.None;
+            await LoadRetouchAsync(photo, proxy);
             await _engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(_edit));
             await SetLookAsync(_engine, (int)_edit.GetValueOrDefault("lutId"));
             await _engine.CallAsync("setView", new { zoom = 1.0, x = 0.5, y = 0.5 });
@@ -782,6 +786,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (_history is null) return;
         var before = _edit;
         _edit = _history.MoveTo(index);
+        RestoreLayersFromHistory();
         EditChanged(before);
     }
 
@@ -1049,6 +1054,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (value)
         {
             Picker = Picker.None;
+            Tool = RetouchTool.None;
             if (_view.Zoom > 1) ApplyView(View.Fit);
         }
         _editChanged = true;
@@ -1106,6 +1112,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void CancelTools()
     {
         Picker = Picker.None;
+        Tool = RetouchTool.None;
         CropEditing = false;
     }
 
@@ -1145,7 +1152,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 {
                     // Taken first: an edit the engine rejects must not block every later frame.
                     _editChanged = false;
-                    await _engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(_edit, CropEditing));
+                    await _engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(_edit, CropEditing, LocalOverlay));
                 }
                 var (width, height) = _viewport;
                 var rgba = (await _engine.CallAsync("render", new { width, height })).Data;
@@ -1290,6 +1297,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         SaveSession();
         _engine.Dispose();
+        if (_ai.IsValueCreated) _ai.Value.Dispose();
         if (_thumbnailer.IsValueCreated) _thumbnailer.Value.Dispose();
     }
 }

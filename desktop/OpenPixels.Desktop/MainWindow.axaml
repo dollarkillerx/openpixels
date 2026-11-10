@@ -294,7 +294,101 @@
                 </StackPanel>
               </Expander>
 
-              <Expander Header="曲线">
+              <Expander Header="修复">
+              <StackPanel Spacing="8">
+                <UniformGrid Columns="4" ColumnSpacing="4">
+                  <ToggleButton Classes="tool" Content="污点" IsChecked="{Binding IsSpot, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Spot"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="污点修复：点击斑点，自动找周围的纹理盖上" />
+                  <ToggleButton Classes="tool" Content="仿制" IsChecked="{Binding IsClone, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Clone"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="仿制图章：按住 Option（Alt）取样，再涂抹" />
+                  <ToggleButton Classes="tool" Content="红眼" IsChecked="{Binding IsRedEye, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RedEye"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="红眼去除：点击瞳孔" />
+                  <ToggleButton Classes="tool" Content="AI 消除" IsChecked="{Binding IsErase, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Erase"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="涂抹要去掉的物体，LaMa 模型补上背景" />
+                </UniformGrid>
+                <Grid ColumnDefinitions="84,*,40" Classes="sliderRow">
+                  <TextBlock Text="画笔大小" FontSize="12" VerticalAlignment="Center" Classes="muted" />
+                  <Slider Grid.Column="1" Minimum="0.002" Maximum="0.06" Value="{Binding HealRadius}" Margin="4,0" />
+                  <TextBlock Grid.Column="2" Text="{Binding HealRadius, StringFormat='{}{0:P1}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Classes="muted" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsErase}">
+                  <Button Classes="accent" Content="消除" Command="{Binding RunEraseCommand}" IsEnabled="{Binding CanRunErase}" />
+                  <Button Classes="ghost" Content="清除涂抹" Command="{Binding ClearEraseMarksCommand}" />
+                </StackPanel>
+                <UniformGrid Columns="2" ColumnSpacing="6" RowSpacing="6">
+                  <Button Content="撤销上一处修复" Command="{Binding UndoHealCommand}" IsEnabled="{Binding HasHeals}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="清除全部修复" Command="{Binding ClearHealsCommand}" IsEnabled="{Binding HasHeals}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="撤销上一次消除" Command="{Binding UndoEraseCommand}" IsEnabled="{Binding HasErases}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="清除全部消除" Command="{Binding ClearErasesCommand}" IsEnabled="{Binding HasErases}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                </UniformGrid>
+                <TextBlock Classes="hint" Text="{Binding HealSummary}" IsVisible="{Binding HealSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Classes="hint" Text="{Binding RetouchStatus}" IsVisible="{Binding RetouchStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+            </Expander>
+
+            <Expander Header="局部调整">
+              <StackPanel Spacing="8">
+                <UniformGrid Columns="4" ColumnSpacing="4" RowSpacing="4">
+                  <ToggleButton Classes="tool" Content="线性" IsChecked="{Binding IsLinear, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Linear"
+                                IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="在画面上拖出渐变" />
+                  <ToggleButton Classes="tool" Content="径向" IsChecked="{Binding IsRadial, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Radial"
+                                IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="从中心向外拖出范围" />
+                  <ToggleButton Classes="tool" Content="画笔" IsChecked="{Binding IsBrush, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Brush"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="涂抹要调整的区域" />
+                  <Button Content="全图" Command="{Binding AddFullLayerCommand}" IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          ToolTip.Tip="作用于整张照片，常与亮度或颜色范围一起用" />
+                  <Button Content="主体" Command="{Binding AddAiLayerCommand}" CommandParameter="Subject" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding AiAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="AI 识别画面主体（MODNet）" />
+                  <Button Content="背景" Command="{Binding AddAiLayerCommand}" CommandParameter="Background" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding AiAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="主体以外的部分" />
+                  <Button Content="天空" Command="{Binding AddAiLayerCommand}" CommandParameter="Sky" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding SkyAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="AI 识别天空（SkyWater-Seg）" />
+                </UniformGrid>
+                <TextBlock Classes="hint" Text="{Binding RetouchStatus}" IsVisible="{Binding AiBusy}" />
+                <ItemsControl ItemsSource="{Binding Layers}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:LayerRow">
+                      <Border Classes="layer" Classes.active="{Binding IsActive}" CornerRadius="6" Padding="10,4" Margin="0,0,0,4">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <Button Classes="ghost" Content="{Binding Title}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="0,2" MinHeight="22"
+                                  Command="{Binding $parent[Window].((local:MainViewModel)DataContext).SelectLayerCommand}" CommandParameter="{Binding}" />
+                          <Button Grid.Column="1" Classes="ghost" Content="删除" FontSize="11" Padding="6,1" MinHeight="22"
+                                  Command="{Binding $parent[Window].((local:MainViewModel)DataContext).DeleteLayerCommand}" CommandParameter="{Binding}" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <StackPanel Spacing="6" IsVisible="{Binding HasActiveLayer}">
+                  <ItemsControl ItemsSource="{Binding ActiveLocalSliders}" />
+                  <DockPanel>
+                    <TextBlock Text="范围" Width="84" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                    <ComboBox ItemsSource="{Binding RangeModes}" SelectedIndex="{Binding ActiveRangeMode}" HorizontalAlignment="Stretch" />
+                  </DockPanel>
+                  <ItemsControl ItemsSource="{Binding ActiveRangeSliders}" />
+                  <StackPanel Orientation="Horizontal" Spacing="12">
+                    <CheckBox Content="反相" IsChecked="{Binding ActiveInvert}" />
+                    <CheckBox Content="显示蒙版" IsChecked="{Binding ShowMask}" />
+                  </StackPanel>
+                  <StackPanel Spacing="6" IsVisible="{Binding ActiveIsBrushable}">
+                    <UniformGrid Columns="2" ColumnSpacing="6">
+                      <ToggleButton Classes="tool" Content="涂抹加入" IsChecked="{Binding IsRefineAdd, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RefineAdd"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                      <ToggleButton Classes="tool" Content="涂抹去掉" IsChecked="{Binding IsRefineSubtract, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RefineSubtract"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    </UniformGrid>
+                  </StackPanel>
+                  <Grid ColumnDefinitions="84,*,40" Classes="sliderRow">
+                    <TextBlock Text="画笔大小" FontSize="12" VerticalAlignment="Center" Classes="muted" />
+                    <Slider Grid.Column="1" Minimum="0.005" Maximum="0.15" Value="{Binding LocalBrushRadius}" Margin="4,0" />
+                    <TextBlock Grid.Column="2" Text="{Binding LocalBrushRadius, StringFormat='{}{0:P0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Classes="muted" />
+                  </Grid>
+                </StackPanel>
+                <TextBlock Classes="hint" Text="最多 4 个图层。选中线性或径向图层后，可以直接拖动画面上的控制点。" />
+              </StackPanel>
+            </Expander>
+
+            <Expander Header="曲线">
                 <StackPanel Spacing="8">
                   <DockPanel>
                     <Button DockPanel.Dock="Right" Classes="ghost" Content="重置" FontSize="11" MinHeight="24" Padding="8,2" Command="{Binding ResetCurveCommand}" IsEnabled="{Binding CanEdit}" />
@@ -471,6 +565,7 @@
                  PointerWheelChanged="OnStageWheel" DoubleTapped="OnStageDoubleTapped">
             <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Fill" />
             <local:CropOverlay x:Name="CropLayer" IsVisible="{Binding CropEditing}" />
+              <local:ToolOverlay x:Name="ToolLayer" />
             <Canvas x:Name="CompareLayer" IsVisible="{Binding CompareOn}" IsHitTestVisible="False">
               <Border x:Name="Divider" Width="2" Background="#E6FFFFFF" />
               <Border x:Name="BeforeLabel" Background="#99000000" CornerRadius="4" Padding="6,2">

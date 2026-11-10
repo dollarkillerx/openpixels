@@ -400,6 +400,75 @@ public sealed class ColorWheel : Control
     }
 }
 
+/// <summary>What the retouching and local tools show on the stage. Never takes input itself.</summary>
+public sealed class ToolOverlay : Control
+{
+    private static readonly IPen Outline = new Pen(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)), 1.5);
+    private static readonly IPen Shadow = new Pen(new SolidColorBrush(Color.FromArgb(120, 0, 0, 0)), 3);
+    private static readonly IBrush EraseFill = new SolidColorBrush(Color.FromArgb(110, 255, 90, 60));
+
+    public ToolOverlay()
+    {
+        IsHitTestVisible = false;
+    }
+
+    /// <summary>Shapes in this control's coordinates; set by the window from the view model.</summary>
+    public ToolOverlayState? State { get; set; }
+    /// <summary>Device pixels per unit of this control.</summary>
+    public double Scaling { get; set; } = 1;
+    public Point? Pointer { get; set; }
+
+    public override void Render(DrawingContext context)
+    {
+        if (State is not { } state) return;
+        Point P(Point device) => new(device.X / Scaling, device.Y / Scaling);
+        foreach (var (centre, radius) in state.Dabs) context.DrawEllipse(EraseFill, null, P(centre), radius / Scaling, radius / Scaling);
+        foreach (var (a, b, radial, _) in state.Handles)
+        {
+            var (start, end) = (P(a), P(b));
+            if (radial)
+            {
+                var radius = Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2));
+                context.DrawEllipse(null, Shadow, start, radius, radius);
+                context.DrawEllipse(null, Outline, start, radius, radius);
+                context.DrawEllipse(null, Outline, start, radius * 0.55, radius * 0.55);
+            }
+            else
+            {
+                // Lines across the gradient's start and end, square to its direction.
+                var (dx, dy) = (end.X - start.X, end.Y - start.Y);
+                var length = Math.Max(1, Math.Sqrt(dx * dx + dy * dy));
+                var (nx, ny) = (-dy / length * 2000, dx / length * 2000);
+                foreach (var at in new[] { start, end })
+                {
+                    context.DrawLine(Shadow, new Point(at.X - nx, at.Y - ny), new Point(at.X + nx, at.Y + ny));
+                    context.DrawLine(Outline, new Point(at.X - nx, at.Y - ny), new Point(at.X + nx, at.Y + ny));
+                }
+                context.DrawLine(Outline, start, end);
+            }
+            foreach (var at in new[] { start, end })
+            {
+                context.DrawEllipse(Brushes.White, Shadow, at, 5, 5);
+            }
+        }
+        if (state.StampSource is { } source)
+        {
+            var at = P(source);
+            var radius = Math.Max(3, state.BrushRadius / Scaling);
+            context.DrawEllipse(null, Shadow, at, radius, radius);
+            context.DrawEllipse(null, new Pen(new SolidColorBrush(Color.Parse("#FF7A45")), 1.5), at, radius, radius);
+            context.DrawLine(Outline, new Point(at.X - 4, at.Y), new Point(at.X + 4, at.Y));
+            context.DrawLine(Outline, new Point(at.X, at.Y - 4), new Point(at.X, at.Y + 4));
+        }
+        if (Pointer is { } pointer && state.BrushRadius > 0)
+        {
+            var radius = Math.Max(2, state.BrushRadius / Scaling);
+            context.DrawEllipse(null, Shadow, pointer, radius, radius);
+            context.DrawEllipse(null, Outline, pointer, radius, radius);
+        }
+    }
+}
+
 /// <summary>The crop rectangle over the whole frame, with a handle at each corner.</summary>
 public sealed class CropOverlay : Control
 {

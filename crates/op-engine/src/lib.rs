@@ -782,6 +782,15 @@ impl Engine {
 
     /// Follows a stage position back through framing, liquify and lens correction, the
     /// reverse of how the image reaches the stage.
+    /// The source UV shown at a stage position in 0..=1, through framing, liquify and lens
+    /// correction, as JSON `[u, v]`, or `null` if the position missed the image.
+    pub fn source_at(&self, stage_x: f32, stage_y: f32, stage_width: u32, stage_height: u32) -> String {
+        match self.stage_to_source((stage_width.max(1), stage_height.max(1)), stage_x, stage_y) {
+            Some((u, v)) if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v) => format!("[{u},{v}]"),
+            _ => "null".into(),
+        }
+    }
+
     fn stage_to_source(&self, size: (u32, u32), stage_x: f32, stage_y: f32) -> Option<(f32, f32)> {
         let (u, v) = self.renderer.canvas_to_image(&self.geometry, size, stage_x, stage_y)?;
         let (du, dv) = self.warp.as_ref().map_or((0.0, 0.0), |field| field.offset_at(u, v));

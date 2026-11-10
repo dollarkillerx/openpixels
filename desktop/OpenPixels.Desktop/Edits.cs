@@ -83,7 +83,7 @@ public static partial class Edits
     /// Serialises an edit for the engine, the same way the web edition's engineJson does.
     /// Non-finite values become 0, since the engine rejects null.
     /// </summary>
-    public static string ToEngineJson(IReadOnlyDictionary<string, double> edit, bool cropEditing = false)
+    public static string ToEngineJson(IReadOnlyDictionary<string, double> edit, bool cropEditing = false, int localOverlay = 0)
     {
         JsonArray Numbers(IEnumerable<double> values) => new(values.Select(value => (JsonNode)JsonValue.Create(double.IsFinite(value) ? value : 0)!).ToArray());
         JsonArray Bands(string prefix) => new(Numbers(Enumerable.Range(0, 4).Select(i => Get(edit, $"{prefix}{i}"))), Numbers(Enumerable.Range(4, 4).Select(i => Get(edit, $"{prefix}{i}"))));
@@ -91,6 +91,8 @@ public static partial class Edits
         var json = new JsonObject();
         foreach (var (key, value) in edit) json[key] = double.IsFinite(value) ? value : 0;
         if (cropEditing) json["cropEditing"] = 1;
+        // 1-based layer whose mask is tinted on screen; never part of a saved edit.
+        if (localOverlay > 0) json["localOverlay"] = localOverlay;
         json["quarter"] = (int)Get(edit, "quarter");
         json["hslHue"] = Bands("hslHue");
         json["hslSaturation"] = Bands("hslSat");
@@ -101,8 +103,18 @@ public static partial class Edits
         json["lensManual"] = Numbers([Get(edit, "lensDistortion"), Get(edit, "lensVignette"), Get(edit, "lensCaRed"), Get(edit, "lensCaBlue")]);
         json["perspective"] = Numbers([Get(edit, "perspectiveV"), Get(edit, "perspectiveH")]);
         json["grade"] = new JsonArray(GradeRanges.Select(range => (JsonNode)Numbers([Get(edit, $"grade{range.Key}Hue"), Get(edit, $"grade{range.Key}Amount"), 0, 0])).ToArray());
-        json["localRange"] = new JsonArray(Enumerable.Range(0, 4).Select(_ => (JsonNode)Numbers([0, 1, 0, 0])).ToArray());
-        json["local"] = new JsonArray(Enumerable.Range(0, 4).Select(_ => (JsonNode)Numbers([0, 0, 0, 0])).ToArray());
+        json["localRange"] = new JsonArray(Enumerable.Range(0, 4).Select(layer =>
+        {
+            double Value(string name, double fallback) => Get(edit, $"local{layer}Range{name}", fallback);
+            return (JsonNode)((int)Value("Mode", 0) switch
+            {
+                1 => Numbers([Value("Low", 0), Value("High", 1), 0, 0]),
+                2 => Numbers([0, 1, Value("Hue", 0), Value("Width", 30)]),
+                _ => Numbers([0, 1, 0, 0]),
+            });
+        }).ToArray());
+        json["local"] = new JsonArray(Enumerable.Range(0, 4).Select(layer =>
+            (JsonNode)Numbers(new[] { "Exposure", "Contrast", "Saturation", "Temperature" }.Select(name => Get(edit, $"local{layer}{name}")))).ToArray());
         return json.ToJsonString();
     }
 
@@ -162,6 +174,12 @@ public static partial class Edits
         {
             var name = CurveNames[curve.Groups[1].Value];
             return new(name, name);
+        }
+        if (key.StartsWith("local", StringComparison.Ordinal) && key.Length > 6 && char.IsDigit(key[5]))
+        {
+            var suffix = key[6..];
+            if (LocalMasks.Sliders.FirstOrDefault(slider => slider.Suffix == suffix) is { Label: { } local }) return new($"局部{local}", null, true);
+            if (LocalMasks.RangeSuffixes.Contains(suffix)) return new("局部范围", "局部范围");
         }
         if (GradeKey().Match(key) is { Success: true } grade)
         {

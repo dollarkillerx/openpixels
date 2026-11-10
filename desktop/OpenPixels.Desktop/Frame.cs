@@ -101,6 +101,39 @@ public static class Frame
         return current;
     }
 
+    /// <summary>Source UV shown at output position (s, t). Mirrors Geometry::uv_map in op-core; ignores lens correction.</summary>
+    public static UvPoint OutputToSource(double s, double t, IReadOnlyDictionary<string, double> edit, double width, double height)
+    {
+        var quarter = (int)Get(edit, "quarter", 0);
+        var (frameWidth, frameHeight) = FrameSize(width, height, quarter);
+        var crop = CropOf(edit);
+        var radians = Get(edit, "rotate", 0) * Math.PI / 180;
+        var (sin, cos) = (Math.Sin(radians), Math.Cos(radians));
+        var x = (crop.X + s * crop.W - 0.5) * frameWidth;
+        var y = (crop.Y + t * crop.H - 0.5) * frameHeight;
+        var (ux, uy) = (x * cos + y * sin, -x * sin + y * cos);
+        var (sx, sy) = (((quarter % 4) + 4) % 4) switch
+        {
+            1 => (uy, -ux),
+            2 => (-ux, -uy),
+            3 => (-uy, ux),
+            _ => (ux, uy),
+        };
+        return new(sx / width + 0.5, sy / height + 0.5);
+    }
+
+    /// <summary>Output position (s, t) showing source UV (u, v): the inverse of OutputToSource.</summary>
+    public static UvPoint SourceToOutput(double u, double v, IReadOnlyDictionary<string, double> edit, double width, double height)
+    {
+        var origin = OutputToSource(0, 0, edit, width, height);
+        var endS = OutputToSource(1, 0, edit, width, height);
+        var endT = OutputToSource(0, 1, edit, width, height);
+        var (ax, ay, bx, by) = (endS.X - origin.X, endS.Y - origin.Y, endT.X - origin.X, endT.Y - origin.Y);
+        var determinant = ax * by - ay * bx;
+        var (du, dv) = (u - origin.X, v - origin.Y);
+        return new((du * by - dv * bx) / determinant, (dv * ax - du * ay) / determinant);
+    }
+
     /// <summary>A crop after dragging a handle by a fraction of the frame. ratio locks the shape.</summary>
     public static Crop DragCrop(Crop start, CropHandle handle, double dx, double dy, double? ratio, double frameWidth, double frameHeight)
     {

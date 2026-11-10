@@ -65,11 +65,11 @@ public static class Messages
     public static string? Detail(Exception exception) => Friendly(exception) == exception.Message ? null : exception.Message;
 }
 
-public sealed record HistoryEntry(string Label, Dictionary<string, double> Edit);
+public sealed record HistoryEntry(string Label, Dictionary<string, double> Edit, List<LocalLayer> Locals);
 
 /// <summary>
-/// One photo's edit history. Consecutive changes to the same settings within a moment
-/// merge into one step, so a slider drag is undone in one go.
+/// One photo's edit history, including its local layers' shapes. Consecutive changes to
+/// the same settings within a moment merge into one step, so a slider drag is undone in one go.
 /// </summary>
 public sealed class EditHistory
 {
@@ -78,14 +78,18 @@ public sealed class EditHistory
 
     /// <summary>Keys the last unlabelled step changed; a quick step within them merges into it.</summary>
     private HashSet<string>? _lastKeys;
+    /// <summary>The label of the last step that changed a layer's shape, for merging a drag.</summary>
+    private string? _lastShape;
     private long _lastAt;
 
     private static HashSet<string> KeysOf(IReadOnlyDictionary<string, double> before, IReadOnlyDictionary<string, double> after) =>
         Edits.ChangedKeys(before, after).Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
 
-    public EditHistory(IReadOnlyDictionary<string, double> opened)
+    private static List<LocalLayer> Copy(IEnumerable<LocalLayer> layers) => layers.Select(layer => layer.Copy()).ToList();
+
+    public EditHistory(IReadOnlyDictionary<string, double> opened, IEnumerable<LocalLayer>? locals = null)
     {
-        Entries.Add(new("打开", new(opened)));
+        Entries.Add(new("打开", new(opened), Copy(locals ?? [])));
     }
 
     public List<HistoryEntry> Entries { get; } = [];
@@ -93,18 +97,28 @@ public sealed class EditHistory
     public bool CanUndo => Index > 0;
     public bool CanRedo => Index < Entries.Count - 1;
     public Dictionary<string, double> Current => new(Entries[Index].Edit);
+    public List<LocalLayer> CurrentLocals => Copy(Entries[Index].Locals);
 
-    /// <summary>Records a change. label names an action; without one the change is described from its settings.</summary>
-    public void Record(IReadOnlyDictionary<string, double> before, IReadOnlyDictionary<string, double> after, string? label = null)
+    /// <summary>
+    /// Records a change. label names an action; without one the change is described from its
+    /// settings. shapeChanged says a local layer was added, moved or painted.
+    /// </summary>
+    public void Record(IReadOnlyDictionary<string, double> before, IReadOnlyDictionary<string, double> after, string? label = null,
+        IEnumerable<LocalLayer>? locals = null, bool shapeChanged = false)
     {
         var keys = KeysOf(before, after);
-        if (keys.Count == 0) return;
+        if (keys.Count == 0 && !shapeChanged) return;
+        var layers = Copy(locals ?? Entries[Index].Locals);
         var now = Environment.TickCount64;
-        var merge = label is null && _lastKeys is not null && keys.IsSubsetOf(_lastKeys) && now - _lastAt < MergeMs && Index == Entries.Count - 1 && Index > 0;
-        if (merge)
+        var recent = now - _lastAt < MergeMs && Index == Entries.Count - 1 && Index > 0;
+        if (shapeChanged && recent && label is not null && label == _lastShape)
         {
-            var basis = Entries[Index - 1].Edit;
-            var merged = KeysOf(basis, after);
+            Entries[Index] = new(label, new(after), layers);
+        }
+        else if (!shapeChanged && label is null && _lastKeys is not null && keys.IsSubsetOf(_lastKeys) && recent)
+        {
+            var basis = Entries[Index - 1];
+            var merged = KeysOf(basis.Edit, after);
             if (merged.Count == 0)
             {
                 // Dragged back to where it started: the step disappears.
@@ -112,17 +126,18 @@ public sealed class EditHistory
                 _lastKeys = null;
                 return;
             }
-            Entries[Index] = new(Edits.DescribeChange(basis, after), new(after));
-            _lastKeys!.UnionWith(merged);
+            Entries[Index] = new(Edits.DescribeChange(basis.Edit, after), new(after), layers);
+            _lastKeys.UnionWith(merged);
         }
         else
         {
             Entries.RemoveRange(Index + 1, Entries.Count - Index - 1);
-            Entries.Add(new(label ?? Edits.DescribeChange(before, after), new(after)));
+            Entries.Add(new(label ?? Edits.DescribeChange(before, after), new(after), layers));
             if (Entries.Count > Limit) Entries.RemoveAt(1);
             Index = Entries.Count - 1;
-            _lastKeys = label is null ? keys : null;
+            _lastKeys = label is null && !shapeChanged ? keys : null;
         }
+        _lastShape = shapeChanged ? label : null;
         _lastAt = now;
     }
 
@@ -130,6 +145,7 @@ public sealed class EditHistory
     {
         Index = Math.Clamp(index, 0, Entries.Count - 1);
         _lastKeys = null;
+        _lastShape = null;
         return Current;
     }
 }

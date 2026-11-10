@@ -199,9 +199,12 @@ public sealed partial class MainViewModel
     private async Task<JsonNode> LoadForBackgroundAsync(EngineClient engine, PhotoItem photo, int proxyLongEdge)
     {
         var info = await PhotoLoader.DecodeAsync(engine, photo.Path);
-        await engine.CallAsync("buildProxy", new { maxLongEdge = proxyLongEdge });
+        var proxy = (await engine.CallAsync("buildProxy", new { maxLongEdge = proxyLongEdge })).Json!;
         await PhotoLoader.ApplyLensDatabaseAsync(engine, info);
-        var edit = photo == SelectedPhoto && _imageOpen ? _edit : _store.Load(photo.Id);
+        var open = photo == SelectedPhoto && _imageOpen;
+        var edit = open ? _edit : _store.Load(photo.Id);
+        await ApplyRetouchAsync(engine, photo.Id, open ? _locals : _retouch.Locals(photo.Id), open ? (JsonArray)_heals.DeepClone() : _retouch.Heals(photo.Id),
+            open ? _erases : _retouch.Erases(photo.Id), ((int)proxy["width"]!, (int)proxy["height"]!), main: false);
         await engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(edit));
         await SetLookAsync(engine, (int)edit.GetValueOrDefault("lutId"));
         return info;
@@ -400,7 +403,7 @@ public sealed partial class MainViewModel
         {
             var previous = _store.Load(photo.Id);
             var merged = Edits.Merge(source, previous);
-            if (!_histories.TryGetValue(photo.Id, out var history)) _histories[photo.Id] = history = new EditHistory(previous);
+            if (!_histories.TryGetValue(photo.Id, out var history)) _histories[photo.Id] = history = new EditHistory(previous, _retouch.Locals(photo.Id));
             history.Record(history.Current, merged, label);
             _store.Save(photo.Id, merged);
             photo.ThumbnailStale = true;

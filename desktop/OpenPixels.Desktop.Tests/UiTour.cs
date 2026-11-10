@@ -148,6 +148,61 @@ public sealed class UiTour
         await Shot(window, "16-projects");
         ShowTab(window, 0);
 
+        // Batch 3: AI masks, local adjustments and retouching on real photos.
+        model.SelectedPhoto = model.Photos[1];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        Expand(window, "局部调整");
+        await model.AddAiLayerCommand.ExecuteAsync("Subject");
+        model.ShowMask = true;
+        await Task.Delay(800);
+        await Shot(window, "19-subject-mask");
+        model.ShowMask = false;
+        model.Slider("local0Exposure").Value = 0.6;
+        await model.AddAiLayerCommand.ExecuteAsync("Background");
+        model.Slider("local1Exposure").Value = -0.8;
+        model.Slider("local1Saturation").Value = -0.6;
+        await Task.Delay(800);
+        await Shot(window, "20-subject-background");
+        File.WriteAllText(Path.Combine(Folder, "ai.txt"), model.RetouchStatus);
+
+        model.SelectedPhoto = model.Photos[0];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        model.ResetCommand.Execute(null);
+        await model.AddAiLayerCommand.ExecuteAsync("Sky");
+        model.Slider("local0Exposure").Value = -0.7;
+        model.Slider("local0Temperature").Value = -0.6;
+        model.ShowMask = true;
+        await Task.Delay(800);
+        await Shot(window, "21-sky-mask");
+        model.ShowMask = false;
+        model.ChooseToolCommand.Execute("Radial");
+        var centre = model.StageOf(new UvPoint(0.62, 0.45));
+        var edge = model.StageOf(new UvPoint(0.85, 0.45));
+        await model.ToolPressAsync(centre.X, centre.Y, false);
+        await model.ToolMoveAsync(edge.X, edge.Y);
+        model.ToolRelease();
+        model.Slider("local1Exposure").Value = 0.8;
+        await Task.Delay(800);
+        await Shot(window, "22-sky-and-radial");
+
+        model.SelectedPhoto = model.Photos[3 % model.Photos.Count];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        Expand(window, "修复");
+        model.ChooseToolCommand.Execute("Erase");
+        model.HealRadius = 0.02;
+        // The necklace pendant area, painted across.
+        var start = model.StageOf(new UvPoint(0.44, 0.86));
+        var end = model.StageOf(new UvPoint(0.56, 0.86));
+        await model.ToolPressAsync(start.X, start.Y, false);
+        await model.ToolMoveAsync(end.X, end.Y);
+        model.ToolRelease();
+        await Shot(window, "23-erase-marks");
+        await model.RunEraseCommand.ExecuteAsync(null);
+        await Task.Delay(800);
+        await Shot(window, "24-erased");
+        File.AppendAllText(Path.Combine(Folder, "ai.txt"), "\n" + model.RetouchStatus);
+        model.Tool = RetouchTool.None;
+
         var export = new ExportWindow(model.Output, 2, model.Photos.Count);
         export.Show();
         await Shot(export, "17-export-dialog");
