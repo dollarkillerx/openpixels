@@ -1,3 +1,4 @@
+import { freeName } from "./names";
 import { createZip } from "./zip";
 
 /** Where a batch export writes its files. */
@@ -25,12 +26,23 @@ export async function chooseBatchTarget(): Promise<BatchTarget | null> {
     if (error instanceof DOMException && error.name === "AbortError") return null;
     throw error;
   }
+  // Never overwrite: the folder may hold the originals or an earlier export. Names are
+  // compared without case, as macOS and Windows do.
+  const taken = new Set<string>();
+  for await (const existing of (folder as unknown as { keys(): AsyncIterable<string> }).keys()) taken.add(existing.toLowerCase());
   return {
     async write(name, bytes) {
-      const file = await folder.getFileHandle(name, { create: true });
+      const free = freeName(name, taken);
+      taken.add(free.toLowerCase());
+      const file = await folder.getFileHandle(free, { create: true });
       const stream = await file.createWritable();
-      await stream.write(bytes);
-      await stream.close();
+      try {
+        await stream.write(bytes);
+        await stream.close();
+      } catch (error) {
+        await stream.abort().catch(() => {});
+        throw error;
+      }
     },
     finish: async () => null,
   };

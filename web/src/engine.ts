@@ -79,13 +79,22 @@ export class EngineClient {
       if (data.error !== undefined) request?.reject(new Error(data.error));
       else request?.resolve(data.result);
     };
-    this.worker.onerror = (event) => this.onCrash(event.message);
+    this.worker.onerror = (event) => {
+      // Nothing more will come back for these.
+      for (const request of this.pending.values()) request.reject(new Error(event.message));
+      this.pending.clear();
+      this.onCrash(event.message);
+    };
 
     this.aiWorker.onmessage = ({ data }: MessageEvent<SegmentReply>) => {
       this.pendingSegments.get(data.id)?.(data);
       this.pendingSegments.delete(data.id);
     };
-    this.aiWorker.onerror = (event) => this.onCrash(event.message);
+    this.aiWorker.onerror = (event) => {
+      for (const [id, settle] of this.pendingSegments) settle({ id, error: event.message });
+      this.pendingSegments.clear();
+      this.onCrash(event.message);
+    };
 
     this.ready = this.call<void>({ type: "init", canvas }, [canvas]);
   }
@@ -109,14 +118,25 @@ export class EngineClient {
   }
 
   /** Fills the marked part of a rectangle, given as fractions of the image. Resolves to interleaved sRGB bytes. */
-  async inpaint(crop: EraseCrop, mask: Float32Array<ArrayBuffer>) {
+  inpaint(crop: EraseCrop, mask: Float32Array<ArrayBuffer>) {
+    // The inpaint worker answers one request at a time.
+    const result = this.inpaintQueue.then(() => this.inpaintNow(crop, mask));
+    this.inpaintQueue = result.catch(() => {});
+    return result;
+  }
+
+  private inpaintQueue: Promise<unknown> = Promise.resolve();
+
+  private async inpaintNow(crop: EraseCrop, mask: Float32Array<ArrayBuffer>) {
     const input = await this.call<ModelInput>({ type: "inpaintInput", ...crop, size: INPAINT_MODEL.size });
     window.clearTimeout(this.inpaintIdleTimer);
     this.inpaintWorker ??= new Worker(new URL("./inpaint-worker.ts", import.meta.url), { type: "module" });
     const worker = this.inpaintWorker;
     const id = this.nextId++;
     const reply = await new Promise<InpaintReply>((resolve, reject) => {
-      worker.onmessage = ({ data }: MessageEvent<InpaintReply>) => resolve(data);
+      worker.onmessage = ({ data }: MessageEvent<InpaintReply>) => {
+        if (data.id === id) resolve(data);
+      };
       worker.onerror = (event) => reject(new Error(event.message));
       const request: InpaintRequest = { id, image: input.tensor, mask: mask.buffer };
       worker.postMessage(request, [input.tensor, mask.buffer]);

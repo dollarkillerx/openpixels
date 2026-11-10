@@ -215,6 +215,10 @@ fn apply_dng_warp(profile: &mut LensProfile, parameters: &[u8]) -> Option<()> {
         Some([at(0)? as f32, at(1)? as f32, at(2)? as f32, at(3)? as f32])
     };
     let reference = radial(if planes == 3 { 1 } else { 0 })?;
+    // A zero or broken first term would divide everything into infinities.
+    if !reference.iter().all(|k| k.is_finite()) || reference[0].abs() < 1e-6 {
+        return None;
+    }
     let normal = |k: f32| k / reference[0];
     profile.distortion = [normal(reference[1]), normal(reference[2]), normal(reference[3]), 0.0];
     if planes == 3 {
@@ -302,6 +306,9 @@ pub(crate) fn solve<const N: usize>(mut a: [[f64; N]; N], mut b: [f64; N]) -> Op
 /// Fits a shape relative to its value at the centre, since `LensMap` sets the scale.
 fn fit_relative(samples: &[(f32, f32)]) -> [f32; 4] {
     let centre = samples[0].1;
+    if !centre.is_finite() || centre.abs() < 1e-6 {
+        return [0.0; 4];
+    }
     let relative: Vec<(f32, f32)> = samples.iter().map(|&(x, y)| (x, y / centre - 1.0)).collect();
     fit_polynomial(&relative, 1)
 }

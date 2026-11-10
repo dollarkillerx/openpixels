@@ -15,6 +15,8 @@ const LAST_PROJECT_KEY = "openpixels.lastProject.v1";
 
 /** Editing aids that belong to the session, never to a saved edit. */
 const SESSION_ONLY = new Set(["maskOverlay", "cropEditing", "localOverlay"]);
+/** Settings whose untouched value is not 0, so a 0 must be stored. */
+const ZERO_IS_A_CHOICE = new Set(["backgroundAmount", "skyAmount"]);
 
 export type Presets = Record<string, Adjustments>;
 
@@ -56,6 +58,8 @@ export const saveProof = (settings: ProofSettings) => write(PROOF_KEY, settings)
 export function engineJson(adjustments: Adjustments): string {
   const bands = (prefix: string) =>
     [0, 4].map((start) => [0, 1, 2, 3].map((i) => adjustments[`${prefix}${start + i}`] ?? 0));
+  // The engine rejects null, which is what NaN and Infinity become in JSON.
+  const finite = (_key: string, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? 0 : value);
   return JSON.stringify({
     ...adjustments,
     hslHue: bands("hslHue"),
@@ -88,7 +92,7 @@ export function engineJson(adjustments: Adjustments): string {
     local: [0, 1, 2, 3].map((layer) =>
       ["Exposure", "Contrast", "Saturation", "Temperature"].map((name) => adjustments[`local${layer}${name}`] ?? 0),
     ),
-  });
+  }, finite);
 }
 
 /** The project to offer on the next visit. */
@@ -101,7 +105,9 @@ export const fileId = (file: File) => `${file.name}|${file.size}|${file.lastModi
 /** Drops session-only fields and sliders left at their neutral value. */
 export function persistable(adjustments: Adjustments): Adjustments {
   return Object.fromEntries(
-    Object.entries(adjustments).filter(([key, value]) => !SESSION_ONLY.has(key) && value !== 0),
+    Object.entries(adjustments).filter(
+      ([key, value]) => !SESSION_ONLY.has(key) && Number.isFinite(value) && (value !== 0 || ZERO_IS_A_CHOICE.has(key)),
+    ),
   );
 }
 

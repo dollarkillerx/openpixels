@@ -14,8 +14,12 @@ export interface Watermark {
   position: WatermarkPosition;
 }
 
+/** Colour spaces an export can be delivered in. */
+export type OutputColorSpace = "srgb" | "p3" | "adobe" | "prophoto";
+
 export interface OutputSettings {
   format: OutputFormat;
+  colorSpace: OutputColorSpace;
   quality: number;
   /** Bits per channel for PNG and TIFF; JPEG is always 8. */
   bitDepth: 8 | 16;
@@ -27,6 +31,7 @@ export interface OutputSettings {
 
 export const DEFAULT_OUTPUT: OutputSettings = {
   format: "jpeg",
+  colorSpace: "srgb",
   quality: 92,
   bitDepth: 8,
   longEdge: 0,

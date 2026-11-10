@@ -4,7 +4,7 @@
 use op_core::{
     Adjustments, AutoTone, DevelopJob, ErasePatch, LensfunCalibration, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
     OutputFormat, Sample, ToneStats, auto_exposure, auto_finish, trim_exposure, composite_overlay, post_crop_vignette, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
-    neutral_white_balance, resize_rgb, IccProfile, Intent, ProofOptions, proof_lut,
+    neutral_white_balance, resize_rgb, IccProfile, Intent, OutputSpace, ProofOptions, apply_proof_lut, mark_uncalibrated, proof_lut,
 };
 use op_gpu::{Renderer, ViewTransform, encode_jpeg};
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,8 @@ struct OutputSettings {
     long_edge: u32,
     #[serde(default)]
     bit_depth: u32,
+    #[serde(default)]
+    color_space: OutputSpace,
 }
 
 /// A watermark raster and where it goes on the finished image.
@@ -98,6 +100,8 @@ pub struct Engine {
     /// The full image with heals and erases applied, kept while viewing up close.
     full_view: Option<LinearImage>,
     healed_proxy: Option<LinearImage>,
+    /// The soft proof table, so the histogram can show the proof too.
+    proof: Option<Vec<f32>>,
     warp: Option<WarpField>,
     curve: ToneCurve,
     source_exif: Option<Vec<u8>>,
@@ -174,6 +178,7 @@ impl Engine {
             healed_proxy: None,
             warp: None,
             curve: ToneCurve::default(),
+            proof: None,
             source_exif: None,
             job: None,
             job_tiles: Vec::new(),
@@ -298,15 +303,18 @@ impl Engine {
     }
 
     pub fn set_adjustments(&mut self, json: &str) -> Result<(), JsError> {
-        self.adjustments = serde_json::from_str(json).map_err(js_error)?;
+        // Everything is read before anything changes, so a bad edit leaves the last good one.
+        let mut adjustments: Adjustments = serde_json::from_str(json).map_err(js_error)?;
         let curve: ToneCurve = serde_json::from_str(json).map_err(js_error)?;
+        let geometry: Geometry = serde_json::from_str(json).map_err(js_error)?;
+        let flags: ViewFlags = serde_json::from_str(json).map_err(js_error)?;
         if curve != self.curve {
             self.renderer.set_curve(&curve);
             self.curve = curve;
         }
-        self.adjustments.curve_active = f32::from(u8::from(!self.curve.is_identity()));
-        self.geometry = serde_json::from_str(json).map_err(js_error)?;
-        let flags: ViewFlags = serde_json::from_str(json).map_err(js_error)?;
+        adjustments.curve_active = f32::from(u8::from(!self.curve.is_identity()));
+        self.adjustments = adjustments;
+        self.geometry = geometry;
         self.crop_editing = flags.crop_editing != 0.0;
         Ok(())
     }
@@ -395,11 +403,22 @@ impl Engine {
         let intent = if perceptual { Intent::Perceptual } else { Intent::Relative };
         let lut = proof_lut(&profile, ProofOptions { intent, simulate_paper }, PROOF_LUT_SIZE);
         self.renderer.set_proof(Some((PROOF_LUT_SIZE, &lut)), gamut_warning);
+        self.proof = Some(lut);
         describe(&profile)
     }
 
     pub fn clear_proof(&mut self) {
         self.renderer.set_proof(None, false);
+        self.proof = None;
+    }
+
+    /// The framed photo as RGB8 for the histogram, through the soft proof when one is on.
+    pub async fn histogram_thumbnail(&mut self, max_long_edge: u32) -> Result<Vec<u8>, JsError> {
+        let mut rgb = self.framed_thumbnail(max_long_edge).await?;
+        if let Some(lut) = &self.proof {
+            apply_proof_lut(lut, PROOF_LUT_SIZE, &mut rgb);
+        }
+        Ok(rgb)
     }
 
     /// Sets the local adjustment masks, one layer per RGBA channel, covering the image.
@@ -450,7 +469,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn push_erase(&mut self, x: f32, y: f32, width: f32, height: f32, size: u32, rgb: Vec<u8>, alpha: Vec<u8>) -> Result<(), JsError> {
         let pixels = size as usize * size as usize;
-        if rgb.len() != pixels * 3 || alpha.len() != pixels {
+        if size == 0 || rgb.len() != pixels * 3 || alpha.len() != pixels {
             return Err(JsError::new("erase patch has the wrong size"));
         }
         self.erases.push(ErasePatch { x, y, width, height, size, rgb, alpha });
@@ -710,20 +729,41 @@ impl Engine {
         let (image_width, image_height) = (image.width, image.height);
         let overlay = Overlay { rgba: &overlay, x: overlay_x, y: overlay_y, width: overlay_width, height: overlay_height };
 
-        if settings.bit_depth == 16 && settings.format != OutputFormat::Jpeg {
+        let space = settings.color_space;
+        let wide = settings.bit_depth == 16 && settings.format != OutputFormat::Jpeg;
+        let icc = space.icc_profile();
+        let mut exif = self.source_exif.clone();
+        if space != OutputSpace::Srgb
+            && let Some(exif) = &mut exif
+        {
+            mark_uncalibrated(exif);
+        }
+        let exif = exif.as_deref();
+
+        if wide || space != OutputSpace::Srgb {
+            // Another colour space is converted from 16 bits, so 8-bit files are rounded once.
             let rgb = self.renderer.export_rgb16(image, &self.adjustments, EXPORT_TILE_SIZE).await.map_err(js_error)?;
             // The source is no longer needed, and the steps below each allocate a copy.
             drop(developed);
             let (finished, width, height) = self.finish(rgb, image_width, image_height, settings.long_edge, &overlay);
-            return self.encode_lossless(settings.format, &finished, width, height);
+            if wide {
+                let converted: Vec<u16> = if space == OutputSpace::Srgb { finished } else { space.convert_from_srgb(&finished) };
+                return encode_lossless(settings.format, &converted, width, height, &icc, exif);
+            }
+            let converted: Vec<u8> = space.convert_from_srgb(&finished);
+            drop(finished);
+            return match settings.format {
+                OutputFormat::Jpeg => encode_jpeg(&converted, width, height, settings.quality.clamp(1, 100), &icc, exif.map(<[u8]>::to_vec)).map_err(js_error),
+                format => encode_lossless(format, &converted, width, height, &icc, exif),
+            };
         }
 
         let rgb = self.renderer.export_rgb8(image, &self.adjustments, EXPORT_TILE_SIZE).await.map_err(js_error)?;
         drop(developed);
         let (finished, width, height) = self.finish(rgb, image_width, image_height, settings.long_edge, &overlay);
         match settings.format {
-            OutputFormat::Jpeg => encode_jpeg(&finished, width, height, settings.quality.clamp(1, 100), self.source_exif.clone()).map_err(js_error),
-            format => self.encode_lossless(format, &finished, width, height),
+            OutputFormat::Jpeg => encode_jpeg(&finished, width, height, settings.quality.clamp(1, 100), &icc, exif.map(<[u8]>::to_vec)).map_err(js_error),
+            format => encode_lossless(format, &finished, width, height, &icc, exif),
         }
     }
 }
@@ -819,13 +859,22 @@ impl Engine {
     /// Applies, in the order the blit undoes them, the lens correction, liquify and
     /// framing, then the delivery size and the watermark.
     fn finish<S: Sample>(&self, rgb: Vec<S>, width: u32, height: u32, long_edge: u32, overlay: &Overlay) -> (Vec<S>, u32, u32) {
+        // Each stage drops its input, so a large export holds two copies at most.
         let lens = self.renderer.lens_map(&self.adjustments, width, height);
-        let corrected = if lens.is_identity() { rgb } else { lens.apply_rgb(&rgb, width, height) };
+        let corrected = if lens.is_identity() {
+            rgb
+        } else {
+            let corrected = lens.apply_rgb(&rgb, width, height);
+            drop(rgb);
+            corrected
+        };
         let warped = self.warped(corrected, width, height);
         let (framed, frame_width, frame_height) = if self.geometry == Geometry::default() {
             (warped, width, height)
         } else {
-            self.geometry.apply_rgb(&warped, width, height)
+            let framed = self.geometry.apply_rgb(&warped, width, height);
+            drop(warped);
+            framed
         };
         let (out_width, out_height) = fit_long_edge(frame_width, frame_height, long_edge);
         let mut finished = resize_rgb(framed, frame_width, frame_height, out_width, out_height);
@@ -834,13 +883,6 @@ impl Engine {
         (finished, out_width, out_height)
     }
 
-    fn encode_lossless<S: Sample>(&self, format: OutputFormat, rgb: &[S], width: u32, height: u32) -> Result<Vec<u8>, JsError> {
-        let exif = self.source_exif.as_deref();
-        match format {
-            OutputFormat::Png => encode_png(rgb, width, height, exif).map_err(js_error),
-            _ => Ok(encode_tiff(rgb, width, height, exif)),
-        }
-    }
 
     fn refresh_healed_preview(&mut self) {
         let Some(proxy) = &self.proxy else { return };
@@ -909,4 +951,11 @@ fn describe(profile: &IccProfile) -> Result<String, JsError> {
 #[wasm_bindgen]
 pub fn describe_profile(icc: &[u8]) -> Result<String, JsError> {
     describe(&IccProfile::parse(icc).map_err(js_error)?)
+}
+
+fn encode_lossless<S: Sample>(format: OutputFormat, rgb: &[S], width: u32, height: u32, icc: &[u8], exif: Option<&[u8]>) -> Result<Vec<u8>, JsError> {
+    match format {
+        OutputFormat::Png => encode_png(rgb, width, height, icc, exif).map_err(js_error),
+        _ => Ok(encode_tiff(rgb, width, height, icc, exif)),
+    }
 }

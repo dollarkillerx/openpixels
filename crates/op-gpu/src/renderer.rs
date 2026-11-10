@@ -385,12 +385,25 @@ impl Renderer {
     }
 
     /// Replaces the proxy's pixels, keeping its mask and corrections. `proxy` must have
-    /// the same size as the one given to [`Self::set_preview`].
-    pub fn update_preview_pixels(&self, proxy: &LinearImage) {
-        if let Some(preview) = &self.preview {
-            let (width, height) = (proxy.width, proxy.height);
-            self.upload_source(&preview.source, &proxy.rgba_region(0, 0, width, height), width, height);
-        }
+    /// the same size as the one given to [`Self::set_preview`]. The surround maps are
+    /// remade too, so clarity and texture do not bring back what a heal removed.
+    pub fn update_preview_pixels(&mut self, proxy: &LinearImage) {
+        let Some(preview) = &self.preview else { return };
+        let (width, height) = (proxy.width, proxy.height);
+        self.upload_source(&preview.source, &proxy.rgba_region(0, 0, width, height), width, height);
+        self.build_surround_maps(proxy);
+        self.rebuild_preview_bindings();
+    }
+
+    fn build_surround_maps(&mut self, proxy: &LinearImage) {
+        let (luma_width, luma_height, luma) = proxy.blurred_luma(BLURRED_LUMA_LONG_EDGE);
+        self.blurred_luma_view = create_luma_view(&self.device, &self.queue, luma_width, luma_height, &luma);
+        let detail_long_edge = (proxy.width.max(proxy.height) / DETAIL_LUMA_REDUCTION).clamp(1, DETAIL_LUMA_LONG_EDGE);
+        let (detail_width, detail_height, detail) = proxy.blurred_luma(detail_long_edge);
+        self.detail_luma_view = create_luma_view(&self.device, &self.queue, detail_width, detail_height, &detail);
+        let (haze_width, haze_height, haze, airlight) = proxy.haze_map(HAZE_LONG_EDGE);
+        self.haze_view = create_luma_view(&self.device, &self.queue, haze_width, haze_height, &haze);
+        self.airlight = airlight;
     }
 
     /// Converts a position on the canvas, in 0..=1, to the position within the image
@@ -585,14 +598,7 @@ impl Renderer {
         self.skin_smooth_view = create_correction_view(&self.device, &self.queue, 1, 1, &[0; 4]);
         self.skin_blemish_view = create_correction_view(&self.device, &self.queue, 1, 1, &[0; 4]);
         self.local_mask_view = create_local_mask_view(&self.device, &self.queue, 1, 1, &[0; 4]);
-        let (luma_width, luma_height, luma) = proxy.blurred_luma(BLURRED_LUMA_LONG_EDGE);
-        self.blurred_luma_view = create_luma_view(&self.device, &self.queue, luma_width, luma_height, &luma);
-        let detail_long_edge = (proxy.width.max(proxy.height) / DETAIL_LUMA_REDUCTION).clamp(1, DETAIL_LUMA_LONG_EDGE);
-        let (detail_width, detail_height, detail) = proxy.blurred_luma(detail_long_edge);
-        self.detail_luma_view = create_luma_view(&self.device, &self.queue, detail_width, detail_height, &detail);
-        let (haze_width, haze_height, haze, airlight) = proxy.haze_map(HAZE_LONG_EDGE);
-        self.haze_view = create_luma_view(&self.device, &self.queue, haze_width, haze_height, &haze);
-        self.airlight = airlight;
+        self.build_surround_maps(proxy);
         let (width, height) = (proxy.width, proxy.height);
         let source = self.create_source_texture(width, height);
         self.upload_source(&source, &proxy.rgba_region(0, 0, width, height), width, height);
@@ -1174,14 +1180,15 @@ fn develop_pass(device: &wgpu::Device, format: wgpu::TextureFormat, shader: &str
     DevelopPass { layout, pipeline }
 }
 
-/// Encodes tightly packed RGB8 as a baseline JPEG. `quality` is 1..=100.
-pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8, exif: Option<Vec<u8>>) -> Result<Vec<u8>, GpuError> {
+/// Encodes tightly packed RGB8 as a baseline JPEG. `quality` is 1..=100; `icc` is the
+/// colour profile the samples are in.
+pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8, icc: &[u8], exif: Option<Vec<u8>>) -> Result<Vec<u8>, GpuError> {
     let mut out = Vec::new();
     let mut encoder = jpeg_encoder::Encoder::new(&mut out, quality);
     if let Some(exif) = exif {
         encoder.add_app_segment(1, exif)?;
     }
-    encoder.add_icc_profile(&op_core::srgb_icc_profile())?;
+    encoder.add_icc_profile(icc)?;
     encoder.encode(
         rgb,
         width as u16,
@@ -1886,6 +1893,42 @@ mod tests {
     }
 
     #[test]
+    fn blacks_lift_pure_black_and_stay_continuous_with_the_next_level() {
+        let renderer = renderer();
+        let bits = |v: f32| f16::from_f32(v).to_bits();
+        let mut pixels = Vec::new();
+        for _ in 0..8 {
+            for x in 0..16 {
+                pixels.extend([bits(if x < 8 { 0.0 } else { 0.0003 }); 3]);
+            }
+        }
+        let image = LinearImage::new(16, 8, pixels);
+        let out = export(&renderer, &image, &Adjustments { blacks: 1.0, ..Default::default() }, 64);
+        let (black, next) = (out[(4 * 16 + 2) * 3], out[(4 * 16 + 12) * 3]);
+        assert!(black > 10, "pure black is lifted: {black}");
+        // Before, pure black stayed at 0 while this level rose to about 31.
+        assert!(next >= black && next - black <= 6, "and lands just below the level above it: {black} vs {next}");
+    }
+
+    #[test]
+    fn clarity_does_not_darken_highlights_brighter_than_white() {
+        let renderer = renderer();
+        let bits = |v: f32| f16::from_f32(v).to_bits();
+        let mut pixels = Vec::new();
+        for _ in 0..32 {
+            for x in 0..32 {
+                pixels.extend([bits(if (12..20).contains(&x) { 1.0 } else { 0.1 }); 3]);
+            }
+        }
+        let image = LinearImage::new(32, 32, pixels);
+        let mut renderer = renderer;
+        renderer.set_preview(&image);
+        let adj = Adjustments { exposure: 1.0, clarity: 1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        assert_eq!(out[(16 * 32 + 16) * 3], 255, "a highlight pushed past white stays white");
+    }
+
+    #[test]
     fn whites_lift_bright_tones_most_and_keep_their_order() {
         const VALUES: [f32; 6] = [0.02, 0.2, 0.4, 0.6, 0.75, 0.85];
         const COLUMN: u32 = 8;
@@ -2210,7 +2253,7 @@ mod tests {
 
     #[test]
     fn jpeg_output_has_a_valid_header() {
-        let jpeg = encode_jpeg(&[128; 3 * 16 * 16], 16, 16, 90, None).unwrap();
+        let jpeg = encode_jpeg(&[128; 3 * 16 * 16], 16, 16, 90, &op_core::srgb_icc_profile(), None).unwrap();
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
     }
 }

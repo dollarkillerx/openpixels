@@ -53,8 +53,16 @@ test("looks with a warming gain keep their brightest tones apart", () => {
   const luma = ([r, g, b]: number[]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
   for (const look of BUILT_IN_LOOKS) {
     for (const tint of [[1, 0.8, 0.6], [1, 1, 1]]) {
-      const levels = [0.9, 0.95, 0.98, 1].map((value) => luma(look.grade(value * tint[0], value * tint[1], value * tint[2])));
+      // Clamped as the generated table is, so a channel that clips shows up here.
+      const levels = [0.9, 0.95, 0.98, 1].map((value) => luma(look.grade(value * tint[0], value * tint[1], value * tint[2]).map((c) => Math.min(Math.max(c, 0), 1))));
       assert.ok(levels.every((value, i) => i === 0 || value > levels[i - 1]), `${look.name} ${tint}: ${levels}`);
     }
   }
+});
+
+test("batch names never reuse a file already in the folder", async () => {
+  const { freeName } = await import("../src/names.ts");
+  const taken = new Set(["dsc_0001.jpg", "dsc_0001 (2).jpg"]);
+  assert.equal(freeName("DSC_0001.JPG", taken), "DSC_0001 (3).JPG");
+  assert.equal(freeName("other.jpg", taken), "other.jpg");
 });

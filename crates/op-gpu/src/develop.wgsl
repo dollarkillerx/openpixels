@@ -141,11 +141,15 @@ fn look_curve(x: f32) -> f32 {
     return toe / (toe + LOOK_KNEE);
 }
 
-fn apply_lens_light(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+fn lens_light_gain(pixel: vec2<f32>) -> f32 {
     let position = ((pixel + 0.5) / region.full_size - 0.5) * 2.0 * region.lens_aspect;
     let r2 = dot(position, position);
     let v = region.lens_vignette;
-    return rgb * max(1.0 + r2 * (v.x + r2 * (v.y + r2 * (v.z + r2 * v.w))), 0.0);
+    return max(1.0 + r2 * (v.x + r2 * (v.y + r2 * (v.z + r2 * v.w))), 0.0);
+}
+
+fn apply_lens_light(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    return rgb * lens_light_gain(pixel);
 }
 
 fn apply_camera_matrix(rgb: vec3<f32>) -> vec3<f32> {
@@ -199,11 +203,16 @@ fn shape_tone(input: f32) -> f32 {
     return MID_GRAY_TONE * pow(centered, slope);
 }
 
+// The most a tone edit multiplies a pixel by. Beyond it the rest is added as grey, so
+// Blacks and Shadows can lift pure black without multiplying sensor noise without limit.
+const MAX_TONE_GAIN = 16.0;
+
 fn apply_tone(rgb: vec3<f32>) -> vec3<f32> {
-    let luma = max(dot(rgb, LUMA), 1e-5);
-    let shaped = max(shape_tone(pow(luma, 1.0 / TONE_GAMMA)), 0.0);
+    let luma = dot(rgb, LUMA);
+    let wanted = pow(max(shape_tone(pow(max(luma, 1e-5), 1.0 / TONE_GAMMA)), 0.0), TONE_GAMMA);
     // Scale RGB together so hue survives tone edits.
-    return rgb * pow(shaped, TONE_GAMMA) / luma;
+    let ratio = min(wanted / max(luma, 1e-5), MAX_TONE_GAIN);
+    return rgb * ratio + vec3<f32>(max(wanted - max(luma, 0.0) * ratio, 0.0));
 }
 
 fn apply_color(rgb: vec3<f32>) -> vec3<f32> {
@@ -251,6 +260,12 @@ fn apply_sharpen(rgb: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
     if adj.sharpen_masking > 0.0 {
         strength *= smoothstep(adj.sharpen_masking * 0.015, adj.sharpen_masking * 0.1, abs(tone - finest));
     }
+    // The neighbours are read before noise reduction, so differences the size of the
+    // noise it removed are left alone rather than sharpened back in.
+    if adj.denoise_luma > 0.0 {
+        let noise = adj.denoise_luma * 0.06;
+        strength *= smoothstep(noise, noise * 2.5, abs(tone - finest));
+    }
     let sharpened = max(tone + (tone - around) * strength, 0.0);
     return rgb * pow(sharpened / tone, TONE_GAMMA);
 }
@@ -264,7 +279,8 @@ fn apply_clarity(rgb: vec3<f32>, uv: vec2<f32>, scene_gain: f32) -> vec3<f32> {
     let surround = max(textureSampleLevel(blurred_luma, mask_sampler, uv, 0.0).r, 0.0) * scene_gain;
     let tone = pow(luma, 1.0 / TONE_GAMMA);
     let around = pow(max(apply_base_look(vec3<f32>(surround)).g, 1e-5), 1.0 / TONE_GAMMA);
-    let midtones = 1.0 - pow(abs(tone * 2.0 - 1.0), 2.0);
+    // Tones above white get no clarity; the weight would otherwise turn negative.
+    let midtones = max(1.0 - pow(abs(min(tone, 1.0) * 2.0 - 1.0), 2.0), 0.0);
     let shaped = max(tone + (tone - around) * adj.clarity * midtones, 0.0);
     return rgb * pow(shaped / tone, TONE_GAMMA);
 }
@@ -619,9 +635,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background + local_values.x);
     rgb *= scene_gain;
     rgb = apply_base_look(rgb);
-    rgb = apply_dehaze(rgb, uv, scene_gain);
-    rgb = apply_clarity(rgb, uv, scene_gain);
-    rgb = apply_texture(rgb, uv, scene_gain);
+    // The surround maps are made from the uncorrected proxy, so they get the lens light
+    // correction here to stay comparable with the pixel.
+    let surround_gain = scene_gain * lens_light_gain(pixel);
+    rgb = apply_dehaze(rgb, uv, surround_gain);
+    rgb = apply_clarity(rgb, uv, surround_gain);
+    rgb = apply_texture(rgb, uv, surround_gain);
     rgb = apply_tone(rgb);
     rgb = apply_curve(rgb);
     rgb = apply_grading(rgb);
@@ -634,7 +653,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let tint = vec3<f32>(0.95, 0.2, 0.35);
     var display = mix(apply_grain(apply_look(linear_to_srgb(rgb)), pixel), tint, adj.mask_overlay * background * 0.65);
     if adj.local_overlay > 0.0 {
-        let layer = u32(adj.local_overlay) - 1u;
+        let layer = min(u32(max(adj.local_overlay, 1.0)) - 1u, 3u);
         display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);
     }
     textureStore(target_image, id.xy, vec4<f32>(display, 1.0));

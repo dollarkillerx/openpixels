@@ -20,7 +20,23 @@ function header(size: number, write: (view: DataView) => void): Uint8Array<Array
   return bytes;
 }
 
-export function createZip(files: { name: string; bytes: Uint8Array<ArrayBuffer> }[]): Blob {
+/** Without the ZIP64 extension, the format stops at 4 GB and 65535 files. */
+const MAX_ZIP_BYTES = 0xffffffff;
+const MAX_ZIP_FILES = 0xffff;
+
+/** MS-DOS time and date, as ZIP stores them. */
+function dosStamp(date: Date): [number, number] {
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return [time, day];
+}
+
+export function createZip(files: { name: string; bytes: Uint8Array<ArrayBuffer> }[], now = new Date()): Blob {
+  const total = files.reduce((sum, file) => sum + file.bytes.length + 100 + file.name.length * 6, 0);
+  if (files.length > MAX_ZIP_FILES || total > MAX_ZIP_BYTES) {
+    throw new Error("超过 ZIP 的上限（4 GB 或 65535 个文件），请分批导出，或用支持写入文件夹的浏览器");
+  }
+  const [time, day] = dosStamp(now);
   const parts: Uint8Array<ArrayBuffer>[] = [];
   const directory: Uint8Array<ArrayBuffer>[] = [];
   let offset = 0;
@@ -33,6 +49,8 @@ export function createZip(files: { name: string; bytes: Uint8Array<ArrayBuffer> 
       view.setUint32(0, 0x04034b50, true);
       view.setUint16(4, 20, true);
       view.setUint16(6, UTF8_FLAG, true);
+      view.setUint16(10, time, true);
+      view.setUint16(12, day, true);
       view.setUint32(14, crc, true);
       view.setUint32(18, bytes.length, true);
       view.setUint32(22, bytes.length, true);
@@ -46,6 +64,8 @@ export function createZip(files: { name: string; bytes: Uint8Array<ArrayBuffer> 
         view.setUint16(4, 20, true);
         view.setUint16(6, 20, true);
         view.setUint16(8, UTF8_FLAG, true);
+        view.setUint16(12, time, true);
+        view.setUint16(14, day, true);
         view.setUint32(16, crc, true);
         view.setUint32(20, bytes.length, true);
         view.setUint32(24, bytes.length, true);

@@ -11,6 +11,10 @@ const HEADER_SIZE: usize = 128;
 const MAX_TAGS: usize = 200;
 /// More inputs than CMYK are not proofed; it keeps the grid walk small.
 const MAX_LUT_INPUTS: usize = 4;
+/// Larger curve tables and colour grids than any real profile needs are refused, so a
+/// hostile file cannot ask for gigabytes.
+const MAX_CURVE_ENTRIES: usize = 1 << 16;
+const MAX_CLUT_VALUES: usize = 1 << 24;
 /// Steps when inverting a tone response curve by bisection.
 const INVERSE_STEPS: usize = 24;
 
@@ -175,6 +179,8 @@ enum PcsEncoding {
 struct Pipeline {
     stages: Vec<Stage>,
     encoding: PcsEncoding,
+    inputs: usize,
+    outputs: usize,
 }
 
 impl Pipeline {
@@ -270,7 +276,11 @@ impl IccProfile {
         let mut tags = Vec::with_capacity(count);
         for i in 0..count {
             let at = HEADER_SIZE + 4 + i * 12;
-            tags.push((r.sig(at)?, r.u32(at + 4)? as usize));
+            let offset = r.u32(at + 4)? as usize;
+            if offset >= bytes.len() {
+                return Err(IccError::Truncated);
+            }
+            tags.push((r.sig(at)?, offset));
         }
         let find = |name: &[u8; 4]| tags.iter().find(|(sig, _)| sig == name).map(|&(_, offset)| offset);
 
@@ -284,7 +294,16 @@ impl IccProfile {
         let to_pcs = [table(b"A2B0")?, table(b"A2B1")?];
         let from_pcs = [table(b"B2A0")?, table(b"B2A1")?];
         let model = if to_pcs.iter().any(Option::is_some) && from_pcs.iter().any(Option::is_some) {
-            Model::Tables { to_pcs, from_pcs, gamut: table(b"gamt")? }
+            // The evaluators index by these counts, so a table of another shape is refused.
+            let device = space.channels();
+            let fits = |pipelines: &[Option<Pipeline>], inputs: usize, outputs: usize| {
+                pipelines.iter().flatten().all(|p| p.inputs == inputs && p.outputs == outputs)
+            };
+            let gamut = table(b"gamt")?.filter(|p| p.inputs == 3 && p.outputs >= 1);
+            if !fits(&to_pcs, device, 3) || !fits(&from_pcs, 3, device) {
+                return Err(IccError::Unsupported);
+            }
+            Model::Tables { to_pcs, from_pcs, gamut }
         } else if space == ColourSpace::Gray {
             Model::Gray(read_curve(&r, find(b"kTRC").ok_or(IccError::Unsupported)?)?.0)
         } else if space == ColourSpace::Rgb {
@@ -324,6 +343,11 @@ impl IccProfile {
                 (device.into_iter().map(|v| v.clamp(0.0, 1.0)).collect(), false)
             }
         }
+    }
+
+    /// The D50 XYZ colour of device values in 0..=1, relative colorimetric.
+    pub fn xyz_of(&self, device: &[f32]) -> [f32; 3] {
+        self.to_pcs(device)
     }
 
     /// The PCS colour of device values, relative colorimetric.
@@ -400,12 +424,15 @@ fn read_curve(r: &Reader, offset: usize) -> Result<(Curve, usize), IccError> {
     match &r.sig(offset)? {
         b"curv" => {
             let count = r.u32(offset + 8)? as usize;
+            if count > MAX_CURVE_ENTRIES {
+                return Err(IccError::Unsupported);
+            }
             let curve = match count {
                 0 => Curve::Identity,
                 1 => Curve::Gamma(f32::from(r.u16(offset + 12)?) / 256.0),
                 _ => {
-                    r.slice(offset + 12, count * 2)?;
-                    Curve::Table((0..count).map(|i| f32::from(r.u16(offset + 12 + 2 * i).unwrap_or(0)) / 65535.0).collect())
+                    let raw = r.slice(offset + 12, count * 2)?;
+                    Curve::Table(raw.chunks_exact(2).map(|c| f32::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect())
                 }
             };
             Ok((curve, pad(12 + 2 * count)))
@@ -441,7 +468,8 @@ fn read_curves(r: &Reader, mut offset: usize, count: usize) -> Result<Vec<Curve>
 }
 
 fn grid_size(grid: &[usize], outputs: usize) -> Result<usize, IccError> {
-    grid.iter().try_fold(outputs, |total, &points| if points < 2 { Err(IccError::Unsupported) } else { total.checked_mul(points).ok_or(IccError::Unsupported) })
+    let total = grid.iter().try_fold(outputs, |total, &points| if points < 2 { Err(IccError::Unsupported) } else { total.checked_mul(points).ok_or(IccError::Unsupported) })?;
+    if total > MAX_CLUT_VALUES { Err(IccError::Unsupported) } else { Ok(total) }
 }
 
 fn read_pipeline(r: &Reader, offset: usize) -> Result<Pipeline, IccError> {
@@ -484,7 +512,7 @@ fn read_pipeline(r: &Reader, offset: usize) -> Result<Pipeline, IccError> {
                 stages.push(Stage::Matrix(matrix, [0.0; 3]));
             }
             stages.extend([Stage::Curves(input), Stage::Clut(Clut { grid, outputs, data }), Stage::Curves(output)]);
-            Ok(Pipeline { stages, encoding: if wide { PcsEncoding::Legacy16 } else { PcsEncoding::Eight } })
+            Ok(Pipeline { stages, encoding: if wide { PcsEncoding::Legacy16 } else { PcsEncoding::Eight }, inputs, outputs })
         }
         b"mAB " | b"mBA " => {
             let to_pcs = &kind == b"mAB ";
@@ -535,7 +563,7 @@ fn read_pipeline(r: &Reader, offset: usize) -> Result<Pipeline, IccError> {
                 push(clut.map(Stage::Clut));
                 push(a.map(Stage::Curves));
             }
-            Ok(Pipeline { stages, encoding: PcsEncoding::Version4 })
+            Ok(Pipeline { stages, encoding: PcsEncoding::Version4, inputs, outputs })
         }
         _ => Err(IccError::Unsupported),
     }
@@ -597,6 +625,8 @@ const GAMUT_TOLERANCE: f32 = 3.0;
 pub fn proof_lut(profile: &IccProfile, options: ProofOptions, size: u32) -> Vec<f32> {
     let from_xyz = invert3(&SRGB_TO_XYZ).expect("sRGB primaries are independent");
     let paper = [0, 1, 2].map(|i| profile.media_white[i] / D50[i]);
+    // Only printers have paper; a display profile's white point is its illuminant.
+    let simulate_paper = options.simulate_paper && profile.is_output;
     // Black point compensation: the deepest black the device makes maps to the screen's.
     let ink_black = profile.to_pcs(&profile.to_device([0.0; 3], Intent::Relative).0)[1].clamp(0.0, 0.5);
     let steps = (size.max(2) - 1) as f32;
@@ -608,7 +638,7 @@ pub fn proof_lut(profile: &IccProfile, options: ProofOptions, size: u32) -> Vec<
                 let xyz = mul3(&SRGB_TO_XYZ, screen);
                 let (device, clipped) = profile.to_device(xyz, options.intent);
                 let printed = profile.to_pcs(&device);
-                let shown = if options.simulate_paper {
+                let shown = if simulate_paper {
                     [0, 1, 2].map(|i| printed[i] * paper[i])
                 } else {
                     [0, 1, 2].map(|i| (printed[i] - ink_black * D50[i]) / (1.0 - ink_black))
@@ -625,6 +655,31 @@ pub fn proof_lut(profile: &IccProfile, options: ProofOptions, size: u32) -> Vec<
         }
     }
     out
+}
+
+/// Puts RGB8 through a table from [`proof_lut`], as the preview does, so a histogram
+/// can show the proof.
+pub fn apply_proof_lut(lut: &[f32], size: u32, rgb: &mut [u8]) {
+    let size = size as usize;
+    let last = (size - 1) as f32;
+    let at = |r: usize, g: usize, b: usize| ((b * size + g) * size + r) * 4;
+    for pixel in rgb.chunks_exact_mut(3) {
+        let position = [0, 1, 2].map(|c| f32::from(pixel[c]) / 255.0 * last);
+        let low = position.map(|p| (p as usize).min(size - 2));
+        let t = [0, 1, 2].map(|c| position[c] - low[c] as f32);
+        let mut out = [0.0f32; 3];
+        for corner in 0..8 {
+            let high = [corner & 1, corner >> 1 & 1, corner >> 2 & 1];
+            let weight: f32 = (0..3).map(|c| if high[c] == 1 { t[c] } else { 1.0 - t[c] }).product();
+            let index = at(low[0] + high[0], low[1] + high[1], low[2] + high[2]);
+            for (channel, value) in out.iter_mut().enumerate() {
+                *value += weight * lut[index + channel];
+            }
+        }
+        for (target, value) in pixel.iter_mut().zip(out) {
+            *target = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
 }
 
 fn delta_e(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -696,6 +751,36 @@ mod tests {
     }
 
     #[test]
+    fn hostile_sizes_are_refused_rather_than_panicking() {
+        // A curve claiming two billion entries.
+        let mut huge = srgb_like();
+        let at = huge.windows(4).position(|w| w == b"curv").unwrap();
+        huge[at + 8..at + 12].copy_from_slice(&0x8000_0002u32.to_be_bytes());
+        assert!(IccProfile::parse(&huge).is_err());
+        // A tag pointing past the end of the file.
+        let mut past = srgb_like();
+        past[HEADER_SIZE + 4 + 4..HEADER_SIZE + 4 + 8].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(IccProfile::parse(&past).is_err());
+    }
+
+    #[test]
+    fn table_profiles_of_the_wrong_shape_are_refused() {
+        let Ok(bytes) = std::fs::read("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc") else { return };
+        // Declare the CMYK profile as RGB: its 4-input tables no longer fit.
+        let mut wrong = bytes.clone();
+        wrong[16..20].copy_from_slice(b"RGB ");
+        assert_eq!(IccProfile::parse(&wrong).unwrap_err(), IccError::Unsupported);
+    }
+
+    #[test]
+    fn paper_simulation_leaves_display_profiles_alone() {
+        let profile = IccProfile::parse(&srgb_like()).unwrap();
+        let plain = proof_lut(&profile, ProofOptions { intent: Intent::Relative, simulate_paper: false }, 5);
+        let paper = proof_lut(&profile, ProofOptions { intent: Intent::Relative, simulate_paper: true }, 5);
+        assert_eq!(plain, paper);
+    }
+
+    #[test]
     fn reads_the_name_and_kind() {
         let profile = IccProfile::parse(&srgb_like()).unwrap();
         assert_eq!(profile.name, "Test");
@@ -735,6 +820,17 @@ mod tests {
         let grey = at(&lut, 9, 4, 4, 4);
         assert_eq!(grey[3], 0.0, "grey fits");
         assert!((grey[0] - 0.5).abs() < 0.02 && (grey[1] - 0.5).abs() < 0.02, "{grey:?}");
+    }
+
+    #[test]
+    fn the_histogram_lookup_matches_the_table() {
+        let profile = IccProfile::parse(&narrow()).unwrap();
+        let lut = proof_lut(&profile, ProofOptions { intent: Intent::Relative, simulate_paper: false }, 9);
+        let mut rgb = [255u8, 0, 0, 128, 128, 128];
+        apply_proof_lut(&lut, 9, &mut rgb);
+        let red = at(&lut, 9, 8, 0, 0);
+        assert_eq!(rgb[..3], [0, 1, 2].map(|c| (red[c] * 255.0).round() as u8));
+        assert!(rgb[3].abs_diff(128) <= 3 && rgb[4].abs_diff(128) <= 3, "grey stays grey: {rgb:?}");
     }
 
     /// Checked against the profile macOS ships, where it exists.

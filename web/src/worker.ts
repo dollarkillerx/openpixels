@@ -48,6 +48,11 @@ function detach(view: Uint8Array | Float32Array | Uint16Array): ArrayBuffer {
 
 // Slider drags arrive far faster than frames. Only the newest values get rendered.
 let pendingAdjustments: Adjustments | null = null;
+/** Counts edits as they arrive, so an open can tell older edits from newer ones. */
+let adjustSeq = 0;
+let pendingSeq = 0;
+/** `adjustSeq` when the request being handled arrived. */
+let requestArrival = 0;
 let renderScheduled = false;
 let hasImage = false;
 
@@ -60,7 +65,7 @@ function scheduleHistogram() {
   histogramTimer = setTimeout(() => {
     enqueue(async () => {
       if (!hasImage) return;
-      const rgb = await engine!.framed_thumbnail(HISTOGRAM_LONG_EDGE);
+      const rgb = await engine!.histogram_thumbnail(HISTOGRAM_LONG_EDGE);
       const channels: HistogramData["channels"] = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
       for (let at = 0; at < rgb.length; at += 3) {
         channels[0][rgb[at]]++;
@@ -94,8 +99,10 @@ function scheduleRender(edited = true) {
     renderScheduled = false;
     const start = performance.now();
     if (pendingAdjustments) {
-      engine!.set_adjustments(engineJson(pendingAdjustments));
+      // Taken first: an edit the engine rejects must not block every later frame.
+      const next = pendingAdjustments;
       pendingAdjustments = null;
+      engine!.set_adjustments(engineJson(next));
     }
     await engine!.render();
     if (engine!.needs_detail()) scheduleDetail();
@@ -123,13 +130,20 @@ async function developInParallel() {
   const recipeJson = JSON.stringify(plan.recipe);
   const tiles: unknown[] = plan.tiles;
   let next = 0;
+  let failure: Error | null = null;
 
+  // Each worker settles only once its tile in flight is back, so none touches the
+  // engine after this task ends, even when another worker has failed.
   const runOn = (worker: Worker) =>
-    new Promise<void>((resolve, reject) => {
+    new Promise<void>((resolve) => {
+      const stop = () => {
+        worker.onmessage = null;
+        worker.onerror = null;
+        resolve();
+      };
       const sendNext = () => {
-        if (next >= tiles.length) {
-          worker.onmessage = null;
-          resolve();
+        if (failure || next >= tiles.length) {
+          stop();
           return;
         }
         const index = next++;
@@ -140,18 +154,26 @@ async function developInParallel() {
       };
       worker.onmessage = ({ data }: MessageEvent<DevelopTileReply>) => {
         if ("error" in data) {
-          worker.onmessage = null;
-          reject(new Error(data.error));
+          failure ??= new Error(data.error);
+          stop();
+          return;
+        }
+        if (failure) {
+          stop();
           return;
         }
         engine!.store_raw_tile(data.index, new Uint16Array(data.rgb));
         sendNext();
       };
-      worker.onerror = (event) => reject(new Error(event.message));
+      worker.onerror = (event) => {
+        failure ??= new Error(event.message);
+        stop();
+      };
       sendNext();
     });
 
   await Promise.all(developerPool().map(runOn));
+  if (failure) throw failure;
   engine!.finish_raw_develop();
 }
 
@@ -202,7 +224,8 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       engine!.set_adjustments(engineJson(request.adjustments));
       pushErases(request.erases);
       engine!.set_heals(JSON.stringify(request.heals));
-      pendingAdjustments = null;
+      // Edits sent after this photo was asked for are its own; only older ones are dropped.
+      if (pendingSeq <= requestArrival) pendingAdjustments = null;
       hasImage = true;
       scheduleRender();
       const result: LoadResult = {
@@ -219,17 +242,18 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
 
     case "export": {
       if (pendingAdjustments) {
-        engine!.set_adjustments(engineJson(pendingAdjustments));
+        const next = pendingAdjustments;
         pendingAdjustments = null;
+        engine!.set_adjustments(engineJson(next));
       }
       const start = performance.now();
       if (!engine!.has_full_image()) await developInParallel();
-      const { format, quality, bitDepth, longEdge, watermark } = request.settings;
+      const { format, quality, bitDepth, longEdge, watermark, colorSpace } = request.settings;
       const size = JSON.parse(engine!.export_size(longEdge));
       const overlay = await renderWatermark(watermark, size.width, size.height);
       const bytes = detach(
         await engine!.export_image(
-          JSON.stringify({ format, quality, longEdge, bitDepth }),
+          JSON.stringify({ format, quality, longEdge, bitDepth, colorSpace }),
           overlay?.rgba ?? new Uint8Array(0),
           overlay?.x ?? 0,
           overlay?.y ?? 0,
@@ -303,7 +327,8 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       const { icc, perceptual, paper, gamut } = request;
       const info = icc ? JSON.parse(engine!.set_proof(new Uint8Array(icc), perceptual, paper, gamut)) : null;
       if (!icc) engine!.clear_proof();
-      scheduleRender(false);
+      // The histogram follows the proof.
+      scheduleRender(true);
       return [info, []];
     }
 
@@ -374,6 +399,7 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
 self.onmessage = ({ data }: MessageEvent<ToWorker>) => {
   if (data.type === "adjust") {
     pendingAdjustments = data.adjustments;
+    pendingSeq = ++adjustSeq;
     scheduleRender();
     return;
   }
@@ -406,7 +432,9 @@ self.onmessage = ({ data }: MessageEvent<ToWorker>) => {
   }
 
   const { id } = data;
+  const arrived = adjustSeq;
   enqueue(async () => {
+    requestArrival = arrived;
     try {
       const [result, transfer] = await handle(data);
       post({ type: "reply", id, result }, transfer);

@@ -7,7 +7,6 @@ use image::{ExtendedColorType, ImageBuffer, ImageEncoder, ImageResult, Rgb};
 use serde::Deserialize;
 
 use crate::exif::{EXIF_PREFIX, write_tiff};
-use crate::srgb_icc_profile;
 
 // The encoders reinterpret sample memory as little-endian bytes.
 const _: () = assert!(cfg!(target_endian = "little"));
@@ -167,11 +166,12 @@ pub fn composite_overlay<S: Sample>(rgb: &mut [S], width: u32, height: u32, over
 }
 
 /// `exif` is an APP1 payload from [`crate::export_exif`].
-pub fn encode_png<S: Sample>(rgb: &[S], width: u32, height: u32, exif: Option<&[u8]>) -> ImageResult<Vec<u8>> {
+/// `icc` is the colour profile the samples are in.
+pub fn encode_png<S: Sample>(rgb: &[S], width: u32, height: u32, icc: &[u8], exif: Option<&[u8]>) -> ImageResult<Vec<u8>> {
     let mut out = Vec::new();
     // Fast compression: on a large image the better settings take many times longer.
     let mut encoder = PngEncoder::new_with_quality(&mut out, CompressionType::Fast, PngFilter::Adaptive);
-    encoder.set_icc_profile(srgb_icc_profile()).map_err(image::ImageError::Unsupported)?;
+    encoder.set_icc_profile(icc.to_vec()).map_err(image::ImageError::Unsupported)?;
     if let Some(block) = exif.and_then(|block| block.strip_prefix(EXIF_PREFIX)) {
         encoder.set_exif_metadata(block.to_vec()).map_err(image::ImageError::Unsupported)?;
     }
@@ -180,13 +180,14 @@ pub fn encode_png<S: Sample>(rgb: &[S], width: u32, height: u32, exif: Option<&[
 }
 
 /// An uncompressed TIFF. `exif` is an APP1 payload from [`crate::export_exif`].
-pub fn encode_tiff<S: Sample>(rgb: &[S], width: u32, height: u32, exif: Option<&[u8]>) -> Vec<u8> {
-    write_tiff(bytemuck::cast_slice(rgb), width, height, S::BITS, &srgb_icc_profile(), exif)
+pub fn encode_tiff<S: Sample>(rgb: &[S], width: u32, height: u32, icc: &[u8], exif: Option<&[u8]>) -> Vec<u8> {
+    write_tiff(bytemuck::cast_slice(rgb), width, height, S::BITS, icc, exif)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::srgb_icc_profile;
 
     #[test]
     fn the_long_edge_limit_keeps_the_shape_and_never_enlarges() {
@@ -224,9 +225,9 @@ mod tests {
     #[test]
     fn png_and_tiff_round_trip_the_pixels() {
         let rgb: Vec<u8> = (0..3 * 16 * 16).map(|i| (i % 251) as u8).collect();
-        let png = image::load_from_memory(&encode_png(&rgb, 16, 16, None).unwrap()).unwrap();
+        let png = image::load_from_memory(&encode_png(&rgb, 16, 16, &srgb_icc_profile(), None).unwrap()).unwrap();
         assert_eq!(png.into_rgb8().into_raw(), rgb);
-        let tiff = image::load_from_memory(&encode_tiff(&rgb, 16, 16, None)).unwrap();
+        let tiff = image::load_from_memory(&encode_tiff(&rgb, 16, 16, &srgb_icc_profile(), None)).unwrap();
         assert_eq!(tiff.into_rgb8().into_raw(), rgb);
     }
 
@@ -234,9 +235,9 @@ mod tests {
     fn sixteen_bit_files_keep_every_code_value() {
         // Odd values have no 8-bit equivalent, so a hidden 8-bit step would change them.
         let rgb: Vec<u16> = (0..3 * 32 * 32u32).map(|i| (i * 21 + 1) as u16).collect();
-        let png = image::load_from_memory(&encode_png(&rgb, 32, 32, None).unwrap()).unwrap();
+        let png = image::load_from_memory(&encode_png(&rgb, 32, 32, &srgb_icc_profile(), None).unwrap()).unwrap();
         assert_eq!(png.into_rgb16().into_raw(), rgb);
-        let tiff = image::load_from_memory(&encode_tiff(&rgb, 32, 32, None)).unwrap();
+        let tiff = image::load_from_memory(&encode_tiff(&rgb, 32, 32, &srgb_icc_profile(), None)).unwrap();
         assert_eq!(tiff.into_rgb16().into_raw(), rgb);
     }
 
@@ -248,10 +249,10 @@ mod tests {
     fn delivered_files_carry_the_colour_profile_and_capture_details() {
         let exif = crate::export_exif(&crate::exif::tests::jpeg_with_exif());
         let rgb = [40u16; 3 * 8 * 8];
-        let png = encode_png(&rgb, 8, 8, Some(&exif)).unwrap();
+        let png = encode_png(&rgb, 8, 8, &srgb_icc_profile(), Some(&exif)).unwrap();
         assert!(contains(&png, b"iCCP") && contains(&png, b"eXIf") && contains(&png, b"ABCD"));
 
-        let tiff = encode_tiff(&rgb, 8, 8, Some(&exif));
+        let tiff = encode_tiff(&rgb, 8, 8, &srgb_icc_profile(), Some(&exif));
         assert!(contains(&tiff, b"ABCD"));
         assert!(contains(&tiff, &srgb_icc_profile()));
         let decoded = image::load_from_memory(&tiff).unwrap();

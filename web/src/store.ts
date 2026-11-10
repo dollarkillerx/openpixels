@@ -35,14 +35,40 @@ function open(): Promise<IDBDatabase> {
   });
 }
 
+/** Settles when the transaction commits, so a write the browser later aborts (for
+ * example over quota) is reported rather than lost. */
 async function run<T>(store: string, mode: IDBTransactionMode, work: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await open();
   return new Promise((resolve, reject) => {
-    const request = work(db.transaction(store, mode).objectStore(store));
-    // Lets the transaction finish; an open connection would block later version upgrades.
-    db.close();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    try {
+      const transaction = db.transaction(store, mode);
+      const request = work(transaction.objectStore(store));
+      transaction.oncomplete = () => resolve(request.result);
+      transaction.onabort = () => reject(transaction.error ?? request.error);
+    } catch (error) {
+      reject(error);
+    } finally {
+      // Lets the transaction finish; an open connection would block later version upgrades.
+      db.close();
+    }
+  });
+}
+
+/** Every key with its value, read in one transaction so they cannot fall out of step. */
+async function entries<T>(store: string): Promise<[IDBValidKey[], T[]]> {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    try {
+      const transaction = db.transaction(store, "readonly");
+      const keys = transaction.objectStore(store).getAllKeys();
+      const values = transaction.objectStore(store).getAll();
+      transaction.oncomplete = () => resolve([keys.result, values.result as T[]]);
+      transaction.onabort = () => reject(transaction.error);
+    } catch (error) {
+      reject(error);
+    } finally {
+      db.close();
+    }
   });
 }
 
@@ -109,10 +135,7 @@ export const saveAnalysis = (id: string, analysis: PhotoAnalysis) => run(ANALYSE
 
 /** Every stored analysis, by photo id. */
 export async function loadAnalyses(): Promise<Record<string, PhotoAnalysis>> {
-  const [ids, values] = await Promise.all([
-    run<IDBValidKey[]>(ANALYSES, "readonly", (s) => s.getAllKeys()),
-    run<PhotoAnalysis[]>(ANALYSES, "readonly", (s) => s.getAll()),
-  ]);
+  const [ids, values] = await entries<PhotoAnalysis>(ANALYSES);
   return Object.fromEntries(ids.map((id, index) => [String(id), values[index]]));
 }
 
@@ -124,10 +147,7 @@ export const forgetHandle = (id: string) => run(HANDLES, "readwrite", (s) => s.d
 
 /** Every remembered photo, with its id. */
 export async function recallHandleEntries(): Promise<{ id: string; handle: FileSystemFileHandle }[]> {
-  const [ids, handles] = await Promise.all([
-    run<IDBValidKey[]>(HANDLES, "readonly", (s) => s.getAllKeys()),
-    run<FileSystemFileHandle[]>(HANDLES, "readonly", (s) => s.getAll()),
-  ]);
+  const [ids, handles] = await entries<FileSystemFileHandle>(HANDLES);
   return ids.map((id, index) => ({ id: String(id), handle: handles[index] }));
 }
 

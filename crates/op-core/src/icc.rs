@@ -1,5 +1,5 @@
-//! A minimal sRGB ICC v2 display profile, embedded in exported JPEGs so colour-managed
-//! applications do not have to guess the colour space.
+//! Minimal ICC v2 display profiles, embedded in exports so colour-managed applications
+//! do not have to guess the colour space.
 
 const CURVE_ENTRIES: usize = 1024;
 const DESCRIPTION: &str = "sRGB (OpenPixels)";
@@ -36,28 +36,34 @@ fn description(content: &str) -> Vec<u8> {
     out
 }
 
-fn srgb_curve() -> Vec<u8> {
+fn curve(decode: impl Fn(f64) -> f64) -> Vec<u8> {
     let mut out = b"curv\0\0\0\0".to_vec();
     out.extend((CURVE_ENTRIES as u32).to_be_bytes());
     for index in 0..CURVE_ENTRIES {
-        let encoded = index as f64 / (CURVE_ENTRIES - 1) as f64;
-        let linear = if encoded <= 0.04045 { encoded / 12.92 } else { ((encoded + 0.055) / 1.055).powf(2.4) };
+        let linear = decode(index as f64 / (CURVE_ENTRIES - 1) as f64);
         out.extend(((linear * 65535.0).round() as u16).to_be_bytes());
     }
     out
 }
 
-/// Builds the profile.
+/// Builds the sRGB profile.
 pub fn srgb_icc_profile() -> Vec<u8> {
-    let curve = srgb_curve();
     // XYZ values are the sRGB primaries adapted to the D50 profile connection space.
+    let colorants = [[0.436_074_7, 0.222_504_5, 0.013_932_2], [0.385_064_9, 0.716_878_6, 0.097_104_5], [0.143_080_4, 0.060_616_9, 0.714_173_3]];
+    rgb_icc_profile(DESCRIPTION, colorants, |encoded| if encoded <= 0.04045 { encoded / 12.92 } else { ((encoded + 0.055) / 1.055).powf(2.4) })
+}
+
+/// A matrix/TRC display profile: the red, green and blue colorants in D50 XYZ, and the
+/// curve from encoded to linear values shared by all three channels.
+pub fn rgb_icc_profile(name: &str, colorants: [[f64; 3]; 3], decode: impl Fn(f64) -> f64) -> Vec<u8> {
+    let curve = curve(decode);
     let tags: Vec<(&[u8; 4], Vec<u8>)> = vec![
-        (b"desc", description(DESCRIPTION)),
+        (b"desc", description(name)),
         (b"cprt", text(COPYRIGHT)),
         (b"wtpt", xyz([0.9642, 1.0, 0.8249])),
-        (b"rXYZ", xyz([0.436_074_7, 0.222_504_5, 0.013_932_2])),
-        (b"gXYZ", xyz([0.385_064_9, 0.716_878_6, 0.097_104_5])),
-        (b"bXYZ", xyz([0.143_080_4, 0.060_616_9, 0.714_173_3])),
+        (b"rXYZ", xyz(colorants[0])),
+        (b"gXYZ", xyz(colorants[1])),
+        (b"bXYZ", xyz(colorants[2])),
         (b"rTRC", curve.clone()),
         (b"gTRC", curve.clone()),
         (b"bTRC", curve),
@@ -125,7 +131,7 @@ mod tests {
 
     #[test]
     fn the_curve_runs_from_black_to_white() {
-        let curve = srgb_curve();
+        let curve = curve(|encoded| if encoded <= 0.04045 { encoded / 12.92 } else { ((encoded + 0.055) / 1.055).powf(2.4) });
         let entry = |index: usize| u16::from_be_bytes([curve[12 + index * 2], curve[13 + index * 2]]);
         assert_eq!(entry(0), 0);
         assert_eq!(entry(CURVE_ENTRIES - 1), 65535);

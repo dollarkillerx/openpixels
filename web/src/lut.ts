@@ -103,6 +103,9 @@ export function gained(value: number, gain: number): number {
   return GAIN_KNEE + (1 - GAIN_KNEE) * (startSlope * t + (1 - startSlope) * t * t);
 }
 
+/** Brings a channel that can reach `top` back under 1 with the same roll-off as `gained`. */
+const ceiling = (value: number, top: number) => gained(value / top, top);
+
 function fromRecipe(recipe: Recipe): Grade {
   const { gains = [1, 1, 1], bands = [], saturation = 1, contrast = 0, fade = 0, roll = 0, shadows = [0, 0, 0], highlights = [0, 0, 0], mono } = recipe;
   return (red, green, blue) => {
@@ -296,13 +299,13 @@ export const BUILT_IN_LOOKS: { id: number; group: string; name: string; grade: G
     id: 1,
     group: BASIC_GROUP,
     name: "暖调胶片",
-    grade: (r, g, b) => [scurve(r, 0.12) * 1.04 + 0.015, scurve(g, 0.1) + 0.005, scurve(b, 0.08) * 0.92 + 0.03],
+    grade: (r, g, b) => [ceiling(scurve(r, 0.12) * 1.04 + 0.015, 1.055), ceiling(scurve(g, 0.1) + 0.005, 1.005), scurve(b, 0.08) * 0.92 + 0.03],
   },
   {
     id: 2,
     group: BASIC_GROUP,
     name: "清冷",
-    grade: (r, g, b) => [scurve(r, 0.08) * 0.95, scurve(g, 0.08) * 0.99, scurve(b, 0.06) * 1.05 + 0.01],
+    grade: (r, g, b) => [scurve(r, 0.08) * 0.95, scurve(g, 0.08) * 0.99, ceiling(scurve(b, 0.06) * 1.05 + 0.01, 1.06)],
   },
   {
     id: 3,
@@ -312,7 +315,7 @@ export const BUILT_IN_LOOKS: { id: number; group: string; name: string; grade: G
       const y = luma(r, g, b);
       const warm = y;
       const cool = 1 - y;
-      return [r + 0.07 * warm - 0.06 * cool, g + 0.015 * warm + 0.015 * cool, b - 0.08 * warm + 0.07 * cool];
+      return [ceiling(r + 0.07 * warm - 0.06 * cool, 1.07), ceiling(g + 0.015 * warm + 0.015 * cool, 1.015), ceiling(b - 0.08 * warm + 0.07 * cool, 1.07)];
     },
   },
   {
@@ -361,6 +364,11 @@ export function parseCube(text: string): Lut {
     const line = raw.trim();
     if (!line || line.startsWith("#") || line.startsWith("TITLE")) continue;
     if (line.startsWith("LUT_1D_SIZE")) throw new Error("只支持 3D LUT，这是 1D LUT");
+    if (line.startsWith("DOMAIN_MIN") || line.startsWith("DOMAIN_MAX")) {
+      const wanted = line.startsWith("DOMAIN_MIN") ? 0 : 1;
+      if (line.split(/\s+/).slice(1).some((value) => Number(value) !== wanted)) throw new Error("只支持定义域为 0–1 的 LUT");
+      continue;
+    }
     if (line.startsWith("LUT_3D_SIZE")) {
       size = Number(line.split(/\s+/)[1]);
       continue;

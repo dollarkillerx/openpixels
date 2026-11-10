@@ -14,7 +14,7 @@ import { locateFaces } from "./face";
 import { BUILT_IN_REPLACEMENTS, REPLACE_BACKGROUND, REPLACE_SKY, builtInReplacement, decodeReplacement } from "./replace";
 import { eraseCrop, rasterizeErase, type EraseDab } from "./erase";
 import { lensView, shownToSource, sourceToShown, type WarpView } from "./lens";
-import { FORMAT_DETAILS, type OutputFormat, type OutputSettings, type Watermark, type WatermarkPosition } from "./output";
+import { FORMAT_DETAILS, type OutputColorSpace, type OutputFormat, type OutputSettings, type Watermark, type WatermarkPosition } from "./output";
 import { ProjectLibrary } from "./ProjectLibrary";
 import { IS_LITE } from "./edition";
 import { PANEL_TABS, Section, type PanelTab, type SectionId } from "./Panels";
@@ -410,6 +410,10 @@ export function App() {
   const settleTimerRef = useRef<number | undefined>(undefined);
   const pendingSettleRef = useRef<(() => void) | null>(null);
   const openTicketRef = useRef(0);
+  /** The photo the engine currently holds. */
+  const openedIdRef = useRef<string | null>(null);
+  /** The local layer shapes that went with each settled edit, so undo can restore them. */
+  const localsAtRef = useRef(new WeakMap<Adjustments, LocalLayer[]>());
 
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
@@ -543,6 +547,8 @@ export function App() {
   );
   // An erase takes seconds and lands on the photo it started on.
   const locked = batchRunning || erasing;
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
   const projectOfActive = projects.find((item) => item.id === activeProject) ?? null;
   const resumable = activeProject === null ? (projects.find((item) => item.id === lastProject) ?? null) : null;
   const lens = loaded ? lensView(loaded.lens, adjustments, loaded.width, loaded.height) : null;
@@ -606,10 +612,11 @@ export function App() {
 
   const refreshThumbnail = useCallback(async (id: string) => {
     const engine = engineRef.current;
-    if (!engine) return;
+    // The engine renders whichever photo it has open, which may no longer be `id`.
+    if (!engine || openedIdRef.current !== id) return;
     const ticket = openTicketRef.current;
     const thumbnail = await engine.thumbnail(THUMBNAIL_LONG_EDGE, true);
-    if (ticket !== openTicketRef.current) return;
+    if (ticket !== openTicketRef.current || openedIdRef.current !== id) return;
     const url = thumbnailUrl(thumbnail);
     setPhotos((list) => list.map((photo) => (photo.id === id ? { ...photo, thumbnail: url } : photo)));
   }, []);
@@ -623,6 +630,7 @@ export function App() {
       modelMasksRef.current = {};
       const result = await engine.open(await photo.file.arrayBuffer(), edit, spots, warps.flat(), erases);
       if (ticket !== openTicketRef.current) throw new Error(STALE);
+      openedIdRef.current = photo.id;
       erasesRef.current = erases;
       setEraseCount(erases.length);
       warpRef.current = await engine.warpField();
@@ -634,9 +642,14 @@ export function App() {
   /** Records an edit still waiting to settle, before anything changes the context. */
   const ensureModelMasks = useCallback(async (layers: LocalLayer[], proxyWidth: number, proxyHeight: number) => {
     const engine = engineRef.current!;
+    const ticket = openTicketRef.current;
     for (const model of ["subject", "sky"] as const) {
       const needed = layers.some((layer) => isAiLocal(layer.kind) && modelOf(layer.kind) === model);
-      if (needed && !modelMasksRef.current[model]) modelMasksRef.current[model] = await engine.modelMask(model, proxyWidth, proxyHeight);
+      if (!needed || modelMasksRef.current[model]) continue;
+      const mask = await engine.modelMask(model, proxyWidth, proxyHeight);
+      // Another photo opened meanwhile; this mask is not its.
+      if (ticket !== openTicketRef.current) throw new Error(STALE);
+      modelMasksRef.current[model] = mask;
     }
   }, []);
 
@@ -684,6 +697,7 @@ export function App() {
       setLocalTool(null);
     setLocalRefine(null);
       settledRef.current = edit;
+      localsAtRef.current.set(edit, layers);
       setCurrentId(photo.id);
       setAdjustments(edit);
       setBusy("解码中…");
@@ -695,6 +709,7 @@ export function App() {
       setFindingFaces(false);
       try {
         const result = await openPhoto(photo, edit, spots, warps);
+        const ticket = openTicketRef.current;
         setLoaded(result);
         setHeapMB(result.heapMB);
         proxySizeRef.current = { width: result.proxyWidth, height: result.proxyHeight };
@@ -706,8 +721,8 @@ export function App() {
             result.proxyHeight,
           );
         }
+        if (ticket !== openTicketRef.current) return;
         setBusy("");
-        const ticket = openTicketRef.current;
         // A saved edit needs its analysis back before it can be shown.
         if (needsSubject(edit)) {
           setDetecting(true);
@@ -854,6 +869,7 @@ export function App() {
         history.past = [...history.past, previous].slice(-HISTORY_LIMIT);
         history.future = [];
         settledRef.current = next;
+        localsAtRef.current.set(next, localsRef.current);
         saveEdits({ [currentId]: next });
         setHistoryTick((tick) => tick + 1);
       };
@@ -891,19 +907,33 @@ export function App() {
       const [from, to] = direction === "undo" ? [history.past, history.future] : [history.future, history.past];
       const target = from.pop();
       if (!target) return;
+      // Layer shapes live apart from the edit; the state being left keeps its current ones.
+      localsAtRef.current.set(settledRef.current, localsRef.current);
       to.push(settledRef.current);
       settledRef.current = target;
+      const layers = localsAtRef.current.get(target);
+      if (layers && layers !== localsRef.current) {
+        localsRef.current = layers;
+        setLocals(layers);
+        setActiveLocal((index) => Math.min(index, Math.max(0, layers.length - 1)));
+        setLocalRefine(null);
+        scheduleLocalMask();
+        saveLocals(currentId, layers);
+      }
       setAdjustments(target);
       editsRef.current[currentId] = target;
       engineRef.current?.adjust(target);
       saveEdits({ [currentId]: target });
       void refreshThumbnail(currentId).catch(() => {});
     },
-    [currentId, flushPendingEdit, refreshThumbnail],
+    [currentId, flushPendingEdit, refreshThumbnail, scheduleLocalMask],
   );
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement).tagName;
+      // Text fields keep their own undo, and nothing may change while a batch runs.
+      if (tag === "INPUT" || tag === "TEXTAREA" || lockedRef.current) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         stepHistory(event.shiftKey ? "redo" : "undo");
@@ -968,7 +998,7 @@ export function App() {
     const typing = (event: KeyboardEvent) => ["INPUT", "SELECT", "TEXTAREA"].includes((event.target as HTMLElement).tagName);
     const onDown = (event: KeyboardEvent) => {
       if (typing(event) || event.metaKey || event.ctrlKey) return;
-      if (event.code === "Space") {
+      if (event.code === "Space" && (event.target as HTMLElement).tagName !== "BUTTON") {
         spaceRef.current = true;
         event.preventDefault();
       }
@@ -983,11 +1013,16 @@ export function App() {
     const onUp = (event: KeyboardEvent) => {
       if (event.code === "Space") spaceRef.current = false;
     };
+    const onBlur = () => {
+      spaceRef.current = false;
+    };
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -1182,30 +1217,35 @@ export function App() {
     applyEdit({ ...adjustments, pointHue: 0, pointWidth: 0, pointHueShift: 0, pointSatShift: 0, pointLumShift: 0 }, true);
 
   const pickColour = async (event: React.MouseEvent<HTMLElement>) => {
-    if (!picker) return;
+    if (!picker || !currentId) return;
+    const [photoId, ticket] = [currentId, openTicketRef.current];
+    const latest = () => editsRef.current[photoId] ?? adjustments;
     const bounds = event.currentTarget.getBoundingClientRect();
     const u = (event.clientX - bounds.left) / bounds.width;
     const v = (event.clientY - bounds.top) / bounds.height;
     try {
       if (picker === "point") {
         const hue = await engineRef.current!.hueAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
+        if (ticket !== openTicketRef.current) return;
         if (hue < 0) {
           setToolHint("这里接近灰色，请点一处有颜色的地方。");
           return;
         }
         setToolHint("");
         setPicker(null);
-        applyEdit({ ...adjustments, pointHue: hue, pointWidth: adjustments.pointWidth || 30 }, true);
+        const edit = latest();
+        applyEdit({ ...edit, pointHue: hue, pointWidth: edit.pointWidth || 30 }, true);
         return;
       }
       const balance = await engineRef.current!.whiteBalanceAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
+      if (ticket !== openTicketRef.current) return;
       if (!balance) {
         setToolHint("这里太暗或已过曝，请点一处中性灰。");
         return;
       }
       setToolHint("");
       setPicker(null);
-      applyEdit({ ...adjustments, ...balance }, true);
+      applyEdit({ ...latest(), ...balance }, true);
     } catch (reason) {
       setError((reason as Error).message);
     }
@@ -1486,7 +1526,8 @@ export function App() {
       setLocalTool(null);
       setLocalRefine(null);
       // Starts visible, so what was found can be judged straight away.
-      applyEdit({ ...adjustments, [`local${layers.length}Exposure`]: 0.5 }, true);
+      const latest = (currentId && editsRef.current[currentId]) || adjustments;
+      applyEdit({ ...latest, [`local${layers.length}Exposure`]: 0.5 }, true);
       if (currentId) void refreshThumbnail(currentId).catch(() => {});
     } catch (reason) {
       setError((reason as Error).message);
@@ -1580,8 +1621,9 @@ export function App() {
 
   /** Builds a look from a reference, measured on this photo as it is without one. */
   const runColourMatch = async (reference: Blob, name: string) => {
-    if (!loaded) return;
+    if (!loaded || !currentId) return;
     const engine = engineRef.current!;
+    const [photoId, ticket] = [currentId, openTicketRef.current];
     setMatching(true);
     setError("");
     try {
@@ -1596,10 +1638,12 @@ export function App() {
       const lut = matchColours(new Uint8Array(thumbnail.rgb), 3, context.getImageData(0, 0, width, height).data, 4);
       const stored = await saveLut(`追色 ${name}`, lut);
       setImportedLuts((list) => [...list, stored]);
-      applyEdit({ ...adjustments, lutId: stored.id, lutAmount: 1 }, true);
+      // The look is kept for later; it is only applied to the photo it was made from.
+      if (ticket !== openTicketRef.current) return;
+      applyEdit({ ...(editsRef.current[photoId] ?? adjustments), lutId: stored.id, lutAmount: 1 }, true);
     } catch (reason) {
       setError(reason instanceof DOMException ? "浏览器读不了这个文件。RAW 请先打开一次，再用它作参考。" : `追色失败：${(reason as Error).message}`);
-      await engine.setLook(await resolveLook(lookId));
+      if (ticket === openTicketRef.current) await engine.setLook(await resolveLook(lookId));
     } finally {
       setMatching(false);
     }
@@ -1926,10 +1970,12 @@ export function App() {
   const deleteLocal = () => {
     const layers = localsRef.current;
     if (!layers[activeLocal]) return;
-    applyEdit(removeLocalValues(adjustments, activeLocal, layers.length), true);
+    const next = removeLocalValues(adjustments, activeLocal, layers.length);
+    if ((next.localOverlay ?? 0) > 0) next.localOverlay = 0;
     commitLocals(layers.filter((_, index) => index !== activeLocal));
     setActiveLocal(0);
-    if ((adjustments.localOverlay ?? 0) > 0) setValue("localOverlay", 0);
+    setLocalRefine(null);
+    applyEdit(next, true);
   };
 
   const invertLocal = () =>
@@ -1976,9 +2022,10 @@ export function App() {
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag || !currentId) return;
+    const ticket = openTicketRef.current;
     // Let replies for the last pointer moves arrive before recording the drag.
     await new Promise((resolve) => window.setTimeout(resolve, LIQUIFY_SETTLE_MS));
-    if (drag.strokes.length === 0) return;
+    if (drag.strokes.length === 0 || ticket !== openTicketRef.current) return;
     setWarpGroups((groups) => {
       const next = [...groups, drag.strokes];
       saveWarps(currentId, next);
@@ -2020,9 +2067,10 @@ export function App() {
     const bounds = event.currentTarget.getBoundingClientRect();
     const u = (event.clientX - bounds.left) / bounds.width;
     const v = (event.clientY - bounds.top) / bounds.height;
+    const ticket = openTicketRef.current;
     try {
       const spot = await engineRef.current!.healAt(u, v, Math.round(bounds.width), Math.round(bounds.height), healRadius);
-      if (!spot) return;
+      if (!spot || ticket !== openTicketRef.current) return;
       setHeals((list) => {
         const next = [...list, spot];
         saveHeals(currentId, next);
@@ -2084,6 +2132,14 @@ export function App() {
     }
   };
 
+  // Finished files are only held for their download link.
+  useEffect(() => () => {
+    if (exported) URL.revokeObjectURL(exported.url);
+  }, [exported]);
+  useEffect(() => () => {
+    if (batchUrl) URL.revokeObjectURL(batchUrl);
+  }, [batchUrl]);
+
   const startExport = async () => {
     if (!current) return;
     setBusy("导出中…");
@@ -2109,7 +2165,8 @@ export function App() {
   const savePreset = () => {
     const name = presetName.trim();
     if (!name) return;
-    const next = { ...presets, [name]: persistable(adjustments) };
+    const kept = Object.fromEntries(Object.entries(persistable(adjustments)).filter(([key]) => !NOT_SYNCED.test(key)));
+    const next = { ...presets, [name]: kept };
     setPresets(next);
     savePresets(next);
     setSelectedPreset(name);
@@ -2118,7 +2175,7 @@ export function App() {
 
   const applyPreset = () => {
     const preset = presets[selectedPreset];
-    if (preset) applyEdit({ ...preset, maskOverlay: adjustments.maskOverlay ?? 0 }, true);
+    if (preset) applyEdit({ ...mergeSettings(preset, persistable(adjustments)), maskOverlay: adjustments.maskOverlay ?? 0 }, true);
   };
 
   const deletePreset = () => {
@@ -3072,7 +3129,10 @@ export function App() {
             <>
               <div className="row" role="group" aria-label="局部图层">
                 {locals.map((layer, index) => (
-                  <button key={index} className={`button ${index === activeLocal ? "" : "secondary"}`} disabled={locked} onClick={() => setActiveLocal(index)}>
+                  <button key={index} className={`button ${index === activeLocal ? "" : "secondary"}`} disabled={locked} onClick={() => {
+                      setActiveLocal(index);
+                      setLocalRefine(null);
+                    }}>
                     {{ linear: "线", radial: "圆", brush: "笔", full: "全", subject: "主", background: "背", sky: "天" }[layer.kind]}{index + 1}
                   </button>
                 ))}
@@ -3366,6 +3426,18 @@ export function App() {
               ))}
             </select>
           </div>
+          <label className="field">
+            <span>色彩空间</span>
+            <select aria-label="色彩空间" value={output.colorSpace ?? "srgb"} disabled={locked} onChange={(event) => updateOutput({ colorSpace: event.target.value as OutputColorSpace })}>
+              <option value="srgb">sRGB（网页、手机）</option>
+              <option value="p3">Display P3</option>
+              <option value="adobe">Adobe RGB (1998)</option>
+              <option value="prophoto">ProPhoto RGB</option>
+            </select>
+          </label>
+          {output.colorSpace === "prophoto" && (output.format === "jpeg" || output.bitDepth === 8) && (
+            <p className="progress">ProPhoto RGB 范围很宽，8 位容易出现色阶断层，建议用 16 位 PNG 或 TIFF。</p>
+          )}
           {output.format !== "jpeg" && (
             <div className="row">
               <select aria-label="位深" value={output.bitDepth} disabled={locked} onChange={(event) => updateOutput({ bitDepth: Number(event.target.value) as 8 | 16 })}>

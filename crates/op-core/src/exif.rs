@@ -325,6 +325,16 @@ fn copy_source_tags(source: &[u8], main: &mut Vec<Entry>, details: &mut Vec<Entr
     Some(())
 }
 
+/// Marks an [`export_exif`] payload as not sRGB, as EXIF asks for other colour spaces
+/// (the embedded ICC profile then says which).
+pub fn mark_uncalibrated(exif: &mut [u8]) {
+    // The ColorSpace entry as `export_exif` writes it: tag 0xA001, SHORT, count 1, value 1.
+    const SRGB_ENTRY: [u8; 10] = [0x01, 0xA0, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00];
+    if let Some(at) = exif.windows(SRGB_ENTRY.len()).position(|window| window == SRGB_ENTRY) {
+        exif[at + 8..at + 10].copy_from_slice(&[0xFF, 0xFF]);
+    }
+}
+
 /// Builds an APP1 EXIF payload for a JPEG exported from `source`.
 pub fn export_exif(source: &[u8]) -> Vec<u8> {
     let mut main = vec![ascii(305, SOFTWARE), short(274, 1)];
@@ -408,11 +418,16 @@ pub(crate) fn write_tiff(pixels: &[u8], width: u32, height: u32, bits: u16, icc:
         short(277, 3),
         long(278, height),
         long(279, pixels.len() as u32),
+        rational(282, 72, 1),
+        rational(283, 72, 1),
         short(284, 1),
+        short(296, 2),
         ascii(305, SOFTWARE),
         Entry { tag: ICC_PROFILE, kind: TYPE_UNDEFINED, count: icc.len() as u32, data: icc.to_vec() },
     ];
-    let mut details = vec![short(40961, 1)];
+    // EXIF only names sRGB; anything else is "uncalibrated", described by the ICC profile.
+    let colour_space = if icc == crate::srgb_icc_profile().as_slice() { 1 } else { 0xFFFF };
+    let mut details = vec![short(40961, colour_space)];
     if let Some(block) = exif.and_then(|block| block.strip_prefix(EXIF_PREFIX)) {
         // Whatever could not be read is simply left out.
         let _ = copy_source_tags(block, &mut main, &mut details);
@@ -430,6 +445,24 @@ pub(crate) fn write_tiff(pixels: &[u8], width: u32, height: u32, bits: u16, icc:
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_tiff_in_another_colour_space_is_not_labelled_srgb() {
+        let srgb_entry = [0x01, 0xA0, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00];
+        let has_srgb = |tiff: &[u8]| tiff.windows(10).any(|w| w == srgb_entry);
+        assert!(has_srgb(&write_tiff(&[0; 12], 2, 2, 8, &crate::srgb_icc_profile(), None)));
+        assert!(!has_srgb(&write_tiff(&[0; 12], 2, 2, 8, &crate::OutputSpace::P3.icc_profile(), None)));
+    }
+
+    #[test]
+    fn a_non_srgb_export_says_so() {
+        let mut exif = export_exif(b"not a raw file");
+        let before = exif.clone();
+        mark_uncalibrated(&mut exif);
+        assert_ne!(exif, before);
+        assert_eq!(exif.len(), before.len());
+        assert!(exif.windows(2).any(|w| w == [0xFF, 0xFF]));
+    }
 
     fn read_u16(tiff: &[u8], at: usize) -> u16 {
         u16::from_le_bytes([tiff[at], tiff[at + 1]])

@@ -35,7 +35,7 @@ struct Spline {
 impl Spline {
     /// None when fewer than two distinct inputs leave nothing to interpolate.
     fn new(points: &[[f32; 2]]) -> Option<Self> {
-        let mut knots = points.to_vec();
+        let mut knots: Vec<[f32; 2]> = points.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()).collect();
         knots.sort_by(|a, b| a[0].total_cmp(&b[0]));
         knots.dedup_by(|next, kept| next[0] - kept[0] < MIN_SPACING);
         if knots.len() < 2 {
@@ -47,7 +47,7 @@ impl Spline {
 
     fn at(&self, x: f32) -> f32 {
         let last = self.knots.len() - 1;
-        if x <= self.knots[0][0] {
+        if x.is_nan() || x <= self.knots[0][0] {
             return self.knots[0][1];
         }
         if x >= self.knots[last][0] {
@@ -122,6 +122,7 @@ impl ToneCurve {
             .iter()
             .zip(PARAMETRIC_REGIONS)
             .map(|(&amount, (centre, width))| {
+                let amount = if amount.is_finite() { amount } else { 0.0 };
                 let distance = (x - centre).abs() / width;
                 if distance >= 1.0 { 0.0 } else { amount * PARAMETRIC_REACH * (0.5 + 0.5 * (std::f32::consts::PI * distance).cos()) }
             })
@@ -276,6 +277,15 @@ mod tests {
                 assert!((value - expected).abs() < 1e-4, "case {number} at {x}: {value} against {expected}");
             }
         }
+    }
+
+    #[test]
+    fn non_finite_values_cannot_break_the_table() {
+        let curve = ToneCurve {
+            curve: [vec![[f32::NEG_INFINITY, 0.0], [f32::INFINITY, 1.0]], vec![[0.0, 0.0], [1.0, 1.0]], vec![], vec![]],
+            parametric: [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 0.0],
+        };
+        assert!(curve.lut().iter().all(|&bits| f16::from_bits(bits).is_finite()));
     }
 
     #[test]
