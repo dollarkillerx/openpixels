@@ -14,6 +14,12 @@ public static class Converters
     /// <summary>A slider's label is brighter once it has been moved.</summary>
     public static readonly IValueConverter ChangedForeground = new FuncValueConverter<bool, IBrush>(changed => changed ? Changed : Resting);
 
+    /// <summary>Rejected photos are dimmed in the filmstrip.</summary>
+    public static readonly IValueConverter RejectedOpacity = new FuncValueConverter<bool, double>(rejected => rejected ? 0.35 : 1);
+
+    /// <summary>A group's best photo is called out in the accent colour.</summary>
+    public static readonly IValueConverter BestForeground = new FuncValueConverter<bool, IBrush>(best => best ? new SolidColorBrush(Color.Parse("#FF7A45")) : new SolidColorBrush(Color.Parse("#A0A0A8")));
+
     /// <summary>The clip toggles light up when that end of the histogram is clipped.</summary>
     public static readonly IValueConverter ShadowClipBrush = new FuncValueConverter<HistogramData?, IBrush>(data => data?.Clipped(0) == true ? ShadowClip : Idle);
     public static readonly IValueConverter HighlightClipBrush = new FuncValueConverter<HistogramData?, IBrush>(data => data?.Clipped(255) == true ? HighlightClip : Idle);

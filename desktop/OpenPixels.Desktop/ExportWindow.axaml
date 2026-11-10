@@ -7,6 +7,10 @@
         WindowStartupLocation="CenterOwner" Background="{StaticResource OpPanelBrush}"
         Icon="avares://OpenPixels/Assets/app-icon.png">
   <StackPanel Margin="18" Spacing="10">
+    <Grid ColumnDefinitions="96,*" IsVisible="{Binding HasChoiceOfPhotos}">
+      <TextBlock Text="导出哪些" VerticalAlignment="Center" />
+      <ComboBox Grid.Column="1" ItemsSource="{Binding Scopes}" SelectedIndex="{Binding ScopeIndex}" Width="200" />
+    </Grid>
     <Grid ColumnDefinitions="96,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
       <TextBlock Text="导出预设" VerticalAlignment="Center" />
       <StackPanel Grid.Column="1" Spacing="6">

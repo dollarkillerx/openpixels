@@ -25,6 +25,10 @@ public partial class MainWindow : Window
         Curve.Changed += _model.SetCurve;
         CropLayer.Changed += _model.SetCrop;
         _model.OverlayChanged += UpdateOverlays;
+        _model.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.IsGridView)) ShowGrid(_model.IsGridView);
+        };
         AddHandler(DragDrop.DropEvent, OnDrop);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
@@ -46,9 +50,49 @@ public partial class MainWindow : Window
     private async void OnExport(object? sender, RoutedEventArgs e)
     {
         if (!_model.CanEdit) return;
-        var dialog = new ExportWindow(_model.Output);
+        var selected = _model.SelectedPhotos.Count;
+        var dialog = new ExportWindow(_model.Output, selected, _model.VisiblePhotos.Count);
         await dialog.ShowDialog(this);
-        if (dialog.Result is { } result) await _model.ExportToFolderAsync(result.Settings, result.Folder);
+        if (dialog.Result is not { } result) return;
+        switch (result.Scope)
+        {
+            case ExportScope.Selected:
+                await _model.ExportManyAsync(_model.VisiblePhotos.Where(_model.SelectedPhotos.Contains).ToList(), result.Settings, result.Folder);
+                break;
+            case ExportScope.Visible:
+                await _model.ExportManyAsync([.. _model.VisiblePhotos], result.Settings, result.Folder);
+                break;
+            default:
+                await _model.ExportToFolderAsync(result.Settings, result.Folder);
+                break;
+        }
+    }
+
+    private async void OnImportProfile(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "导入 ICC 配置",
+            FileTypeFilter = [new FilePickerFileType("ICC 配置") { Patterns = ["*.icc", "*.icm"] }],
+        });
+        if (files.FirstOrDefault()?.TryGetLocalPath() is { } path) await _model.ImportProfileAsync(path);
+    }
+
+    /// <summary>Grid view gives the whole window to the photos; single view brings the editor back.</summary>
+    private void ShowGrid(bool grid)
+    {
+        LibraryPanel.Width = grid ? double.NaN : 248;
+        Grid.SetColumnSpan(LibraryPanel, grid ? 3 : 1);
+        LibraryTools.Width = grid ? double.NaN : 224;
+        DevelopPanel.IsVisible = !grid;
+        StageHost.IsVisible = !grid;
+        Filmstrip.Classes.Set("grid", grid);
+        if (_model.SelectedPhoto is { } photo) Filmstrip.ScrollIntoView(photo);
+    }
+
+    private void OnFilmstripDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (_model.IsGridView) _model.IsGridView = false;
     }
 
     private async void OnImportLook(object? sender, RoutedEventArgs e)
@@ -206,6 +250,40 @@ public partial class MainWindow : Window
                 break;
             case Key.W when !command:
                 if (_model.CanEdit) _model.PickWhiteBalanceCommand.Execute(null);
+                break;
+            case Key.C when command && shift:
+                _model.CopySettingsCommand.Execute(null);
+                break;
+            case Key.V when command && shift:
+                _model.PasteSettingsCommand.Execute(null);
+                break;
+            case >= Key.D0 and <= Key.D5 when !command:
+                _model.SetRating(e.Key - Key.D0);
+                break;
+            case >= Key.NumPad0 and <= Key.NumPad5 when !command:
+                _model.SetRating(e.Key - Key.NumPad0);
+                break;
+            case >= Key.D6 and <= Key.D9 when !command:
+                _model.ToggleLabel(e.Key - Key.D5);
+                break;
+            case Key.P when !command:
+                _model.SetFlag(CullStore.FlagPick);
+                break;
+            case Key.X when !command:
+                _model.SetFlag(CullStore.FlagReject);
+                break;
+            case Key.U when !command:
+                _model.SetFlag(0);
+                break;
+            case Key.G when !command:
+                _model.IsGridView = true;
+                break;
+            case Key.E when !command:
+            case Key.Enter when _model.IsGridView:
+                _model.IsGridView = false;
+                break;
+            case Key.S when !command:
+                _model.ToggleProof();
                 break;
             case Key.Escape:
                 _model.CancelToolsCommand.Execute(null);

@@ -106,8 +106,23 @@ public static partial class Edits
         return json.ToJsonString();
     }
 
-    /// <summary>Framing and masks belong to one photo, so presets and pasting leave them out.</summary>
-    public static bool IsFraming(string key) => key.StartsWith("crop", StringComparison.Ordinal) || key is "quarter" or "rotate";
+    /// <summary>
+    /// Framing and local layers belong to one photo, so presets, pasting and syncing leave
+    /// them out. Matches NOT_SYNCED in the web edition.
+    /// </summary>
+    public static bool BelongsToOnePhoto(string key) =>
+        key.StartsWith("crop", StringComparison.Ordinal) || key is "quarter" or "rotate" || (key.StartsWith("local", StringComparison.Ordinal) && key.Length > 5 && char.IsDigit(key[5]));
+
+    /// <summary>A photo's edit with source's settings, keeping what belongs only to that photo.</summary>
+    public static Dictionary<string, double> Merge(IReadOnlyDictionary<string, double> source, IReadOnlyDictionary<string, double> target)
+    {
+        var merged = target.Where(pair => BelongsToOnePhoto(pair.Key)).ToDictionary();
+        foreach (var (key, value) in source)
+        {
+            if (!BelongsToOnePhoto(key)) merged[key] = value;
+        }
+        return merged;
+    }
 
     // History names, as in the web edition's describeChange.
 

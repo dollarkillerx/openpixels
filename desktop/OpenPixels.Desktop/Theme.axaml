@@ -213,6 +213,17 @@
   <Style Selector="ListBox.filmstrip ListBoxItem">
     <Setter Property="Padding" Value="10,5" />
   </Style>
+  <!-- In grid view the filmstrip fills the window and wraps. -->
+  <Style Selector="ListBox.filmstrip.grid">
+    <Setter Property="ItemsPanel">
+      <ItemsPanelTemplate>
+        <WrapPanel ItemWidth="232" Margin="8" />
+      </ItemsPanelTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="ListBox.filmstrip.grid Border.frame">
+    <Setter Property="Height" Value="168" />
+  </Style>
   <Style Selector="ListBox.filmstrip ListBoxItem /template/ ContentPresenter#PART_ContentPresenter, ListBox.filmstrip ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.filmstrip ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.filmstrip ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="Transparent" />
   </Style>

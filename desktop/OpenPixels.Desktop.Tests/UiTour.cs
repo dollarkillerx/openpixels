@@ -114,9 +114,43 @@ public sealed class UiTour
             await Shot(window, "12-heic");
         }
 
-        var export = new ExportWindow(model.Output);
+        // Batch 2: culling, grouping, grid view, presets, soft proofing, projects.
+        model.SelectedPhoto = model.Photos[0];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        model.SetRating(4);
+        model.SetFlag(CullStore.FlagPick);
+        model.ToggleLabel(3);
+        model.SelectedPhoto = model.Photos[1];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        model.SetRating(2);
+        model.SetFlag(CullStore.FlagReject);
+        await model.Analyze();
+        await Shot(window, "13-culling");
+        model.ToggleGrid();
+        await Shot(window, "14-grid");
+        model.ToggleGrid();
+
+        model.SelectedPhoto = model.Photos[0];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        Expand(window, "软打样", "预设与同步");
+        await WaitFor(() => model.ProofStatus.Length > 0);
+        model.SelectedProofProfile = model.ProofProfiles.FirstOrDefault(profile => profile.Space == "CMYK");
+        model.ProofGamut = true;
+        model.ProofOn = true;
+        await Task.Delay(1200);
+        await Shot(window, "15-soft-proof");
+        File.WriteAllText(Path.Combine(Folder, "proof.txt"), $"{model.ProofStatus} {model.ProofBadge}\n" + string.Join("\n", model.ProofProfiles));
+        model.ProofOn = false;
+
+        model.NewProjectName = "巡检";
+        model.SaveProjectCommand.Execute(null);
+        ShowTab(window, 3);
+        await Shot(window, "16-projects");
+        ShowTab(window, 0);
+
+        var export = new ExportWindow(model.Output, 2, model.Photos.Count);
         export.Show();
-        await Shot(export, "13-export-dialog");
+        await Shot(export, "17-export-dialog");
         export.Close();
 
         // How fast the preview follows a slider on the RAW: each change waits for the next frame.
@@ -138,7 +172,7 @@ public sealed class UiTour
         window.Width = 1000;
         window.Height = 640;
         await Task.Delay(800);
-        await Shot(window, "14-small-window");
+        await Shot(window, "18-small-window");
         File.WriteAllText(Path.Combine(Folder, "status.txt"), model.Status);
     }
 }

@@ -27,7 +27,7 @@ public sealed class MainWindowTests : IDisposable
 
     /// <summary>A colourful gradient saved as PNG, so the test needs no fixture files.
     /// Encoded here because the headless platform cannot encode bitmaps.</summary>
-    internal static string MakePhoto(string folder, string name = "gradient.png", int width = 300, int height = 200, (byte R, byte G, byte B)? solid = null)
+    internal static string MakePhoto(string folder, string name = "gradient.png", int width = 300, int height = 200, (byte R, byte G, byte B)? solid = null, Func<int, int, (byte R, byte G, byte B)>? pixel = null)
     {
         var raw = new MemoryStream();
         for (var y = 0; y < height; y++)
@@ -35,9 +35,10 @@ public sealed class MainWindowTests : IDisposable
             raw.WriteByte(0); // No filter.
             for (var x = 0; x < width; x++)
             {
-                raw.WriteByte(solid?.R ?? (byte)(x * 255 / width));
-                raw.WriteByte(solid?.G ?? (byte)(y * 255 / height));
-                raw.WriteByte(solid?.B ?? 90);
+                var (r, g, b) = pixel?.Invoke(x, y) ?? solid ?? ((byte)(x * 255 / width), (byte)(y * 255 / height), (byte)90);
+                raw.WriteByte(r);
+                raw.WriteByte(g);
+                raw.WriteByte(b);
             }
         }
         var compressed = new MemoryStream();

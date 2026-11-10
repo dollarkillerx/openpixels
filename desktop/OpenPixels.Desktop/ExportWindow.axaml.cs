@@ -13,12 +13,34 @@ public sealed partial class ExportViewModel : ObservableObject
     private readonly JsonFile<Dictionary<string, OutputSettings>> _presetFile = new("outputPresets.json");
     private readonly Dictionary<string, OutputSettings> _presets;
 
-    public ExportViewModel(OutputSettings settings)
+    private readonly List<ExportScope> _scopes = [ExportScope.Current];
+
+    public ExportViewModel(OutputSettings settings, int selected = 1, int visible = 1)
     {
         Settings = settings.Copy();
         _presets = _presetFile.Load();
         PresetNames = new(_presets.Keys.Order());
+        var scopes = new List<string> { "当前照片" };
+        if (selected > 1)
+        {
+            scopes.Add($"选中的 {selected} 张");
+            _scopes.Add(ExportScope.Selected);
+        }
+        if (visible > 1)
+        {
+            scopes.Add($"列表中的全部 {visible} 张");
+            _scopes.Add(ExportScope.Visible);
+        }
+        Scopes = [.. scopes];
     }
+
+    public string[] Scopes { get; }
+
+    [ObservableProperty]
+    private int _scopeIndex;
+
+    public ExportScope Scope => _scopes[Math.Clamp(ScopeIndex, 0, _scopes.Count - 1)];
+    public bool HasChoiceOfPhotos => Scopes.Length > 1;
 
     public OutputSettings Settings { get; private set; }
 
@@ -158,23 +180,25 @@ public sealed partial class ExportViewModel : ObservableObject
     private void ClearLogo() => SetLogo(null);
 }
 
+public enum ExportScope { Current, Selected, Visible }
+
 public partial class ExportWindow : Window
 {
     private readonly ExportViewModel _model;
 
-    public ExportWindow() : this(new OutputSettings())
+    public ExportWindow() : this(new OutputSettings(), 1, 1)
     {
     }
 
-    public ExportWindow(OutputSettings settings)
+    public ExportWindow(OutputSettings settings, int selected, int visible)
     {
         InitializeComponent();
-        _model = new ExportViewModel(settings);
+        _model = new ExportViewModel(settings, selected, visible);
         DataContext = _model;
     }
 
-    /// <summary>The settings and the folder chosen, or null if cancelled.</summary>
-    public (OutputSettings Settings, string Folder)? Result { get; private set; }
+    /// <summary>The settings, the folder and which photos, or null if cancelled.</summary>
+    public (OutputSettings Settings, string Folder, ExportScope Scope)? Result { get; private set; }
 
     private void OnCancel(object? sender, RoutedEventArgs e) => Close();
 
@@ -192,7 +216,7 @@ public partial class ExportWindow : Window
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "导出到文件夹" });
         if (folders.FirstOrDefault()?.TryGetLocalPath() is not { } folder) return;
-        Result = (_model.Settings, folder);
+        Result = (_model.Settings, folder, _model.Scope);
         Close();
     }
 }

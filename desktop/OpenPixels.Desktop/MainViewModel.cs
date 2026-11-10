@@ -19,8 +19,43 @@ public sealed partial class PhotoItem(string path) : ObservableObject
     /// <summary>Set when the background thumbnailer could not read the file, so it is not retried.</summary>
     internal bool ThumbnailFailed { get; set; }
 
+    /// <summary>Set when the edit changed without the photo being open, so its thumbnail is redrawn.</summary>
+    internal bool ThumbnailStale { get; set; }
+
+    internal bool NeedsThumbnail => (Thumbnail is null || ThumbnailStale) && !ThumbnailFailed;
+
     [ObservableProperty]
     private Bitmap? _thumbnail;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Stars))]
+    private int _rating;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPicked), nameof(IsRejected))]
+    private int _flag;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LabelBrush), nameof(HasLabel))]
+    private int _label;
+
+    /// <summary>1-based smart group, or 0 before the photos are analysed.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GroupText))]
+    private int _group;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GroupText))]
+    private bool _isBest;
+
+    public string Stars => Rating == 0 ? "" : new string('★', Rating);
+    public bool IsPicked => Flag == CullStore.FlagPick;
+    public bool IsRejected => Flag == CullStore.FlagReject;
+    public bool HasLabel => Label > 0;
+    public Avalonia.Media.IBrush LabelBrush => Label > 0
+        ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(ColourLabels.All[Label - 1].Colour))
+        : Avalonia.Media.Brushes.Transparent;
+    public string GroupText => Group == 0 ? "" : IsBest ? $"组 {Group} · 最佳" : $"组 {Group}";
 }
 
 public sealed partial class SliderItem(SliderSpec spec, Action<SliderItem> changed) : ObservableObject
@@ -92,6 +127,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private readonly EngineClient _engine = new();
     private readonly Lazy<EngineClient> _thumbnailer = new(() => new EngineClient());
+    /// <summary>The background engine handles one photo at a time for thumbnails, analysis and batch export.</summary>
+    private readonly SemaphoreSlim _backgroundTurn = new(1, 1);
+    private readonly CullStore _cull = new();
+    private readonly PresetStore _presets = new();
+    private readonly ProjectStore _projects = new();
+    private readonly JsonFile<Dictionary<string, PhotoAnalysis>> _analysisFile = new("analyses.json");
+    private readonly JsonFile<ProofSettings> _proofFile = new("proof.json");
     private readonly EditStore _store = new();
     private readonly LookLibrary _looks = new();
     private readonly JsonFile<OutputSettings> _outputFile = new("output.json");
@@ -139,7 +181,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             OnPropertyChanged(nameof(HasPhotos));
             OnPropertyChanged(nameof(PhotoCount));
+            OnPropertyChanged(nameof(CanResume));
         };
+        SelectedPhotos.CollectionChanged += (_, _) => OnSelectionChanged();
+        RefreshPresetNames();
+        RefreshProjects();
 
         _settleTimer.Tick += (_, _) =>
         {
@@ -191,9 +237,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>The edit as it stands, for controls that draw from it.</summary>
     public IReadOnlyDictionary<string, double> CurrentEdit => _edit;
 
-    [ObservableProperty]
-    private PhotoItem? _selectedPhoto;
-
     /// <summary>Size and type of the open photo, for the panel header.</summary>
     [ObservableProperty]
     private string _photoInfo = "";
@@ -213,6 +256,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AutoToneCommand), nameof(ResetCommand), nameof(UndoCommand), nameof(RedoCommand), nameof(TakeSnapshotCommand))]
+    [NotifyPropertyChangedFor(nameof(HasOthersSelected))]
     private bool _canEdit;
 
     [ObservableProperty]
@@ -303,6 +347,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             await _engine.Ready;
             Status = "打开照片开始修图";
+            _ = LoadProfilesAsync();
         }
         catch (Exception exception)
         {
@@ -319,11 +364,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var path in paths.Where(path => !known.Contains(path) && File.Exists(path)))
         {
             known.Add(path);
-            var photo = new PhotoItem(path);
+            var photo = new PhotoItem(path) { Rating = _cull.Rating(EditStore.IdOf(path)), Flag = _cull.Flag(EditStore.IdOf(path)), Label = _cull.Label(EditStore.IdOf(path)) };
             Photos.Add(photo);
             first ??= photo;
         }
+        ApplyGroups();
+        RefreshVisible();
         if (first is not null) SelectedPhoto = first;
+        SaveSession();
         _ = FillThumbnailsAsync();
     }
 
@@ -363,20 +411,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _fillingThumbnails = true;
         try
         {
-            var engine = _thumbnailer.Value;
-            await engine.Ready;
-            while (Photos.FirstOrDefault(photo => photo.Thumbnail is null && !photo.ThumbnailFailed) is { } photo)
+            // The open photo gets its thumbnail from the main engine.
+            while (Photos.FirstOrDefault(photo => photo.NeedsThumbnail && photo != SelectedPhoto) is { } photo)
             {
                 try
                 {
-                    await PhotoLoader.DecodeAsync(engine, photo.Path);
-                    await engine.CallAsync("buildProxy", new { maxLongEdge = ThumbnailProxyLongEdge });
-                    var edit = _store.Load(photo.Id);
-                    await engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(edit));
-                    await SetLookAsync(engine, (int)edit.GetValueOrDefault("lutId"));
-                    var bitmap = await FramedThumbnailAsync(engine);
+                    var stale = photo.ThumbnailStale;
+                    var bitmap = await WithBackgroundEngine(async engine =>
+                    {
+                        await LoadForBackgroundAsync(engine, photo, ThumbnailProxyLongEdge);
+                        return await FramedThumbnailAsync(engine);
+                    });
                     // The photo may have been opened, and given a fresher thumbnail, meanwhile.
-                    photo.Thumbnail ??= bitmap;
+                    if (stale || photo.Thumbnail is null) photo.Thumbnail = bitmap;
+                    photo.ThumbnailStale = false;
                 }
                 catch (Exception)
                 {
@@ -402,11 +450,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     // ---- Opening ----
-
-    partial void OnSelectedPhotoChanged(PhotoItem? value)
-    {
-        if (value is not null) _ = OpenAsync(value);
-    }
 
     private async Task OpenAsync(PhotoItem photo)
     {
@@ -444,6 +487,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             await _engine.CallAsync("setView", new { zoom = 1.0, x = 0.5, y = 0.5 });
             await _engine.CallAsync("setCompare", new { split = CompareOn ? CompareSplit : 0 });
             await _engine.CallAsync("setClipWarnings", new { highlights = ClipHighlights, shadows = ClipShadows });
+            if (ProofOn) await SendProofAsync();
             if (ticket != _openTicket) return;
             _imageOpen = true;
             CanEdit = true;
@@ -1244,6 +1288,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        SaveSession();
         _engine.Dispose();
         if (_thumbnailer.IsValueCreated) _thumbnailer.Value.Dispose();
     }
