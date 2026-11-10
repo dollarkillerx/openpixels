@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import * as ort from "onnxruntime-web/all";
+import { fetchAsset } from "./assets";
 import { INPAINT_MODEL } from "./model";
 import type { InpaintReply, InpaintRequest } from "./protocol";
 
@@ -7,6 +8,13 @@ import type { InpaintReply, InpaintRequest } from "./protocol";
 ort.env.wasm.wasmPaths = `${self.location.origin}/ort/`;
 // One thread, on purpose: as of 1.31.1, several hang in this worker on this model.
 ort.env.wasm.numThreads = 1;
+
+// The runtime's wasm is passed in as bytes, so it can come from a split build like the models.
+let runtime: Promise<void> | null = null;
+const loadRuntime = () =>
+  (runtime ??= fetchAsset(`${self.location.origin}/ort/ort-wasm-simd-threaded.jsep.wasm`).then((binary) => {
+    ort.env.wasm.wasmBinary = binary;
+  }));
 
 let session: ort.InferenceSession | null = null;
 
@@ -20,7 +28,8 @@ async function inpaint({ id, image, mask }: InpaintRequest) {
     const start = performance.now();
     // CPU on purpose. As of onnxruntime-web 1.31.1, on this model the JSEP WebGPU
     // provider fails in the Fourier blocks and the native one returns a wrong fill.
-    session = await ort.InferenceSession.create(INPAINT_MODEL.url, { executionProviders: ["wasm"] });
+    await loadRuntime();
+    session = await ort.InferenceSession.create(await fetchAsset(INPAINT_MODEL.url), { executionProviders: ["wasm"] });
     loadMs = performance.now() - start;
   }
 

@@ -2,6 +2,7 @@
 // The JSEP build, on purpose. As of 1.31.1 the "/webgpu" entry point (the native
 // WebGPU execution provider) runs MODNet without any error but returns a wrong matte.
 import * as ort from "onnxruntime-web/all";
+import { fetchAsset } from "./assets";
 import { MODEL, SKY_MODEL } from "./model";
 import type { SegmentReply, SegmentRequest } from "./protocol";
 
@@ -11,6 +12,13 @@ ort.env.wasm.wasmPaths = `${self.location.origin}/ort/`;
 // All the model work happens on the GPU, so extra CPU threads would buy nothing and
 // would require cross-origin isolation.
 ort.env.wasm.numThreads = 1;
+
+// The runtime's wasm is passed in as bytes, so it can come from a split build like the models.
+let runtime: Promise<void> | null = null;
+const loadRuntime = () =>
+  (runtime ??= fetchAsset(`${self.location.origin}/ort/ort-wasm-simd-threaded.jsep.wasm`).then((binary) => {
+    ort.env.wasm.wasmBinary = binary;
+  }));
 
 const URLS = { matte: MODEL.url, sky: SKY_MODEL.url };
 const sessions = new Map<SegmentRequest["model"], ort.InferenceSession>();
@@ -73,7 +81,8 @@ async function segment({ id, model, tensor, width, height }: SegmentRequest) {
   if (!session) {
     const start = performance.now();
     // WebGPU only: a silent fallback to CPU would hide a slowdown of orders of magnitude.
-    session = await ort.InferenceSession.create(URLS[model], { executionProviders: ["webgpu"] });
+    await loadRuntime();
+    session = await ort.InferenceSession.create(await fetchAsset(URLS[model]), { executionProviders: ["webgpu"] });
     sessions.set(model, session);
     loadMs = performance.now() - start;
   }

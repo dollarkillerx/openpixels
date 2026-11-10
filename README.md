@@ -168,7 +168,17 @@ pnpm --dir web build
 
 - 必须部署在域名根路径：模型和 ONNX Runtime 用的是 `/models/`、`/ort/` 这样的绝对路径。
 - 服务器要以 `application/wasm` 返回 `.wasm`。
-- `lama.onnx`（93 MB）、`skywater.onnx`（50 MB）、`modnet.onnx`（25 MB）和 ONNX Runtime 的 wasm（29 MB）体积较大，部分托管平台对单个文件有大小限制。
+- 大于 24 MiB 的文件（`lama.onnx`、`skywater.onnx`、`modnet.onnx` 和 ONNX Runtime 的 wasm）在构建时会切成 20 MiB 的分片，并写一个 `.parts.json` 清单，浏览器加载时再拼回去，所以能部署到 Cloudflare Pages 这类单文件不超过 25 MiB 的托管。
+
+部署到 Cloudflare Pages（项目 `openpixels`，地址 https://openpixels.pages.dev）：
+
+```bash
+pnpm --dir web build
+```
+
+```bash
+npx wrangler pages deploy web/dist --project-name openpixels --branch main
+```
 - 不需要配置 COOP/COEP 响应头：导出用 Worker 池并行，没有用 SharedArrayBuffer。
 
 本地预览生产构建：
