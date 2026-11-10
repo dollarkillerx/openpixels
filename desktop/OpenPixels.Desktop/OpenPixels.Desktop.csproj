@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>OpenPixels.Desktop</RootNamespace>
+    <AssemblyName>OpenPixels</AssemblyName>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <!-- The engine is the Rust crate op-native, built by cargo and copied next to the app. -->
+  <PropertyGroup>
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../'))</RepoRoot>
+    <NativeLibName Condition="$([MSBuild]::IsOSPlatform('OSX'))">libop_native.dylib</NativeLibName>
+    <NativeLibName Condition="$([MSBuild]::IsOSPlatform('Linux'))">libop_native.so</NativeLibName>
+    <NativeLibName Condition="$([MSBuild]::IsOSPlatform('Windows'))">op_native.dll</NativeLibName>
+    <NativeLibPath>$(RepoRoot)target/release/$(NativeLibName)</NativeLibPath>
+  </PropertyGroup>
+
+  <Target Name="BuildNativeEngine" BeforeTargets="BeforeBuild" Condition="'$(SkipNativeBuild)' != 'true'">
+    <Exec Command="sh &quot;$(RepoRoot)scripts/build-native.sh&quot;" Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
+    <Exec Command="cargo build -p op-native --release" WorkingDirectory="$(RepoRoot)" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+  </Target>
+
+  <Target Name="CopyNativeEngine" AfterTargets="Build">
+    <Copy SourceFiles="$(NativeLibPath)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- The Lensfun database (CC BY-SA 3.0), if scripts/fetch-lensfun.sh has fetched it. -->
+  <ItemGroup>
+    <None Include="$(RepoRoot)web/public/lensfun/lensfun.json;$(RepoRoot)web/public/lensfun/NOTICE.txt"
+          Condition="Exists('$(RepoRoot)web/public/lensfun/lensfun.json')"
+          Link="lensfun/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

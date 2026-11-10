@@ -1,0 +1,13 @@
+[package]
+name = "op-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+op-core = { path = "../op-core" }
+op-gpu = { path = "../op-gpu" }
+serde.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true

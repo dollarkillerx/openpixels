@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="OpenPixels.Desktop.Tests/OpenPixels.Desktop.Tests.csproj" />
+  <Project Path="OpenPixels.Desktop/OpenPixels.Desktop.csproj" />
+</Solution>

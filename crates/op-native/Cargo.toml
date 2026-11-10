@@ -1,0 +1,22 @@
+[package]
+name = "op-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck.workspace = true
+op-engine = { path = "../op-engine" }
+op-gpu = { path = "../op-gpu" }
+pollster.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+op-core = { path = "../op-core" }
+half.workspace = true

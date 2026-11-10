@@ -663,6 +663,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "op-engine"
+version = "0.1.0"
+dependencies = [
+ "op-core",
+ "op-gpu",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "op-gpu"
 version = "0.1.0"
 dependencies = [
@@ -677,14 +688,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "op-native"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "half",
+ "op-core",
+ "op-engine",
+ "op-gpu",
+ "pollster",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "op-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
- "op-core",
+ "op-engine",
  "op-gpu",
- "serde",
- "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

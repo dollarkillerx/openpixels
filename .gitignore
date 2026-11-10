@@ -9,3 +9,7 @@ web/public/lensfun/
 web/public/ort/
 web/public/mediapipe/
 .DS_Store
+
+# Desktop (.NET) build output
+desktop/**/bin/
+desktop/**/obj/

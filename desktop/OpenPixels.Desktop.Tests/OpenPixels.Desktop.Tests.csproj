@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.6" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../OpenPixels.Desktop/OpenPixels.Desktop.csproj" />
+  </ItemGroup>
+
+  <!-- The engine library sits next to the app; the tests run from their own folder. -->
+  <Target Name="CopyNativeEngineForTests" AfterTargets="Build">
+    <ItemGroup>
+      <NativeEngine Include="$(MSBuildThisFileDirectory)../../target/release/libop_native.*" Exclude="$(MSBuildThisFileDirectory)../../target/release/libop_native.d;$(MSBuildThisFileDirectory)../../target/release/libop_native.rlib" />
+      <NativeEngine Include="$(MSBuildThisFileDirectory)../../target/release/op_native.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeEngine)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="Exists('%(FullPath)')" />
+  </Target>
+
+</Project>

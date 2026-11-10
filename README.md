@@ -7,7 +7,7 @@
 | 版本 | 形态 | 功能 |
 |---|---|---|
 | Lite | 浏览器，静态部署 | 对齐 Lightroom Classic 的修图和选片功能 |
-| 完整版 | 计划用 Avalonia 做桌面端；目前可用网页开发版预览 | Lite 全部功能，加上皮肤修饰、液化、换背景、换天、追色等 |
+| 完整版 | Avalonia 桌面端（开发中，见下文“桌面版”）；网页开发版可预览全部功能 | Lite 全部功能，加上皮肤修饰、液化、换背景、换天、追色等 |
 
 ## 功能
 
@@ -74,7 +74,10 @@ AI 功能用到的模型：主体和背景蒙版用 MODNet，天空蒙版和换�
 |---|---|
 | `crates/op-core` | 解码、线性图像、调色参数、曲线、镜头和几何、修复、ICC 读写和软打样、导出编码 |
 | `crates/op-gpu` | wgpu 渲染：代理图预览、分块导出、WGSL 着色器 |
-| `crates/op-wasm` | 浏览器绑定 |
+| `crates/op-engine` | 编辑引擎：打开、修复、局部、预览、导出等流程，网页和桌面共用 |
+| `crates/op-wasm` | 浏览器绑定（wasm-bindgen，画到 OffscreenCanvas） |
+| `crates/op-native` | 桌面绑定（C ABI，离屏渲染后回传像素） |
+| `desktop` | Avalonia 桌面版（C#/.NET 10）和它的无头界面测试 |
 | `web` | React 界面，引擎运行在 Worker 和 OffscreenCanvas 中 |
 | `scripts` | 构建 WASM、下载模型和镜头库、生成测试用 DNG |
 
@@ -103,6 +106,35 @@ pnpm --dir web dev
 ```
 
 开发时 `pnpm --dir web dev` 是完整版，`pnpm --dir web dev:lite` 是 Lite。
+
+## 桌面版
+
+桌面版用 Avalonia 12 和 .NET 10，引擎是同一套 Rust 代码：`op-native` 编成动态库，C# 通过 P/Invoke 调用一个入口 `op_engine_call`（方法名、JSON 参数、字节数据）。构建 C# 工程时会自动调用 `scripts/build-native.sh` 编译 Rust 部分。
+
+```bash
+dotnet run --project desktop/OpenPixels.Desktop
+```
+
+```bash
+dotnet test desktop/OpenPixels.Desktop.Tests
+```
+
+目前已有：
+
+- **导入**：打开照片或整个文件夹，也可以拖进窗口；RAW（全尺寸冲洗多线程）、JPEG、PNG、TIFF；macOS 上用系统解码器打开 HEIC。胶片条缩略图在后台生成，调色后自动更新。
+- **查看**：直方图和溢出警告，适合窗口、100% 和滚轮缩放，放大后显示全分辨率细节，前后对比。
+- **调色**：白平衡和吸管，影调、可自由加点的曲线（背后显示直方图）和参数曲线，HSL，颜色混合点，色调分离色轮，色彩与效果，校准，智能调色。
+- **滤镜**：24 种内置风格滤镜，与网页版效果一致；可导入 `.cube` LUT。
+- **相机与镜头**：相机匹配色彩配置，文件内的镜头数据或 Lensfun 镜头库自动校正，手动镜头校正和透视矫正。
+- **构图**：裁剪（固定比例或自由）、旋转、90° 转向。
+- **历史**：撤销、重做、历史记录和快照。
+- **导出**：JPEG、8/16 位 PNG 和 TIFF，四种色彩空间，尺寸、质量、文件名规则、文字或图片水印，导出预设。
+
+修图参数、快照、导入的 LUT 和导出设置保存在用户数据目录，可用 `OPENPIXELS_DATA_DIR` 指定。编辑参数的键与网页版相同。Lensfun 镜头库需要先运行 `scripts/fetch-lensfun.sh`，构建时会一起复制。
+
+快捷键：`⌘Z` / `⇧⌘Z` 撤销和重做（Windows 用 `Ctrl+Z` / `Ctrl+Y`），`⌘O` 打开，`⌘E` 导出，`Z` 缩放，`J` 溢出警告，`R` 裁剪，`W` 白平衡吸管，按住 `\` 看修图前，`←` / `→` 切换照片，`Esc` 退出当前工具。
+
+还没有移植的：选片（星标、旗标、色标、筛选）、预设和同步、批量导出、软打样、修复和局部调整、AI 蒙版和消除，以及完整版独有的功能。
 
 ## 构建与部署
 
@@ -135,6 +167,10 @@ cargo test -p op-core -p op-gpu
 pnpm --dir web test
 ```
 
+```bash
+dotnet test desktop/OpenPixels.Desktop.Tests
+```
+
 `op-gpu` 的测试需要本机有可用的 GPU。曲线在 Rust 和 TypeScript 中各有一份实现，两边的测试都对照 `crates/op-core/src/curve_cases.json`，保证画出来的曲线和实际效果一致。
 
 ## 已知限制
@@ -142,6 +178,7 @@ pnpm --dir web test
 - 只在 Chrome 系浏览器（含 Edge）上测试过；Safari 和 Firefox 的 WebGPU 支持还在变化。
 - 调色管线在 sRGB 原色下工作。导出到 P3、Adobe RGB 或 ProPhoto 时转换和配置都正确，但不会保留超出 sRGB 的颜色。
 - 网页无法读取系统的 ICC 文件，软打样需要手动导入配置。
+- 桌面版目前只在 macOS 上测试过；Windows 和 Linux 上暂时不能打开 HEIC。
 - AI 消除单线程运行，一次约 10–20 秒。
 
 ## 贡献约定：第三方代码

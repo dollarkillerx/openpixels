@@ -1,0 +1,285 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:OpenPixels.Desktop"
+        x:Class="OpenPixels.Desktop.MainWindow"
+        x:DataType="local:MainViewModel"
+        Title="OpenPixels" Width="1440" Height="900" MinWidth="980" MinHeight="600"
+        Background="#141416" DragDrop.AllowDrop="True">
+  <Window.Styles>
+    <Style Selector="Expander">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="Margin" Value="0,0,0,4" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="#8a8a92" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Border.toolbar Button, Border.toolbar ToggleButton">
+      <Setter Property="Padding" Value="10,4" />
+    </Style>
+    <Style Selector="Grid.sliderRow Slider">
+      <Setter Property="Margin" Value="0" />
+      <Setter Property="Height" Value="32" />
+    </Style>
+    <Style Selector="ListBox.segments ListBoxItem">
+      <Setter Property="Padding" Value="8,3" />
+      <Setter Property="MinWidth" Value="0" />
+    </Style>
+  </Window.Styles>
+
+  <Window.DataTemplates>
+    <DataTemplate DataType="local:SliderItem">
+      <Grid ColumnDefinitions="92,*,44" Margin="0" Classes="sliderRow">
+        <TextBlock Text="{Binding Label}" FontSize="12" VerticalAlignment="Center"
+                   Foreground="{Binding Changed, Converter={x:Static local:Converters.ChangedForeground}}" />
+        <Slider Grid.Column="1" Minimum="{Binding Min}" Maximum="{Binding Max}" Value="{Binding Value}"
+                SmallChange="0.01" LargeChange="0.1" IsEnabled="{Binding $parent[Window].((local:MainViewModel)DataContext).CanEdit}"
+                DoubleTapped="OnSliderDoubleTapped" />
+        <TextBlock Grid.Column="2" Text="{Binding Display}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#a0a0a8" />
+      </Grid>
+    </DataTemplate>
+  </Window.DataTemplates>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Background="#1c1c1f" Padding="10,6" Classes="toolbar">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <ToggleButton Content="对比" IsChecked="{Binding CompareOn}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="左右对比修图前后；按住 \ 看整张修图前" />
+          <Button Content="适合" Command="{Binding FitViewCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="Z 在适合窗口和 100% 之间切换" />
+          <Button Content="100%" Command="{Binding ActualPixelsCommand}" IsEnabled="{Binding CanEdit}" />
+          <TextBlock Text="{Binding ZoomLabel}" VerticalAlignment="Center" Width="44" TextAlignment="Right" Foreground="#a0a0a8" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="OpenPixels" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
+          <Button Content="打开照片…" Click="OnOpen" ToolTip.Tip="⌘O / Ctrl+O，也可以把照片或文件夹拖进窗口" />
+          <Button Content="导入文件夹…" Click="OnOpenFolder" />
+          <Button Content="导出…" Click="OnExport" IsEnabled="{Binding CanEdit}" ToolTip.Tip="⌘E / Ctrl+E" />
+          <Border Width="1" Background="#333338" Margin="4,2" />
+          <Button Content="撤销" Command="{Binding UndoCommand}" ToolTip.Tip="⌘Z / Ctrl+Z" />
+          <Button Content="重做" Command="{Binding RedoCommand}" ToolTip.Tip="⇧⌘Z / Ctrl+Y" />
+          <Border Width="1" Background="#333338" Margin="4,2" />
+          <Button Content="智能调色" Command="{Binding AutoToneCommand}" />
+          <ToggleButton Content="裁剪" IsChecked="{Binding CropEditing}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="R" />
+          <Button Content="重置" Command="{Binding ResetCommand}" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Border DockPanel.Dock="Bottom" Background="#1c1c1f" Padding="10,4">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding ToolHint}" Foreground="#e0c060" FontSize="12" />
+        <TextBlock Text="{Binding Status}" Foreground="#a0a0a8" FontSize="12" ToolTip.Tip="{Binding StatusDetail}" />
+      </DockPanel>
+    </Border>
+
+    <TabControl DockPanel.Dock="Left" Width="220" Background="#18181b" Padding="0">
+      <TabItem Header="照片" FontSize="13">
+        <ListBox x:Name="Filmstrip" ItemsSource="{Binding Photos}" SelectedItem="{Binding SelectedPhoto}" Background="#18181b">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="local:PhotoItem">
+              <StackPanel Spacing="4" Margin="2">
+                <Border Height="120" Background="#0f0f11" CornerRadius="3">
+                  <Image Source="{Binding Thumbnail}" Stretch="Uniform" />
+                </Border>
+                <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+      <TabItem Header="历史" FontSize="13">
+        <ListBox ItemsSource="{Binding HistoryRows}" SelectedIndex="{Binding HistoryIndex}" Background="#18181b">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="local:HistoryRow">
+              <TextBlock Text="{Binding Label}" FontSize="12" />
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+      <TabItem Header="快照" FontSize="13">
+        <DockPanel Margin="6">
+          <Button DockPanel.Dock="Top" Content="新建快照" Command="{Binding TakeSnapshotCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,6" />
+          <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="快照保存当前的全部调整，之后随时可以回到这个状态。" Margin="0,6,0,0" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Snapshots}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:Snapshot">
+                  <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
+                    <TextBlock Text="{Binding Name}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <Button Grid.Column="1" Content="应用" FontSize="11" Padding="6,2" Margin="4,0"
+                            Command="{Binding $parent[Window].((local:MainViewModel)DataContext).ApplySnapshotCommand}" CommandParameter="{Binding}" />
+                    <Button Grid.Column="2" Content="删除" FontSize="11" Padding="6,2"
+                            Command="{Binding $parent[Window].((local:MainViewModel)DataContext).DeleteSnapshotCommand}" CommandParameter="{Binding}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+
+    <DockPanel DockPanel.Dock="Right" Width="340" Background="#18181b">
+      <Grid DockPanel.Dock="Top" Height="118" Margin="10,8,10,6">
+        <local:HistogramView Data="{Binding Histogram}" />
+        <ToggleButton IsChecked="{Binding ClipShadows}" HorizontalAlignment="Left" VerticalAlignment="Top" Width="16" Height="16" Padding="0" MinWidth="0" MinHeight="0"
+                      Background="{Binding Histogram, Converter={x:Static local:Converters.ShadowClipBrush}}" ToolTip.Tip="显示阴影溢出（J 同时切换两侧）" />
+        <ToggleButton IsChecked="{Binding ClipHighlights}" HorizontalAlignment="Right" VerticalAlignment="Top" Width="16" Height="16" Padding="0" MinWidth="0" MinHeight="0"
+                      Background="{Binding Histogram, Converter={x:Static local:Converters.HighlightClipBrush}}" ToolTip.Tip="显示高光溢出（J 同时切换两侧）" />
+      </Grid>
+      <ScrollViewer>
+        <StackPanel Margin="8,0,8,12">
+          <Expander Header="基本" IsExpanded="True">
+            <StackPanel>
+              <DockPanel Margin="0,0,0,4">
+                <ToggleButton DockPanel.Dock="Right" Content="白平衡吸管" FontSize="12" Padding="8,2" IsChecked="{Binding PickingWhiteBalance, Mode=OneWay}"
+                              Command="{Binding PickWhiteBalanceCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="W" />
+                <TextBlock Text="白平衡" FontWeight="SemiBold" VerticalAlignment="Center" />
+              </DockPanel>
+              <ItemsControl ItemsSource="{Binding WhiteBalanceGroup.Sliders}" />
+              <TextBlock Text="影调" FontWeight="SemiBold" Margin="0,8,0,4" />
+              <ItemsControl ItemsSource="{Binding ToneGroup.Sliders}" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="曲线">
+            <StackPanel Spacing="4">
+              <DockPanel>
+                <Button DockPanel.Dock="Right" Content="重置曲线" FontSize="12" Padding="8,2" Command="{Binding ResetCurveCommand}" IsEnabled="{Binding CanEdit}" />
+                <ListBox Classes="segments" ItemsSource="{Binding CurveChannelNames}" SelectedIndex="{Binding CurveChannelIndex}" Background="Transparent">
+                  <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                  </ListBox.ItemsPanel>
+                </ListBox>
+              </DockPanel>
+              <local:CurveEditor x:Name="Curve" Height="300" Edit="{Binding CurrentEdit}" Channel="{Binding CurveChannel}"
+                                 Histogram="{Binding Histogram}" IsEnabled="{Binding CanEdit}" />
+              <TextBlock Classes="hint" Text="点击曲线加点，拖动调整。双击或拖出框外可删除。" />
+              <ItemsControl ItemsSource="{Binding ParametricGroup.Sliders}" Margin="0,6,0,0" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="HSL">
+            <StackPanel Spacing="4">
+              <ListBox Classes="segments" ItemsSource="{Binding HslBandNames}" SelectedIndex="{Binding HslBand}" Background="Transparent">
+                <ListBox.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel />
+                  </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+              </ListBox>
+              <ItemsControl ItemsSource="{Binding HslSliders}" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="颜色混合点">
+            <StackPanel Spacing="6">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <ToggleButton Content="吸管取色" IsChecked="{Binding PickingPoint, Mode=OneWay}" Command="{Binding PickPointColourCommand}" IsEnabled="{Binding CanEdit}" />
+                <Border Width="22" Height="22" CornerRadius="11" Background="{Binding PointSwatch}" IsVisible="{Binding PointActive}" />
+                <Button Content="移除" Command="{Binding RemovePointColourCommand}" IsVisible="{Binding PointActive}" />
+              </StackPanel>
+              <ItemsControl ItemsSource="{Binding PointGroup.Sliders}" IsVisible="{Binding PointActive}" />
+              <TextBlock Classes="hint" Text="在画面上点一种颜色，只调整与它相近的颜色。" IsVisible="{Binding !PointActive}" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="色调分离">
+            <StackPanel>
+              <ItemsControl ItemsSource="{Binding Grades}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <UniformGrid Columns="3" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="local:GradeItem">
+                    <StackPanel Spacing="4" Margin="4">
+                      <local:ColorWheel Width="86" Height="86" Hue="{Binding Hue, Mode=OneWay}" Amount="{Binding Amount, Mode=OneWay}" Picked="OnWheelPicked"
+                                        IsEnabled="{Binding $parent[Window].((local:MainViewModel)DataContext).CanEdit}" />
+                      <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" FontSize="12" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Classes="hint" Text="拖动选择色相和强度，双击复位。" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="色彩与效果">
+            <ItemsControl ItemsSource="{Binding EffectsGroup.Sliders}" />
+          </Expander>
+
+          <Expander Header="风格滤镜">
+            <StackPanel Spacing="6">
+              <DockPanel>
+                <Button DockPanel.Dock="Right" Content="导入 .cube…" Click="OnImportLook" Margin="6,0,0,0" />
+                <ComboBox ItemsSource="{Binding LookChoices}" SelectedItem="{Binding SelectedLook}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" MaxDropDownHeight="420" />
+              </DockPanel>
+              <ContentControl Content="{Binding LookAmount}" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="相机与镜头">
+            <StackPanel Spacing="6">
+              <DockPanel>
+                <TextBlock Text="色彩配置" Width="92" VerticalAlignment="Center" FontSize="12" />
+                <ComboBox ItemsSource="{Binding CameraProfiles}" SelectedIndex="{Binding CameraProfileIndex}" IsEnabled="{Binding CameraProfileAvailable}" Width="150" />
+              </DockPanel>
+              <CheckBox Content="使用自动镜头校正" IsChecked="{Binding LensAuto}" IsEnabled="{Binding LensAutoAvailable}" />
+              <TextBlock Classes="hint" Text="{Binding LensStatus}" />
+              <ItemsControl ItemsSource="{Binding LensGroup.Sliders}" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="透视矫正">
+            <StackPanel>
+              <ItemsControl ItemsSource="{Binding PerspectiveGroup.Sliders}" />
+              <CheckBox Content="保留全图（显示黑边）" IsChecked="{Binding PerspectiveKeep}" IsEnabled="{Binding CanEdit}" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="裁剪与旋转">
+            <StackPanel Spacing="6">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <ToggleButton Content="编辑裁剪" IsChecked="{Binding CropEditing}" IsEnabled="{Binding CanEdit}" />
+                <ComboBox ItemsSource="{Binding CropRatioNames}" SelectedIndex="{Binding CropRatioIndex}" IsEnabled="{Binding CanEdit}" Width="90" />
+              </StackPanel>
+              <ContentControl Content="{Binding RotateSlider}" />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Content="向左 90°" Command="{Binding TurnCommand}" CommandParameter="left" IsEnabled="{Binding CanEdit}" />
+                <Button Content="向右 90°" Command="{Binding TurnCommand}" CommandParameter="right" IsEnabled="{Binding CanEdit}" />
+                <Button Content="重置" Command="{Binding ResetCropCommand}" IsEnabled="{Binding CanEdit}" />
+              </StackPanel>
+              <TextBlock Classes="hint" Text="编辑裁剪时拖动框或四角，再按一次“裁剪”或 Esc 完成。" />
+            </StackPanel>
+          </Expander>
+
+          <Expander Header="校准">
+            <ItemsControl ItemsSource="{Binding CalibrationGroup.Sliders}" />
+          </Expander>
+        </StackPanel>
+      </ScrollViewer>
+    </DockPanel>
+
+    <Border x:Name="Stage" Background="#101012" ClipToBounds="True" SizeChanged="OnStageResized"
+            PointerPressed="OnStagePressed" PointerMoved="OnStageMoved" PointerReleased="OnStageReleased"
+            PointerWheelChanged="OnStageWheel" DoubleTapped="OnStageDoubleTapped">
+      <Panel>
+        <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Fill" />
+        <local:CropOverlay x:Name="CropLayer" IsVisible="{Binding CropEditing}" />
+        <Canvas x:Name="CompareLayer" IsVisible="{Binding CompareOn}" IsHitTestVisible="False">
+          <Border x:Name="Divider" Width="2" Background="#e0ffffff" />
+          <TextBlock x:Name="BeforeLabel" Text="修图前" FontSize="11" Foreground="White" Background="#80000000" Padding="4,1" />
+          <TextBlock x:Name="AfterLabel" Text="修图后" FontSize="11" Foreground="White" Background="#80000000" Padding="4,1" />
+        </Canvas>
+        <TextBlock Text="把照片或文件夹拖到这里，或点击“打开照片…”" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="#6a6a72" IsVisible="{Binding !Photos.Count}" IsHitTestVisible="False" />
+      </Panel>
+    </Border>
+  </DockPanel>
+</Window>
