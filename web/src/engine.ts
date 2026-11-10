@@ -179,6 +179,11 @@ export class EngineClient {
     this.worker.postMessage({ type: "compare", split } satisfies ToWorker);
   }
 
+  /** The hue at a stage position in degrees, or a negative number if it has none. */
+  hueAt(x: number, y: number, stageWidth: number, stageHeight: number) {
+    return this.call<number>({ type: "hueAt", x, y, stageWidth, stageHeight });
+  }
+
   /** Finds the white balance making a stage position neutral. Null if it cannot. */
   whiteBalanceAt(x: number, y: number, stageWidth: number, stageHeight: number) {
     return this.call<{ temperature: number; tint: number } | null>({ type: "whiteBalanceAt", x, y, stageWidth, stageHeight });

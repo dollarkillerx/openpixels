@@ -288,7 +288,8 @@ h1 { font-size: 15px; font-weight: 600; margin: 0; }
 
 .actions { display: flex; gap: 8px; margin-top: 18px; }
 .download { display: inline-block; margin-top: 10px; color: var(--accent); }
-.error { flex: none; margin: 0; padding: 7px 12px; background: #3a1c1a; color: #ffb3a8; word-break: break-word; }
+.error { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 0; padding: 7px 12px; background: #3a1c1a; color: #ffb3a8; word-break: break-word; }
+.error button { flex: none; padding: 0 4px; border: 0; background: none; color: inherit; font-size: 16px; line-height: 1.2; cursor: pointer; }
 
 dl.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
 dl.stats dt { color: var(--muted); }
@@ -310,3 +311,6 @@ dl.stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   .thumb { width: 76px; }
   .panel { width: 100%; flex: 1 1 46%; border-left: 0; border-top: 1px solid var(--line); }
 }
+
+.subhead { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.point-swatch { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.3); flex: none; }

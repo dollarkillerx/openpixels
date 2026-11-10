@@ -19,9 +19,10 @@ const SECTIONS = {
   curve: { tab: "color", order: 4 },
   hsl: { tab: "color", order: 5 },
   grade: { tab: "color", order: 6 },
-  look: { tab: "color", order: 7 },
-  presets: { tab: "color", order: 8 },
-  history: { tab: "color", order: 9 },
+  calibration: { tab: "color", order: 7 },
+  look: { tab: "color", order: 8 },
+  presets: { tab: "color", order: 9 },
+  history: { tab: "color", order: 10 },
   crop: { tab: "compose", order: 1 },
   perspective: { tab: "compose", order: 2 },
   camera: { tab: "compose", order: 3 },
@@ -44,7 +45,7 @@ export type SectionId = keyof typeof SECTIONS;
 const FULL_EDITION_ONLY: SectionId[] = ["skin", "liquify", "replace"];
 
 /** Rarely needed at first glance, so these start folded. */
-const FOLDED_BY_DEFAULT: SectionId[] = ["grade", "presets", "history", "lensManual", "stats"];
+const FOLDED_BY_DEFAULT: SectionId[] = ["grade", "calibration", "presets", "history", "lensManual", "stats"];
 
 const STORAGE_KEY = "openpixels.panel.v1";
 

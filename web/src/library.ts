@@ -34,6 +34,15 @@ function write(key: string, value: unknown) {
   }
 }
 
+/** How far the parametric curve sliders move the master curve at each of its five points. */
+export function parametricOffset(adjustments: Adjustments, point: number): number {
+  const amount = (key: string) => adjustments[key] ?? 0;
+  if (point === 1) return amount("curveShadows") * 0.1 + amount("curveDarks") * 0.04;
+  if (point === 2) return amount("curveDarks") * 0.06 + amount("curveLights") * 0.06;
+  if (point === 3) return amount("curveLights") * 0.04 + amount("curveHighlights") * 0.1;
+  return 0; // The ends stay pinned, as black and white do on a parametric curve.
+}
+
 /** Serialises edits for the engine, which takes the HSL bands as two groups of four. */
 export function engineJson(adjustments: Adjustments): string {
   const bands = (prefix: string) =>
@@ -43,7 +52,9 @@ export function engineJson(adjustments: Adjustments): string {
     hslHue: bands("hslHue"),
     hslSaturation: bands("hslSat"),
     hslLuminance: bands("hslLum"),
-    curve: ["M", "R", "G", "B"].map((channel) => [0, 1, 2, 3, 4].map((i) => adjustments[`curve${channel}${i}`] ?? 0)),
+    curve: ["M", "R", "G", "B"].map((channel) =>
+      [0, 1, 2, 3, 4].map((i) => (adjustments[`curve${channel}${i}`] ?? 0) + (channel === "M" ? parametricOffset(adjustments, i) : 0)),
+    ),
     lensManual: [adjustments.lensDistortion ?? 0, adjustments.lensVignette ?? 0, adjustments.lensCaRed ?? 0, adjustments.lensCaBlue ?? 0],
     perspective: [adjustments.perspectiveV ?? 0, adjustments.perspectiveH ?? 0],
     replaceBackground: adjustments.backgroundAsset ? (adjustments.backgroundAmount ?? 1) : 0,

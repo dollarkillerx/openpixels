@@ -14,7 +14,8 @@ struct Blit {
     compare: f32,
     distortion: vec4<f32>,
     chroma: vec4<f32>,
-    // Keystone terms, vertical then horizontal; z is 1 when the whole photo is kept.
+    // Keystone terms, vertical then horizontal; z is 1 when the whole photo is kept;
+    // w is the post-crop vignette.
     perspective: vec4<f32>,
     // Part of the framed image on the canvas: first s and t, then their spans.
     view: vec4<f32>,
@@ -38,6 +39,7 @@ struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) across: f32,
+    @location(2) framed: vec2<f32>,
 }
 
 @vertex
@@ -50,6 +52,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
     let t = blit.view.y + (1.0 - corner.y) * blit.view.w;
     out.uv = blit.uv_origin + s * blit.uv_axis_s + t * blit.uv_axis_t;
     out.across = s;
+    out.framed = vec2<f32>(s, t);
     return out;
 }
 
@@ -85,6 +88,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         developed_at(lens_source(at, blit.chroma.z, blit.chroma.w)).b,
         1.0,
     );
+    // Keep in step with `post_crop_vignette` in op-core.
+    if blit.perspective.w != 0.0 {
+        let falloff = smoothstep(0.4, 1.4, length((in.framed - 0.5) * 2.0));
+        colour = vec4<f32>(clamp(colour.rgb * (1.0 + blit.perspective.w * falloff), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
     let brightest = max(colour.r, max(colour.g, colour.b));
     if blit.flags.y > 0.0 && brightest >= 0.998 {
         colour = vec4<f32>(1.0, 0.0, 0.0, 1.0);

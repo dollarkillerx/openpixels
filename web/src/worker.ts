@@ -299,6 +299,11 @@ async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]
       return [JSON.parse(engine!.white_balance_at(x, y, stageWidth, stageHeight)), []];
     }
 
+    case "hueAt": {
+      const { x, y, stageWidth, stageHeight } = request;
+      return [engine!.hue_at(x, y, stageWidth, stageHeight), []];
+    }
+
     case "modelInput": {
       const start = performance.now();
       const { width, height, mean, std } = request;

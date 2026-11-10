@@ -12,6 +12,8 @@ export interface HealSpot {
   sourceDy: number;
   /** Copies the source exactly, as the clone stamp does. */
   clone?: boolean;
+  /** Takes the red out of an eye instead of copying anything. */
+  redEye?: boolean;
   /** Spots of one stamp drag, which are undone together. */
   group?: number;
 }
@@ -110,6 +112,7 @@ export type EngineRequest =
   | { type: "setErases"; erases: ErasePatch[] }
   | { type: "inpaintInput"; x: number; y: number; width: number; height: number; size: number }
   | { type: "whiteBalanceAt"; x: number; y: number; stageWidth: number; stageHeight: number }
+  | { type: "hueAt"; x: number; y: number; stageWidth: number; stageHeight: number }
   | { type: "setWarps"; strokes: WarpStroke[] }
   | {
       type: "liquify";

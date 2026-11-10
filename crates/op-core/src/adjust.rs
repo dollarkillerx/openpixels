@@ -90,6 +90,31 @@ pub struct Adjustments {
     pub replace_sky_shift: f32,
     /// How far the rest of the photo takes on the new sky's colour.
     pub replace_sky_relight: f32,
+    /// Sharpening radius in pixels, 1..=3; below 1 means 1.
+    pub sharpen_radius: f32,
+    /// 0 sharpens at the radius; 1 at the finest detail.
+    pub sharpen_detail: f32,
+    /// How much low-contrast areas are left unsharpened, 0..=1.
+    pub sharpen_masking: f32,
+    /// Darkens (negative) or lightens the corners of the cropped frame.
+    pub post_crop_vignette: f32,
+    /// Hue and saturation of the red, green and blue primaries, each -1..=1.
+    pub calibration_red_hue: f32,
+    pub calibration_red_sat: f32,
+    pub calibration_green_hue: f32,
+    pub calibration_green_sat: f32,
+    pub calibration_blue_hue: f32,
+    pub calibration_blue_sat: f32,
+    #[serde(skip)]
+    pub _calibration_padding: [f32; 2],
+    /// A picked colour's hue in degrees, and how far around it to reach; 0 is off.
+    pub point_hue: f32,
+    pub point_width: f32,
+    pub point_hue_shift: f32,
+    pub point_sat_shift: f32,
+    pub point_lum_shift: f32,
+    #[serde(skip)]
+    pub _point_padding: [f32; 3],
 }
 
 /// The white balance sliders' travel either way.
@@ -109,6 +134,33 @@ pub fn neutral_white_balance(rgb: [f32; 3]) -> Option<(f32, f32)> {
     Some((temperature.clamp(-WHITE_BALANCE_RANGE, WHITE_BALANCE_RANGE), tint.clamp(-WHITE_BALANCE_RANGE, WHITE_BALANCE_RANGE)))
 }
 
+impl Adjustments {
+    /// The colour matrix for the calibration sliders, as rows. Greys stay grey.
+    pub fn calibration_matrix(&self) -> [[f32; 3]; 3] {
+        const HUE_REACH: f32 = 0.25;
+        const SATURATION_REACH: f32 = 0.2;
+        let primaries = [
+            (self.calibration_red_hue, self.calibration_red_sat),
+            (self.calibration_green_hue, self.calibration_green_sat),
+            (self.calibration_blue_hue, self.calibration_blue_sat),
+        ];
+        let mut matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        for (primary, (hue, saturation)) in primaries.into_iter().enumerate() {
+            // Positive hue moves red towards green, green towards blue, blue towards red.
+            let (next, previous) = ((primary + 1) % 3, (primary + 2) % 3);
+            let target = if hue >= 0.0 { next } else { previous };
+            matrix[target][primary] += hue.abs() * HUE_REACH;
+            matrix[primary][primary] += saturation * SATURATION_REACH;
+            matrix[next][primary] -= saturation * SATURATION_REACH / 2.0;
+            matrix[previous][primary] -= saturation * SATURATION_REACH / 2.0;
+        }
+        matrix.map(|row| {
+            let total: f32 = row.iter().sum();
+            row.map(|value| value / total)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,8 +172,25 @@ mod tests {
     }
 
     #[test]
+    fn neutral_calibration_changes_nothing_and_any_calibration_keeps_greys() {
+        let identity = Adjustments::default().calibration_matrix();
+        assert_eq!(identity, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        let adj = Adjustments { calibration_red_hue: 0.8, calibration_green_sat: -0.6, calibration_blue_hue: -0.4, ..Default::default() };
+        for row in adj.calibration_matrix() {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-5, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn a_positive_red_hue_moves_red_towards_green() {
+        let matrix = Adjustments { calibration_red_hue: 1.0, ..Default::default() }.calibration_matrix();
+        assert!(matrix[1][0] > 0.1, "{matrix:?}");
+        assert_eq!(matrix[2][0], 0.0);
+    }
+
+    #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32 + 80);
     }
 
     #[test]

@@ -117,6 +117,27 @@ pub fn resize_rgb<S: Sample>(rgb: Vec<S>, width: u32, height: u32, out_width: u3
     S::lanczos(pixels, w, h, out_width, out_height)
 }
 
+/// Darkens or lightens the corners of the finished, framed image. Keep in step with
+/// the same effect in blit.wgsl.
+pub fn post_crop_vignette<S: Sample>(rgb: &mut [S], width: u32, height: u32, amount: f32) {
+    if amount == 0.0 {
+        return;
+    }
+    let full = S::from_u32(if S::BITS == 16 { 65535 } else { 255 }).to_f32();
+    let (w, h) = (width as usize, height as usize);
+    for (row, line) in rgb.chunks_exact_mut(w * 3).enumerate().take(h) {
+        let v = ((row as f32 + 0.5) / h as f32 - 0.5) * 2.0;
+        for (col, pixel) in line.chunks_exact_mut(3).enumerate() {
+            let u = ((col as f32 + 0.5) / w as f32 - 0.5) * 2.0;
+            let t = ((u.hypot(v) - 0.4) / 1.0).clamp(0.0, 1.0);
+            let gain = 1.0 + amount * t * t * (3.0 - 2.0 * t);
+            for value in pixel.iter_mut() {
+                *value = S::from_f32((value.to_f32() * gain).clamp(0.0, full));
+            }
+        }
+    }
+}
+
 /// Draws straight-alpha RGBA8 over RGB at a position, clipped to the image.
 #[allow(clippy::too_many_arguments)]
 pub fn composite_overlay<S: Sample>(rgb: &mut [S], width: u32, height: u32, overlay: &[u8], x: i32, y: i32, overlay_width: u32, overlay_height: u32) {
@@ -235,6 +256,14 @@ mod tests {
         assert!(contains(&tiff, &srgb_icc_profile()));
         let decoded = image::load_from_memory(&tiff).unwrap();
         assert_eq!(decoded.into_rgb16().into_raw(), rgb);
+    }
+
+    #[test]
+    fn a_post_crop_vignette_darkens_corners_and_leaves_the_middle() {
+        let mut rgb = vec![200u8; 3 * 101 * 101];
+        post_crop_vignette(&mut rgb, 101, 101, -0.5);
+        assert_eq!(rgb[(50 * 101 + 50) * 3], 200);
+        assert!(rgb[0] < 130, "corner is {}", rgb[0]);
     }
 
     #[test]

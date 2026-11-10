@@ -29,6 +29,9 @@ pub struct HealSpot {
     /// Copies the source exactly instead of matching it to its new surroundings.
     #[serde(default)]
     pub clone: bool,
+    /// Takes the red out of an eye instead of copying anything.
+    #[serde(default)]
+    pub red_eye: bool,
 }
 
 fn pixel(image: &LinearImage, x: isize, y: isize) -> [f32; 3] {
@@ -99,7 +102,33 @@ pub fn find_heal_source(image: &LinearImage, x: f32, y: f32, radius: f32) -> Opt
     }
 
     let (_, dx, dy) = best?;
-    Some(HealSpot { x, y, radius, source_dx: dx / long_edge, source_dy: dy / long_edge, clone: false })
+    Some(HealSpot { x, y, radius, source_dx: dx / long_edge, source_dy: dy / long_edge, clone: false, red_eye: false })
+}
+
+/// Replaces red with the level of the other channels, inside a circle and only where
+/// red clearly dominates, so skin caught in the circle keeps its colour.
+fn remove_red_eye(image: &mut LinearImage, spot: &HealSpot) {
+    const REDNESS_START: f32 = 2.0;
+    const REDNESS_FULL: f32 = 3.5;
+    let long_edge = image.width.max(image.height) as f32;
+    let (width, height) = (image.width as isize, image.height as isize);
+    let (cx, cy, r) = (spot.x * width as f32, spot.y * height as f32, (spot.radius * long_edge).max(1.0));
+    let (x0, x1) = (((cx - r).floor() as isize).max(0), ((cx + r).ceil() as isize + 1).min(width));
+    let (y0, y1) = (((cy - r).floor() as isize).max(0), ((cy + r).ceil() as isize + 1).min(height));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let distance = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt() / r;
+            if distance >= 1.0 {
+                continue;
+            }
+            let [red, green, blue] = pixel(image, x, y);
+            let others = (green + blue) / 2.0;
+            let t = ((red / others.max(1e-4) - REDNESS_START) / (REDNESS_FULL - REDNESS_START)).clamp(0.0, 1.0);
+            let edge = ((1.0 - distance) / (1.0 - FEATHER_START)).clamp(0.0, 1.0);
+            let start = (y as usize * width as usize + x as usize) * 3;
+            image.pixels[start] = f16::from_f32(red + (others - red) * t * edge).to_bits();
+        }
+    }
 }
 
 /// Applies spots in order, so a later spot can build on an earlier one.
@@ -108,6 +137,10 @@ pub fn apply_heals(image: &mut LinearImage, spots: &[HealSpot]) {
     let (width, height) = (image.width as isize, image.height as isize);
 
     for spot in spots {
+        if spot.red_eye {
+            remove_red_eye(image, spot);
+            continue;
+        }
         let (cx, cy, r) = (spot.x * width as f32, spot.y * height as f32, (spot.radius * long_edge).max(1.0));
         let (dx, dy) = ((spot.source_dx * long_edge).round() as isize, (spot.source_dy * long_edge).round() as isize);
         let ring = RING_RADIUS * r;
@@ -272,6 +305,23 @@ mod tests {
     }
 
     #[test]
+    fn red_eye_removal_neutralises_red_and_leaves_skin_alone() {
+        let mut pixels = Vec::new();
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let colour: [f32; 3] = if x < 100 && y < 100 { [0.6, 0.1, 0.1] } else { [0.5, 0.35, 0.3] };
+                pixels.extend(colour.map(|v| f16::from_f32(v).to_bits()));
+            }
+        }
+        let mut image = LinearImage::new(SIZE, SIZE, pixels);
+        let spot = |x, y| HealSpot { x, y, radius: 0.1, source_dx: 0.0, source_dy: 0.0, clone: false, red_eye: true };
+        apply_heals(&mut image, &[spot(0.25, 0.25), spot(0.75, 0.75)]);
+        let channel = |x: u32, y: u32, c: u32| f16::from_bits(image.pixels[((y * SIZE + x) * 3 + c) as usize]).to_f32();
+        assert!((channel(50, 50, 0) - 0.1).abs() < 0.01, "red pupil: {}", channel(50, 50, 0));
+        assert!((channel(150, 150, 0) - 0.5).abs() < 1e-3, "skin in the circle: {}", channel(150, 150, 0));
+    }
+
+    #[test]
     fn a_spot_is_replaced_by_its_surroundings() {
         let mut image = image_with(spotted);
         let spot = find_heal_source(&image, 0.5, 0.5, 0.04).unwrap();
@@ -306,7 +356,7 @@ mod tests {
     fn a_cloned_spot_copies_the_source_without_matching_it() {
         let halves = |x: u32, _y: u32| if x < 100 { 0.8 } else { 0.2 };
         let mut image = image_with(halves);
-        let spot = HealSpot { x: 0.75, y: 0.5, radius: 0.05, source_dx: -0.5, source_dy: 0.0, clone: true };
+        let spot = HealSpot { x: 0.75, y: 0.5, radius: 0.05, source_dx: -0.5, source_dy: 0.0, clone: true, red_eye: false };
         apply_heals(&mut image, &[spot]);
         assert!((value(&image, 150, 100) - 0.8).abs() < 0.01, "got {}", value(&image, 150, 100));
     }

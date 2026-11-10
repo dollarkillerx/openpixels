@@ -3,7 +3,7 @@
 
 use op_core::{
     Adjustments, DevelopJob, ErasePatch, LensfunCalibration, Geometry, HealSpot, LinearImage, TileRecipe, ToneCurve, WarpField, WarpStroke, apply_erases, apply_heals,
-    OutputFormat, Sample, composite_overlay, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
+    OutputFormat, Sample, composite_overlay, post_crop_vignette, encode_png, encode_tiff, export_exif, find_heal_source, fit_long_edge,
     neutral_white_balance, resize_rgb,
 };
 use op_gpu::{Renderer, ViewTransform, encode_jpeg};
@@ -519,13 +519,32 @@ impl Engine {
         let proxy = self.healed_proxy.as_ref().or(self.proxy.as_ref());
         let proxy = proxy.ok_or_else(|| JsError::new("no image loaded"))?;
         let colour = proxy.mean_around(u, v, SAMPLE_RADIUS);
-        let matched = self.renderer.camera_rows(self.adjustments.camera_profile).map(|row| {
+        let matched = self.renderer.camera_rows(&self.adjustments).map(|row| {
             row[0] * colour[0] + row[1] * colour[1] + row[2] * colour[2]
         });
         Ok(match neutral_white_balance(matched) {
             Some((temperature, tint)) => serde_json::to_string(&WhiteBalance { temperature, tint }).map_err(js_error)?,
             None => "null".into(),
         })
+    }
+
+    /// The hue in degrees of the colour at a stage position, or a negative number if it
+    /// missed the image or the colour there is close to grey.
+    pub fn hue_at(&self, stage_x: f32, stage_y: f32, stage_width: u32, stage_height: u32) -> f32 {
+        const SAMPLE_RADIUS: u32 = 3;
+        const MIN_SATURATION: f32 = 0.08;
+        let size = (stage_width.max(1), stage_height.max(1));
+        let (Some((u, v)), Some(proxy)) = (self.stage_to_source(size, stage_x, stage_y), self.proxy.as_ref()) else {
+            return -1.0;
+        };
+        let [r, g, b] = proxy.mean_around(u, v, SAMPLE_RADIUS);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        if max <= 0.0 || (max - min) / max < MIN_SATURATION {
+            return -1.0;
+        }
+        let delta = max - min;
+        let sector = if max == r { ((g - b) / delta).rem_euclid(6.0) } else if max == g { (b - r) / delta + 2.0 } else { (r - g) / delta + 4.0 };
+        sector * 60.0
     }
 
     /// Heals a spot at a position in 0..=1 on a stage of the given size, with a radius
@@ -574,7 +593,9 @@ impl Engine {
         let (width, height) = self.thumbnail_dimensions(max_long_edge)?;
         let corrected = self.renderer.lens_map(&self.adjustments, width, height).apply_rgb(&rgb, width, height);
         let warped = self.warped(corrected, width, height);
-        Ok(self.geometry.apply_rgb(&warped, width, height).0)
+        let (mut framed, frame_width, frame_height) = self.geometry.apply_rgb(&warped, width, height);
+        post_crop_vignette(&mut framed, frame_width, frame_height, self.adjustments.post_crop_vignette);
+        Ok(framed)
     }
 
     /// Size of [`Self::framed_thumbnail`] for the same `max_long_edge`, as JSON.
@@ -781,6 +802,7 @@ impl Engine {
         };
         let (out_width, out_height) = fit_long_edge(frame_width, frame_height, long_edge);
         let mut finished = resize_rgb(framed, frame_width, frame_height, out_width, out_height);
+        post_crop_vignette(&mut finished, out_width, out_height, self.adjustments.post_crop_vignette);
         composite_overlay(&mut finished, out_width, out_height, overlay.rgba, overlay.x, overlay.y, overlay.width, overlay.height);
         (finished, out_width, out_height)
     }

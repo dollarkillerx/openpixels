@@ -50,6 +50,25 @@ struct Adjustments {
     replace_sky_exposure: f32,
     replace_sky_shift: f32,
     replace_sky_relight: f32,
+    sharpen_radius: f32,
+    sharpen_detail: f32,
+    sharpen_masking: f32,
+    post_crop_vignette: f32,
+    calibration_red_hue: f32,
+    calibration_red_sat: f32,
+    calibration_green_hue: f32,
+    calibration_green_sat: f32,
+    calibration_blue_hue: f32,
+    calibration_blue_sat: f32,
+    calibration_padding: vec2<f32>,
+    point_hue: f32,
+    point_width: f32,
+    point_hue_shift: f32,
+    point_sat_shift: f32,
+    point_lum_shift: f32,
+    point_padding_0: f32,
+    point_padding_1: f32,
+    point_padding_2: f32,
 }
 
 struct Region {
@@ -172,7 +191,7 @@ fn shape_tone(input: f32) -> f32 {
     tone += adj.blacks * 0.12 * tone_band(tone, 0.0, 0.35);
     tone += adj.shadows * 0.20 * tone_band(tone, 0.25, 0.30);
     tone += adj.highlights * 0.20 * tone_band(tone, 0.75, 0.30);
-    tone += adj.whites * 0.12 * tone_band(tone, 1.0, 0.35);
+    tone += adj.whites * 0.18 * tone_band(tone, 1.0, 0.5);
 
     // Exponential contrast around mid gray; continuous at 0 and monotonic.
     let slope = pow(2.0, (adj.contrast + local_values.y) * 1.2);
@@ -211,17 +230,28 @@ fn source_at(pixel: vec2<i32>) -> vec3<f32> {
     return textureLoad(source, clamp(pixel, vec2<i32>(0), last), 0).rgb;
 }
 
+fn ring_tone(pixel: vec2<i32>, distance: i32) -> f32 {
+    let neighbours = source_at(pixel + vec2<i32>(distance, 0)) + source_at(pixel - vec2<i32>(distance, 0))
+        + source_at(pixel + vec2<i32>(0, distance)) + source_at(pixel - vec2<i32>(0, distance));
+    return pow(max(dot(neighbours * 0.25, LUMA), 1e-5), 1.0 / TONE_GAMMA);
+}
+
 // Unsharp mask on perceptual luminance, which avoids colour fringes.
 fn apply_sharpen(rgb: vec3<f32>, pixel: vec2<i32>) -> vec3<f32> {
     if adj.sharpen == 0.0 {
         return rgb;
     }
-    let neighbours = source_at(pixel + vec2<i32>(1, 0)) + source_at(pixel - vec2<i32>(1, 0))
-        + source_at(pixel + vec2<i32>(0, 1)) + source_at(pixel - vec2<i32>(0, 1));
     let luma = max(dot(rgb, LUMA), 1e-5);
     let tone = pow(luma, 1.0 / TONE_GAMMA);
-    let around = pow(max(dot(neighbours * 0.25, LUMA), 1e-5), 1.0 / TONE_GAMMA);
-    let sharpened = max(tone + (tone - around) * adj.sharpen * 2.5, 0.0);
+    let finest = ring_tone(pixel, 1);
+    let radius = clamp(adj.sharpen_radius, 1.0, 3.0);
+    let at_radius = mix(ring_tone(pixel, i32(floor(radius))), ring_tone(pixel, i32(ceil(radius))), fract(radius));
+    let around = mix(at_radius, finest, adj.sharpen_detail);
+    var strength = adj.sharpen * 2.5;
+    if adj.sharpen_masking > 0.0 {
+        strength *= smoothstep(adj.sharpen_masking * 0.015, adj.sharpen_masking * 0.1, abs(tone - finest));
+    }
+    let sharpened = max(tone + (tone - around) * strength, 0.0);
     return rgb * pow(sharpened / tone, TONE_GAMMA);
 }
 
@@ -515,6 +545,24 @@ fn replacement_at(image: texture_2d<f32>, uv: vec2<f32>, shift: f32, exposure: f
     return textureSampleLevel(image, mask_sampler, at, 0.0).rgb * pow(2.0, exposure);
 }
 
+// Shifts one picked colour, chosen on the unedited source so edits do not move the selection.
+fn apply_point_colour(rgb: vec3<f32>, source_rgb: vec3<f32>) -> vec3<f32> {
+    if adj.point_width == 0.0 {
+        return rgb;
+    }
+    let weight = range_weight(vec4<f32>(0.0, 1.0, adj.point_hue, adj.point_width), source_rgb);
+    if weight == 0.0 {
+        return rgb;
+    }
+    let hsv = rgb_to_hsv(max(rgb, vec3<f32>(0.0)));
+    let shifted = hsv_to_rgb(vec3<f32>(
+        hsv.x + adj.point_hue_shift * 40.0,
+        clamp(hsv.y * (1.0 + adj.point_sat_shift), 0.0, 1.0),
+        hsv.z * pow(2.0, adj.point_lum_shift),
+    ));
+    return mix(rgb, shifted, weight);
+}
+
 // Blends in the replacements. Comes after the tone and colour edits, which are tuned to
 // the photo, and before the look and grain, which unify them.
 fn apply_replacement(rgb: vec3<f32>, uv: vec2<f32>, background: f32) -> vec3<f32> {
@@ -578,6 +626,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = apply_curve(rgb);
     rgb = apply_grading(rgb);
     rgb = apply_hsl(rgb);
+    rgb = apply_point_colour(rgb, unedited);
     rgb = apply_color(rgb);
     rgb = apply_vignette(rgb, pixel);
     rgb = apply_replacement(rgb, uv, background);

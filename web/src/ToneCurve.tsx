@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { parametricOffset } from "./library";
 import type { Adjustments } from "./protocol";
 
 const SIZE = 240;
@@ -16,9 +17,14 @@ interface Props {
   onChange: (key: string, value: number) => void;
 }
 
+/** What the parametric sliders add at a point; they only act on the master curve. */
+function parametric(adjustments: Adjustments, channel: string, point: number) {
+  return channel === "M" ? parametricOffset(adjustments, point) : 0;
+}
+
 /** Control point positions as output values, for drawing. */
 function outputs(adjustments: Adjustments, channel: string) {
-  return POINTS.map((i) => i / 4 + (adjustments[`curve${channel}${i}`] ?? 0));
+  return POINTS.map((i) => i / 4 + (adjustments[`curve${channel}${i}`] ?? 0) + parametric(adjustments, channel, i));
 }
 
 /** Smooth path through the points. The exact curve is computed by the engine. */
@@ -47,7 +53,7 @@ export function ToneCurve({ adjustments, disabled, onChange }: Props) {
     if (index === null || !svg) return;
     const bounds = svg.getBoundingClientRect();
     const output = Math.min(Math.max(1 - (event.clientY - bounds.top) / bounds.height, 0), 1);
-    onChange(`curve${channel}${index}`, output - index / 4);
+    onChange(`curve${channel}${index}`, output - index / 4 - parametric(adjustments, channel, index));
   };
 
   return (

@@ -644,7 +644,7 @@ impl Renderer {
             compare,
             distortion: lens.distortion,
             chroma: lens.chroma,
-            perspective: [lens.perspective[0], lens.perspective[1], f32::from(lens.keep_whole), 0.0],
+            perspective: [lens.perspective[0], lens.perspective[1], f32::from(lens.keep_whole), adjustments.post_crop_vignette],
             view: [area.start[0], area.start[1], area.span[0], area.span[1]],
             detail_rect,
             flags: [
@@ -1001,7 +1001,7 @@ impl Renderer {
             lens_vignette: lens.vignette,
             lens_aspect: lens.aspect,
             _padding: [0.0; 2],
-            camera: self.camera_rows(adjustments.camera_profile),
+            camera: self.camera_rows(adjustments),
             airlight: [self.airlight[0], self.airlight[1], self.airlight[2], 0.0],
             sky_tint: [self.sky_tint[0], self.sky_tint[1], self.sky_tint[2], 0.0],
         };
@@ -1009,16 +1009,21 @@ impl Renderer {
     }
 
     /// The camera matrix blended from the identity by `strength`.
-    pub fn camera_rows(&self, strength: f32) -> [[f32; 4]; 3] {
-        std::array::from_fn(|row| {
+    /// The camera match followed by the calibration sliders, as rows of the colour matrix.
+    pub fn camera_rows(&self, adjustments: &Adjustments) -> [[f32; 4]; 3] {
+        let camera: [[f32; 3]; 3] = std::array::from_fn(|row| {
             std::array::from_fn(|col| {
                 let identity = f32::from(u8::from(row == col));
-                match (self.camera_matrix, col) {
-                    (_, 3) => 0.0,
-                    (Some(matrix), _) => identity + (matrix[row][col] - identity) * strength,
-                    (None, _) => identity,
-                }
+                self.camera_matrix.map_or(identity, |matrix| identity + (matrix[row][col] - identity) * adjustments.camera_profile)
             })
+        });
+        let calibration = adjustments.calibration_matrix();
+        std::array::from_fn(|row| {
+            let mut out = [0.0; 4];
+            for (col, value) in out.iter_mut().take(3).enumerate() {
+                *value = (0..3).map(|middle| calibration[row][middle] * camera[middle][col]).sum();
+            }
+            out
         })
     }
 
@@ -1609,6 +1614,62 @@ mod tests {
     }
 
     #[test]
+    fn a_picked_colour_shifts_and_other_colours_do_not() {
+        let renderer = renderer();
+        // Left half red-orange, right half blue.
+        let mut pixels = Vec::new();
+        for _ in 0..16 {
+            for x in 0..32 {
+                let colour = if x < 16 { [0.6f32, 0.15, 0.05] } else { [0.05f32, 0.1, 0.6] };
+                pixels.extend(colour.map(|v| f16::from_f32(v).to_bits()));
+            }
+        }
+        let image = LinearImage::new(32, 16, pixels);
+        let adj = Adjustments { point_hue: 15.0, point_width: 30.0, point_sat_shift: -1.0, ..Default::default() };
+        let out = export(&renderer, &image, &adj, 64);
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let at = |buffer: &[u8], x: usize| [buffer[(8 * 32 + x) * 3], buffer[(8 * 32 + x) * 3 + 1], buffer[(8 * 32 + x) * 3 + 2]];
+        let [r, g, b] = at(&out, 4);
+        assert!(r.abs_diff(g) <= 2 && g.abs_diff(b) <= 2, "the picked colour lost its saturation: {r} {g} {b}");
+        assert_eq!(at(&out, 28), at(&plain, 28), "blue is not touched");
+    }
+
+    #[test]
+    fn a_larger_sharpening_radius_reaches_further_from_an_edge() {
+        let renderer = renderer();
+        let bits = |v: f32| f16::from_f32(v).to_bits();
+        let mut pixels = Vec::new();
+        for _ in 0..16 {
+            for x in 0..32 {
+                pixels.extend([bits(if x < 16 { 0.1 } else { 0.5 }); 3]);
+            }
+        }
+        let image = LinearImage::new(32, 16, pixels);
+        let near = export(&renderer, &image, &Adjustments { sharpen: 1.0, ..Default::default() }, 64);
+        let far = export(&renderer, &image, &Adjustments { sharpen: 1.0, sharpen_radius: 3.0, ..Default::default() }, 64);
+        let row = |buffer: &[u8], x: usize| buffer[(8 * 32 + x) * 3];
+        // Two pixels from the edge: outside a radius of 1 and inside a radius of 3.
+        assert_eq!(row(&near, 18), export(&renderer, &image, &Adjustments::default(), 64)[(8 * 32 + 18) * 3]);
+        assert!(row(&far, 18) > row(&near, 18), "{} against {}", row(&far, 18), row(&near, 18));
+    }
+
+    #[test]
+    fn masking_leaves_gentle_texture_unsharpened() {
+        let renderer = renderer();
+        let bits = |v: f32| f16::from_f32(v).to_bits();
+        let mut pixels = Vec::new();
+        for _ in 0..16 {
+            for x in 0..32 {
+                pixels.extend([bits(if x % 2 == 0 { 0.4 } else { 0.402 }); 3]);
+            }
+        }
+        let image = LinearImage::new(32, 16, pixels);
+        let plain = export(&renderer, &image, &Adjustments::default(), 64);
+        let masked = export(&renderer, &image, &Adjustments { sharpen: 1.0, sharpen_masking: 1.0, ..Default::default() }, 64);
+        assert!(plain.iter().zip(&masked).all(|(a, b)| a.abs_diff(*b) <= 1));
+    }
+
+    #[test]
     fn a_sixteen_bit_export_matches_eight_bit_with_finer_steps() {
         let renderer = renderer();
         let image = shallow_ramp();
@@ -1763,6 +1824,36 @@ mod tests {
         renderer.set_base_exposure(Some(1.2));
         assert_eq!(export_gray(&renderer, 0.0), 0);
         assert_eq!(export_gray(&renderer, 1.0), 255);
+    }
+
+    #[test]
+    fn whites_lift_bright_tones_most_and_keep_their_order() {
+        const VALUES: [f32; 6] = [0.02, 0.2, 0.4, 0.6, 0.75, 0.85];
+        const COLUMN: u32 = 8;
+        let renderer = renderer();
+        let columns = VALUES.len() as u32 * COLUMN;
+        let mut pixels = Vec::new();
+        for _ in 0..COLUMN {
+            for x in 0..columns {
+                pixels.extend([f16::from_f32(VALUES[(x / COLUMN) as usize]).to_bits(); 3]);
+            }
+        }
+        let image = LinearImage::new(columns, COLUMN, pixels);
+        let levels = |whites: f32| -> Vec<i32> {
+            let out = export(&renderer, &image, &Adjustments { whites, ..Default::default() }, 64);
+            (0..VALUES.len()).map(|column| i32::from(out[(4 * columns as usize + column * COLUMN as usize + 4) * 3])).collect()
+        };
+        let plain = levels(0.0);
+        let lifted = levels(1.0);
+        let lowered = levels(-1.0);
+        let gain: Vec<i32> = lifted.iter().zip(&plain).map(|(a, b)| a - b).collect();
+        assert_eq!(gain[0], 0, "deep shadows are left alone: {gain:?}");
+        assert!(gain[3] > gain[2] && gain[2] >= gain[1], "the effect grows towards white: {gain:?}");
+        assert!(gain[3] >= 8, "a full move is clearly visible: {gain:?}");
+        for curve in [&lifted, &lowered] {
+            // Only tones already pushed to white may land on the same level.
+            assert!(curve.windows(2).all(|pair| pair[0] < pair[1] || pair[1] == 255), "tones stay in order: {curve:?}");
+        }
     }
 
     #[test]

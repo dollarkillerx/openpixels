@@ -19,7 +19,7 @@ import { ProjectLibrary } from "./ProjectLibrary";
 import { IS_LITE } from "./edition";
 import { PANEL_TABS, Section, type PanelTab, type SectionId } from "./Panels";
 import { WatermarkPreview } from "./WatermarkPreview";
-import { LOCAL_SLIDERS, MAX_LOCAL_LAYERS, hasLocalHandles, isAiLocal, modelOf, removeLocalValues, renderLocalMask, type AiLocalKind, type LocalKind, type LocalLayer, type ModelMasks } from "./local";
+import { LOCAL_RANGE_SUFFIXES, LOCAL_SLIDERS, MAX_LOCAL_LAYERS, hasLocalHandles, isAiLocal, modelOf, removeLocalValues, renderLocalMask, type AiLocalKind, type LocalKind, type LocalLayer, type ModelMasks } from "./local";
 import {
   exportName,
   fileId,
@@ -56,6 +56,8 @@ interface SliderDef {
   label: string;
   min: number;
   max: number;
+  /** The value when untouched, if that is not 0. */
+  fallback?: number;
 }
 
 const GROUPS: { title: string; sliders: SliderDef[] }[] = [
@@ -86,11 +88,26 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
       { key: "clarity", label: "清晰度", min: -1, max: 1 },
       { key: "texture", label: "纹理", min: -1, max: 1 },
       { key: "sharpen", label: "锐化", min: 0, max: 1 },
+      { key: "sharpenRadius", label: "锐化半径", min: 1, max: 3, fallback: 1 },
+      { key: "sharpenDetail", label: "锐化细节", min: 0, max: 1 },
+      { key: "sharpenMasking", label: "锐化蒙版", min: 0, max: 1 },
       { key: "denoiseLuma", label: "明度降噪", min: 0, max: 1 },
       { key: "denoiseChroma", label: "色彩降噪", min: 0, max: 1 },
       { key: "vignette", label: "暗角", min: -1, max: 1 },
+      { key: "postCropVignette", label: "裁剪后暗角", min: -1, max: 1 },
       { key: "grain", label: "颗粒", min: 0, max: 1 },
       { key: "grainSize", label: "颗粒大小", min: 0, max: 1 },
+    ],
+  },
+  {
+    title: "校准",
+    sliders: [
+      { key: "calibrationRedHue", label: "红原色色相", min: -1, max: 1 },
+      { key: "calibrationRedSat", label: "红原色饱和度", min: -1, max: 1 },
+      { key: "calibrationGreenHue", label: "绿原色色相", min: -1, max: 1 },
+      { key: "calibrationGreenSat", label: "绿原色饱和度", min: -1, max: 1 },
+      { key: "calibrationBlueHue", label: "蓝原色色相", min: -1, max: 1 },
+      { key: "calibrationBlueSat", label: "蓝原色饱和度", min: -1, max: 1 },
     ],
   },
   {
@@ -111,25 +128,105 @@ const GROUPS: { title: string; sliders: SliderDef[] }[] = [
   },
 ];
 
+const PARAMETRIC_SLIDERS: SliderDef[] = [
+  { key: "curveHighlights", label: "曲线高光", min: -1, max: 1 },
+  { key: "curveLights", label: "曲线亮调", min: -1, max: 1 },
+  { key: "curveDarks", label: "曲线暗调", min: -1, max: 1 },
+  { key: "curveShadows", label: "曲线阴影", min: -1, max: 1 },
+];
+
+const POINT_SLIDERS: SliderDef[] = [
+  { key: "pointWidth", label: "混合点范围", min: 10, max: 90, fallback: 30 },
+  { key: "pointHueShift", label: "混合点色相", min: -1, max: 1 },
+  { key: "pointSatShift", label: "混合点饱和度", min: -1, max: 1 },
+  { key: "pointLumShift", label: "混合点明度", min: -1, max: 1 },
+];
+
 const SETTING_LABELS: Record<string, string> = Object.fromEntries(
-  GROUPS.flatMap((group) => group.sliders.map((slider) => [slider.key, slider.label])),
+  [...GROUPS.flatMap((group) => group.sliders), ...PARAMETRIC_SLIDERS, ...POINT_SLIDERS].map((slider) => [slider.key, slider.label]),
 );
+
+/** The photos that have an analysis, in the shape grouping expects. */
+const analyzedItems = (photos: { id: string }[], analyses: Record<string, PhotoAnalysis>) =>
+  photos.filter((photo) => analyses[photo.id]).map((photo) => ({ id: photo.id, analysis: analyses[photo.id] }));
+
+interface SettingName {
+  label: string;
+  /** Names the change when several keys of this kind move together. */
+  group?: string;
+  /** Whether the change in value means anything to a reader. */
+  numeric?: boolean;
+}
+
+const CURVE_CHANNELS: Record<string, string> = { M: "RGB 曲线", R: "红色曲线", G: "绿色曲线", B: "蓝色曲线" };
+const CROP_GROUP = "裁剪与旋转";
+const POINT_GROUP = "颜色混合点";
+
+/** What an edit key is called in the history list, or null if it has no name. */
+function nameOfSetting(key: string): SettingName | null {
+  const slider = SETTING_LABELS[key];
+  if (key === "temperature" || key === "tint") return { label: slider, group: "白平衡", numeric: true };
+  if (key === "pointHue") return { label: "混合点取色", group: POINT_GROUP };
+  if (key.startsWith("point") && slider) return { label: slider, group: POINT_GROUP, numeric: true };
+  if (slider) return { label: slider, numeric: true };
+  if (key === "rotate") return { label: "旋转", group: CROP_GROUP, numeric: true };
+  if (key === "quarter" || /^crop[XYWH]$/.test(key)) return { label: CROP_GROUP, group: CROP_GROUP };
+  if (key === "lutId") return { label: "滤镜", group: "滤镜" };
+  if (key === "lutAmount") return { label: "滤镜强度", group: "滤镜", numeric: true };
+  if (key === "cameraProfile") return { label: "色彩配置" };
+  if (key === "lensAuto") return { label: "自动镜头校正" };
+  if (key === "perspectiveKeep") return { label: "保留全图" };
+  if (key === "backgroundExposure") return { label: "背景曝光", numeric: true };
+  if (key === "maskOverlay" || key === "localOverlay") return { label: "显示蒙版" };
+
+  const hsl = key.match(/^hsl(Hue|Sat|Lum)(\d)$/);
+  if (hsl) {
+    const channel = HSL_CHANNELS.find((item) => item.prefix === `hsl${hsl[1]}`)!;
+    return { label: `${HSL_BANDS[Number(hsl[2])].name}${channel.label}`, numeric: true };
+  }
+  const curve = key.match(/^curve([MRGB])\d$/);
+  if (curve) return { label: CURVE_CHANNELS[curve[1]], group: CURVE_CHANNELS[curve[1]] };
+  const grade = key.match(/^grade(Shadow|Mid|High)(Hue|Amount)$/);
+  if (grade) {
+    const label = `${GRADE_RANGES.find((item) => item.key === grade[1])!.label}色轮`;
+    return { label, group: label };
+  }
+  const local = key.match(/^local\d(.+)$/);
+  if (local) {
+    const slider = LOCAL_SLIDERS.find((item) => item.suffix === local[1]);
+    if (slider) return { label: `局部${slider.label}`, numeric: true };
+    if (LOCAL_RANGE_SUFFIXES.includes(local[1])) return { label: "局部范围", group: "局部范围" };
+  }
+  return null;
+}
 
 /** Names the change between two states of an edit, for the history list. */
 function describeChange(before: Adjustments, after: Adjustments) {
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => (before[key] ?? 0) !== (after[key] ?? 0));
   if (changed.length === 0) return "无变化";
+  if (changed.every((key) => /^local\d/.test(key))) {
+    // A layer always has an exposure, so that key coming or going means the layer did.
+    const exposures = changed.filter((key) => /^local\dExposure$/.test(key));
+    if (exposures.some((key) => !(key in before))) return "添加局部图层";
+    if (exposures.some((key) => !(key in after))) return "删除局部图层";
+  }
+  const names = changed.map(nameOfSetting);
+  const groups = new Set(names.map((name) => name?.group));
+  if (changed.length > 1 && groups.size === 1 && names[0]?.group) return names[0].group;
   if (changed.length > 3) return `多项调整（${changed.length}）`;
-  const named = changed.find((key) => SETTING_LABELS[key]);
-  if (!named) return "调整";
-  const delta = (after[named] ?? 0) - (before[named] ?? 0);
-  return `${SETTING_LABELS[named]} ${delta > 0 ? "+" : ""}${delta.toFixed(2)}`;
+  const position = names.findIndex((name) => name);
+  if (position < 0) return "调整";
+  const { label, numeric } = names[position]!;
+  if (!numeric) return label;
+  const delta = (after[changed[position]] ?? 0) - (before[changed[position]] ?? 0);
+  return `${label} ${delta > 0 ? "+" : ""}${delta.toFixed(2)}`;
 }
 
 const GROUP_SECTIONS: Record<string, SectionId> = {
   白平衡: "whiteBalance",
   影调: "tone",
   色彩与效果: "colorEffects",
+  校准: "calibration",
   镜头校正: "lensManual",
   透视矫正: "perspective",
 };
@@ -363,7 +460,8 @@ export function App() {
   const [compare, setCompare] = useState(0);
   const compareHeldRef = useRef<number | null>(null);
   const compareDragRef = useRef(false);
-  const [pickingWhite, setPickingWhite] = useState(false);
+  const [picker, setPicker] = useState<"white" | "point" | null>(null);
+  const pickingWhite = picker === "white";
   const [toolHint, setToolHint] = useState("");
   const [panelTab, setPanelTab] = useState<PanelTab>("color");
   const [view, setViewState] = useState<View>(FIT_VIEW);
@@ -376,7 +474,7 @@ export function App() {
   const zoomKeysRef = useRef<{ toggle: () => void }>({ toggle: () => {} });
   const quickThumbnailTried = useRef(new Set<string>());
   const [output, setOutput] = useState<OutputSettings>(loadOutput);
-  const [healMode, setHealMode] = useState<"spot" | "clone" | "erase">("spot");
+  const [healMode, setHealMode] = useState<"spot" | "clone" | "erase" | "redeye">("spot");
   const [eraseDabs, setEraseDabs] = useState<EraseDab[]>([]);
   const [eraseCount, setEraseCount] = useState(0);
   const [erasing, setErasing] = useState(false);
@@ -417,7 +515,7 @@ export function App() {
     return flagFilter === 0 || (flagFilter === 2 ? flag !== FLAG_REJECT : flag === flagFilter);
   };
   const { groupOf, verdicts, groupCount } = useMemo(() => {
-    const items = photos.filter((photo) => analyses[photo.id]).map((photo) => ({ id: photo.id, analysis: analyses[photo.id] }));
+    const items = analyzedItems(photos, analyses);
     const byId = new Map(items.map((item) => [item.id, item]));
     const groups = groupPhotos(items);
     const groupOf = new Map<string, number>();
@@ -558,7 +656,7 @@ export function App() {
       editsRef.current[photo.id] = edit;
       setHeals(spots);
       setHealing(false);
-      setPickingWhite(false);
+      setPicker(null);
       setToolHint("");
       stampRef.current = { source: null, offset: null, last: null, group: 0, drawing: false };
       setStampMarker(null);
@@ -965,7 +1063,7 @@ export function App() {
     else zoomToRatio(1);
   };
 
-  const toolActive = healing || liquifying || !!localTool || !!localRefine || pickingWhite || cropEditing;
+  const toolActive = healing || liquifying || !!localTool || !!localRefine || !!picker || cropEditing;
 
   /** Starts panning if this press is for that and not for the tool in use. */
   const startPan = (event: React.PointerEvent<HTMLElement>) => {
@@ -1002,7 +1100,7 @@ export function App() {
     applyEdit({ ...adjustments, ...cropFields(shrinkToImage(next, rotate, imageFrame.width, imageFrame.height)) });
 
   const toggleCropEditing = () => {
-    setPickingWhite(false);
+    setPicker(null);
     setHealing(false);
     setLiquifying(false);
     setLocalTool(null);
@@ -1034,7 +1132,7 @@ export function App() {
 
   const toggleHealing = () => {
     if (cropEditing) setValue("cropEditing", 0);
-    setPickingWhite(false);
+    setPicker(null);
     setLiquifying(false);
     setLocalTool(null);
     setLocalRefine(null);
@@ -1043,7 +1141,7 @@ export function App() {
 
   const toggleLiquify = () => {
     if (cropEditing) setValue("cropEditing", 0);
-    setPickingWhite(false);
+    setPicker(null);
     setHealing(false);
     setLocalTool(null);
     setLocalRefine(null);
@@ -1052,39 +1150,75 @@ export function App() {
 
   const chooseLocalTool = (kind: LocalKind) => {
     if (cropEditing) setValue("cropEditing", 0);
-    setPickingWhite(false);
+    setPicker(null);
     setHealing(false);
     setLiquifying(false);
     setLocalTool((current) => (current === kind ? null : kind));
   };
 
-  const togglePickingWhite = () => {
+  const togglePicker = (kind: "white" | "point") => {
     if (cropEditing) setValue("cropEditing", 0);
     setHealing(false);
     setLiquifying(false);
     setLocalTool(null);
     setLocalRefine(null);
     setToolHint("");
-    setPickingWhite((on) => !on);
+    setPicker((on) => (on === kind ? null : kind));
   };
 
-  const pickWhite = async (event: React.MouseEvent<HTMLElement>) => {
-    if (!pickingWhite) return;
+  const removePointColour = () =>
+    applyEdit({ ...adjustments, pointHue: 0, pointWidth: 0, pointHueShift: 0, pointSatShift: 0, pointLumShift: 0 }, true);
+
+  const pickColour = async (event: React.MouseEvent<HTMLElement>) => {
+    if (!picker) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const u = (event.clientX - bounds.left) / bounds.width;
     const v = (event.clientY - bounds.top) / bounds.height;
     try {
+      if (picker === "point") {
+        const hue = await engineRef.current!.hueAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
+        if (hue < 0) {
+          setToolHint("这里接近灰色，请点一处有颜色的地方。");
+          return;
+        }
+        setToolHint("");
+        setPicker(null);
+        applyEdit({ ...adjustments, pointHue: hue, pointWidth: adjustments.pointWidth || 30 }, true);
+        return;
+      }
       const balance = await engineRef.current!.whiteBalanceAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
       if (!balance) {
         setToolHint("这里太暗或已过曝，请点一处中性灰。");
         return;
       }
       setToolHint("");
-      setPickingWhite(false);
+      setPicker(null);
       applyEdit({ ...adjustments, ...balance }, true);
     } catch (reason) {
       setError((reason as Error).message);
     }
+  };
+
+  const renderSlider = (slider: SliderDef) => {
+    const resting = slider.fallback ?? 0;
+    const value = adjustments[slider.key] ?? resting;
+    return (
+      <label className={`slider ${value !== resting ? "changed" : ""}`} key={slider.key}>
+        <span>{slider.label}</span>
+        <output>{value.toFixed(2)}</output>
+        <input
+          aria-label={slider.label}
+          type="range"
+          min={slider.min}
+          max={slider.max}
+          step={0.01}
+          value={value}
+          disabled={!loaded || locked}
+          onChange={(event) => setValue(slider.key, Number(event.target.value))}
+          onDoubleClick={() => setValue(slider.key, resting)}
+        />
+      </label>
+    );
   };
 
   const updateOutput = (patch: Partial<OutputSettings>) => {
@@ -1294,7 +1428,7 @@ export function App() {
 
   const chooseLocalRefine = (mode: "add" | "subtract") => {
     if (cropEditing) setValue("cropEditing", 0);
-    setPickingWhite(false);
+    setPicker(null);
     setHealing(false);
     setLiquifying(false);
     setLocalTool(null);
@@ -1321,7 +1455,7 @@ export function App() {
   };
 
   /** A stage position in source UV, or null outside the displayed image. */
-  const pointerToSource = (event: React.PointerEvent<HTMLElement>) => {
+  const pointerToSource = (event: React.MouseEvent<HTMLElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     // Measured now: layout state can lag behind, and does not update in a hidden page.
     const box = frameBox(bounds.width, bounds.height);
@@ -1424,6 +1558,8 @@ export function App() {
     flushPendingEdit();
     setBatchRunning(true);
     setAnalyzing({ done: 0, total: pending.length });
+    const known = { ...analyses };
+    let finished = false;
     try {
       for (const [index, photo] of pending.entries()) {
         const edit = persistable(editsRef.current[photo.id] ?? loadEdit(photo.id));
@@ -1433,9 +1569,11 @@ export function App() {
         const captured = captureMillis(result.captureTime);
         const analysis = analyzeImage(new Uint8Array(thumbnail.rgb), thumbnail.width, thumbnail.height, faces, captured ?? photo.file.lastModified, captured !== null);
         await saveAnalysis(photo.id, analysis);
+        known[photo.id] = analysis;
         setAnalyses((all) => ({ ...all, [photo.id]: analysis }));
         setAnalyzing({ done: index + 1, total: pending.length });
       }
+      finished = true;
     } catch (reason) {
       setError(`分析失败：${(reason as Error).message}`);
     } finally {
@@ -1443,6 +1581,7 @@ export function App() {
       setAnalyzing(null);
       await selectPhoto(returnTo);
     }
+    if (finished) setCullStatus(`已分析 ${pending.length} 张，共 ${groupPhotos(analyzedItems(photos, known)).length} 组。`);
   };
 
   /** Flags the best and the clearly failed shots of each group, keeping manual flags. */
@@ -1790,7 +1929,25 @@ export function App() {
   };
 
   const healAtPointer = async (event: React.MouseEvent<HTMLElement>) => {
-    if (!healing || healMode !== "spot" || !currentId) return;
+    if (!healing || !currentId) return;
+    if (healMode === "redeye") {
+      const point = pointerToSource(event);
+      if (!point) return;
+      const spot: HealSpot = { x: point.x, y: point.y, radius: healRadius, sourceDx: 0, sourceDy: 0, redEye: true };
+      setHeals((list) => {
+        const next = [...list, spot];
+        saveHeals(currentId, next);
+        return next;
+      });
+      try {
+        await engineRef.current!.addHeals([spot]);
+        void refreshThumbnail(currentId).catch(() => {});
+      } catch (reason) {
+        setError((reason as Error).message);
+      }
+      return;
+    }
+    if (healMode !== "spot") return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const u = (event.clientX - bounds.left) / bounds.width;
     const v = (event.clientY - bounds.top) / bounds.height;
@@ -2101,7 +2258,12 @@ export function App() {
         {exported && <a className="download" href={exported.url} download={exported.name} title={exported.name}>下载 {exported.name}</a>}
         <button className="button" disabled={!loaded || !!busy || locked} onClick={() => void startExport()}>导出当前</button>
       </header>
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && (
+        <p className="error" role="alert">
+          <span>{error}</span>
+          <button type="button" aria-label="关闭错误提示" title="关闭" onClick={() => setError("")}>×</button>
+        </p>
+      )}
       {projectNotice && <p className="notice">{projectNotice}</p>}
       <div className="body">
       <div className="workspace">
@@ -2109,7 +2271,7 @@ export function App() {
         <main
           className="stage"
           ref={stageRef}
-          style={healing || liquifying ? { cursor: "none" } : localTool || localRefine || pickingWhite ? { cursor: "crosshair" } : view.zoom > 1 ? { cursor: "grab" } : undefined}
+          style={healing || liquifying ? { cursor: "none" } : localTool || localRefine || picker ? { cursor: "crosshair" } : view.zoom > 1 ? { cursor: "grab" } : undefined}
           onPointerDown={(event) => {
             panClickRef.current = false;
             if (startPan(event)) return;
@@ -2139,7 +2301,7 @@ export function App() {
             }
             if (spaceRef.current) return;
             void healAtPointer(event);
-            void pickWhite(event);
+            void pickColour(event);
           }}
           onPointerMove={(event) => {
             if (continuePan(event)) return;
@@ -2436,7 +2598,7 @@ export function App() {
           <Section key={group.title} id={GROUP_SECTIONS[group.title]} title={group.title} active={panelTab}>
             {group.title === "白平衡" && (
               <div className="row">
-                <button className={`button ${pickingWhite ? "" : "secondary"}`} disabled={!loaded || locked} onClick={togglePickingWhite}>
+                <button className={`button ${pickingWhite ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => togglePicker("white")}>
                   {pickingWhite ? "点击画面中性灰处…" : "吸管"}
                 </button>
               </div>
@@ -2453,26 +2615,7 @@ export function App() {
                 保留全图（边缘留黑，不放大裁切）
               </label>
             )}
-            {group.sliders.map((slider) => {
-              const value = adjustments[slider.key] ?? 0;
-              return (
-                <label className={`slider ${value !== 0 ? "changed" : ""}`} key={slider.key}>
-                  <span>{slider.label}</span>
-                  <output>{value.toFixed(2)}</output>
-                  <input
-                    aria-label={slider.label}
-                    type="range"
-                    min={slider.min}
-                    max={slider.max}
-                    step={0.01}
-                    value={value}
-                    disabled={!loaded || locked}
-                    onChange={(event) => setValue(slider.key, Number(event.target.value))}
-                    onDoubleClick={() => setValue(slider.key, 0)}
-                  />
-                </label>
-              );
-            })}
+            {group.sliders.map(renderSlider)}
           </Section>
         ))}
 
@@ -2515,6 +2658,7 @@ export function App() {
 
         <Section id="curve" title="曲线" active={panelTab}>
           <ToneCurve adjustments={adjustments} disabled={!loaded || locked} onChange={setValue} />
+          {PARAMETRIC_SLIDERS.map(renderSlider)}
         </Section>
 
         <Section id="look" title={IS_LITE ? "滤镜" : "滤镜与追色"} active={panelTab}>
@@ -2626,6 +2770,19 @@ export function App() {
               </label>
             );
           })}
+          <h3 className="subhead">颜色混合点</h3>
+          <div className="row">
+            <button className={`button ${picker === "point" ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => togglePicker("point")}>
+              {picker === "point" ? "点击画面要调的颜色…" : (adjustments.pointWidth ?? 0) > 0 ? "重新取色" : "吸管取色"}
+            </button>
+            {(adjustments.pointWidth ?? 0) > 0 && (
+              <>
+                <span className="point-swatch" data-testid="point-swatch" style={{ background: `hsl(${adjustments.pointHue ?? 0} 75% 50%)` }} />
+                <button className="button secondary" disabled={locked} onClick={removePointColour}>移除</button>
+              </>
+            )}
+          </div>
+          {(adjustments.pointWidth ?? 0) > 0 && POINT_SLIDERS.map(renderSlider)}
         </Section>
 
         <Section id="subject" title="AI 主体" active={panelTab}>
@@ -2746,9 +2903,10 @@ export function App() {
             <button className={`button ${healing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleHealing}>
               {healing ? "退出修复" : "开始修复"}
             </button>
-            <select aria-label="修复方式" value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone" | "erase")}>
+            <select aria-label="修复方式" value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone" | "erase" | "redeye")}>
               <option value="spot">污点修复</option>
               <option value="clone">仿制图章</option>
+              <option value="redeye">红眼去除</option>
               <option value="erase">AI 消除</option>
             </select>
           </div>
@@ -2783,6 +2941,7 @@ export function App() {
               onChange={(event) => setHealRadius(Number(event.target.value))}
             />
           </label>
+          {healMode === "redeye" && <p className="progress">把画笔调到盖住瞳孔，点击瞳孔。只会去掉明显偏红的像素。</p>}
           {healMode === "clone" && <p className="progress">按住 Alt（Option）点击取样，再拖动涂抹。</p>}
           {healMode === "erase" && <p className="progress">{erasing ? "正在计算，通常需要 10–20 秒…" : "涂抹要去掉的内容，可以多涂几笔，再点“消除涂抹区域”。"}</p>}
           <p className="progress" data-stat="heals">{healMode === "erase" ? `已消除 ${eraseCount} 处` : `已修复 ${heals.length} 处`}</p>
