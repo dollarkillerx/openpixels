@@ -33,8 +33,9 @@
 
   <Window.DataTemplates>
     <DataTemplate DataType="local:SliderItem">
-      <Grid ColumnDefinitions="84,*,40" Classes="sliderRow" Background="Transparent">
-        <TextBlock Text="{Binding Label}" FontSize="12" VerticalAlignment="Center"
+      <Grid Classes="sliderRow" Background="Transparent">
+<Grid.ColumnDefinitions><ColumnDefinition Width="{x:Static local:LanguageLayout.LabelColumn}" /><ColumnDefinition Width="*" /><ColumnDefinition Width="40" /></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding Label}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}"
                    Foreground="{Binding Changed, Converter={x:Static local:Converters.ChangedForeground}}" />
         <Slider Grid.Column="1" Minimum="{Binding Min}" Maximum="{Binding Max}" Value="{Binding Value}" Margin="4,0"
                 SmallChange="0.01" LargeChange="0.1" IsEnabled="{Binding $parent[Window].((local:MainViewModel)DataContext).CanEdit}"
@@ -52,56 +53,56 @@
         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
           <local:LogoMark Width="20" Height="20" Margin="2,0,10,0" />
           <TextBlock Text="OpenPixels" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" Margin="0,0,14,0" />
-          <Button Classes="ghost" Click="OnOpen" ToolTip.Tip="打开照片（⌘O）">
+          <Button Classes="ghost" Click="OnOpen" ToolTip.Tip="{local:Tr '打开照片（⌘O）'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M2.5,3.5 H13.5 V12.5 H2.5 Z M2.5,10.5 L6,7 L9,10 L10.5,8.5 L13.5,11.5 M10.5,5.6 A0.9,0.9 0 1 1 10.49,5.6" />
-              <TextBlock Text="打开" />
+              <TextBlock Text="{local:Tr '打开'}" />
             </StackPanel>
           </Button>
-          <Button Classes="ghost" Click="OnOpenFolder" ToolTip.Tip="导入整个文件夹">
+          <Button Classes="ghost" Click="OnOpenFolder" ToolTip.Tip="{local:Tr '导入整个文件夹'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M2,4 H6 L7.5,5.5 H14 V12.5 H2 Z" />
-              <TextBlock Text="文件夹" />
+              <TextBlock Text="{local:Tr '文件夹'}" />
             </StackPanel>
           </Button>
           <Border Classes="divider" />
-          <Button Classes="ghost" Command="{Binding UndoCommand}" ToolTip.Tip="撤销（⌘Z）" Padding="7,5">
+          <Button Classes="ghost" Command="{Binding UndoCommand}" ToolTip.Tip="{local:Tr '撤销（⌘Z）'}" Padding="7,5">
             <Path Classes="icon" Data="M5.5,3.5 L2.5,6.5 L5.5,9.5 M2.5,6.5 H10 A3,3 0 0 1 10,12.5 H7" />
           </Button>
-          <Button Classes="ghost" Command="{Binding RedoCommand}" ToolTip.Tip="重做（⇧⌘Z）" Padding="7,5">
+          <Button Classes="ghost" Command="{Binding RedoCommand}" ToolTip.Tip="{local:Tr '重做（⇧⌘Z）'}" Padding="7,5">
             <Path Classes="icon" Data="M10.5,3.5 L13.5,6.5 L10.5,9.5 M13.5,6.5 H6 A3,3 0 0 0 6,12.5 H9" />
           </Button>
         </StackPanel>
 
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center" VerticalAlignment="Center">
-          <Button Classes="ghost" Command="{Binding AutoToneCommand}" ToolTip.Tip="按直方图自动设置影调">
+          <Button Classes="ghost" Command="{Binding AutoToneCommand}" ToolTip.Tip="{local:Tr '按直方图自动设置影调'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M7,2 L8.2,5.8 L12,7 L8.2,8.2 L7,12 L5.8,8.2 L2,7 L5.8,5.8 Z M12.5,10.5 L13,12 L14.5,12.5 L13,13 L12.5,14.5 L12,13 L10.5,12.5 L12,12 Z" />
-              <TextBlock Text="智能调色" />
+              <TextBlock Text="{local:Tr '智能调色'}" />
             </StackPanel>
           </Button>
-          <ToggleButton Classes="ghost" IsChecked="{Binding CropEditing}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="裁剪与旋转（R）">
+          <ToggleButton Classes="ghost" IsChecked="{Binding CropEditing}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{local:Tr '裁剪与旋转（R）'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M4.5,1.5 V11.5 H14.5 M1.5,4.5 H11.5 V14.5" />
-              <TextBlock Text="裁剪" />
+              <TextBlock Text="{local:Tr '裁剪'}" />
             </StackPanel>
           </ToggleButton>
-          <ToggleButton Classes="ghost" IsChecked="{Binding PickingWhiteBalance, Mode=OneWay}" Command="{Binding PickWhiteBalanceCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="白平衡吸管（W）">
+          <ToggleButton Classes="ghost" IsChecked="{Binding PickingWhiteBalance, Mode=OneWay}" Command="{Binding PickWhiteBalanceCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{local:Tr '白平衡吸管（W）'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M10.5,2.5 L13.5,5.5 M12,4 L5,11 L3,11.5 L2.5,13.5 L4.5,13 L5,11 M8.5,5.5 L10.5,7.5" />
-              <TextBlock Text="白平衡" />
+              <TextBlock Text="{local:Tr '白平衡'}" />
             </StackPanel>
           </ToggleButton>
-          <ToggleButton Classes="ghost" IsChecked="{Binding CompareOn}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="修图前后对比；按住 \ 看整张修图前">
+          <ToggleButton Classes="ghost" IsChecked="{Binding CompareOn}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{local:Tr '修图前后对比；按住 \ 看整张修图前'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M2.5,3.5 H13.5 V12.5 H2.5 Z M8,1.5 V14.5" />
-              <TextBlock Text="对比" />
+              <TextBlock Text="{local:Tr '对比'}" />
             </StackPanel>
           </ToggleButton>
-          <Button Classes="ghost" Command="{Binding ResetCommand}" ToolTip.Tip="清除这张照片的全部调整">
+          <Button Classes="ghost" Command="{Binding ResetCommand}" ToolTip.Tip="{local:Tr '清除这张照片的全部调整'}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M3,8 A5,5 0 1 0 4.5,4.4 M2.8,2.2 V4.8 H5.4" />
-              <TextBlock Text="重置" />
+              <TextBlock Text="{local:Tr '重置'}" />
             </StackPanel>
           </Button>
         </StackPanel>
@@ -109,15 +110,15 @@
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
           <Border Background="{StaticResource OpRaisedBrush}" CornerRadius="6" Padding="2">
             <StackPanel Orientation="Horizontal">
-              <Button Classes="ghost" Content="适合" Command="{Binding FitViewCommand}" IsEnabled="{Binding CanEdit}" MinHeight="24" Padding="9,2" ToolTip.Tip="Z 在适合窗口和 100% 之间切换" />
+              <Button Classes="ghost" Content="{local:Tr '适合'}" Command="{Binding FitViewCommand}" IsEnabled="{Binding CanEdit}" MinHeight="24" Padding="9,2" ToolTip.Tip="{local:Tr 'Z 在适合窗口和 100% 之间切换'}" />
               <Button Classes="ghost" Content="100%" Command="{Binding ActualPixelsCommand}" IsEnabled="{Binding CanEdit}" MinHeight="24" Padding="9,2" />
             </StackPanel>
           </Border>
           <TextBlock Text="{Binding ZoomLabel}" Classes="muted" FontSize="11" VerticalAlignment="Center" Width="40" TextAlignment="Center" IsVisible="{Binding IsZoomed}" />
-          <Button Classes="accent" Click="OnExport" IsEnabled="{Binding CanEdit}" ToolTip.Tip="导出（⌘E）" Margin="4,0,0,0">
+          <Button Classes="accent" Click="OnExport" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{local:Tr '导出（⌘E）'}" Margin="4,0,0,0">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <Path Classes="icon" Data="M8,10 V2.5 M5,5.5 L8,2.5 L11,5.5 M3,9.5 V13 H13 V9.5" />
-              <TextBlock Text="导出" />
+              <TextBlock Text="{local:Tr '导出'}" />
             </StackPanel>
           </Button>
         </StackPanel>
@@ -127,6 +128,8 @@
     <!-- Status bar -->
     <Border DockPanel.Dock="Bottom" Height="26" Background="{StaticResource OpPanelBrush}" BorderBrush="{StaticResource OpLineBrush}" BorderThickness="0,1,0,0" Padding="12,0">
       <DockPanel VerticalAlignment="Center">
+        <ComboBox DockPanel.Dock="Right" ItemsSource="{Binding LanguageNames}" SelectedIndex="{Binding LanguageIndex}" FontSize="11" MinHeight="20" Padding="8,0,4,0"
+                  Margin="12,0,0,0" Background="Transparent" ToolTip.Tip="{local:Tr '界面语言'}" />
         <TextBlock DockPanel.Dock="Right" Text="{Binding ToolHint}" Foreground="{StaticResource OpAccentBrush}" FontSize="11" />
         <TextBlock Text="{Binding Status}" Classes="muted" FontSize="11" ToolTip.Tip="{Binding StatusDetail}" TextTrimming="CharacterEllipsis" />
       </DockPanel>
@@ -137,32 +140,67 @@
       <!-- Library -->
       <Border x:Name="LibraryPanel" Grid.Column="0" Width="248" Background="{StaticResource OpPanelBrush}" BorderBrush="{StaticResource OpLineBrush}" BorderThickness="0,0,1,0">
         <TabControl Padding="0" Margin="0,4,0,0">
-          <TabItem Header="照片">
+          <TabItem Header="{local:Tr '照片'}">
             <DockPanel>
               <StackPanel DockPanel.Dock="Top" Margin="12,6,12,6" Spacing="6" MaxWidth="520" HorizontalAlignment="Left" Width="224" x:Name="LibraryTools">
                 <DockPanel>
-                  <ToggleButton DockPanel.Dock="Right" Classes="ghost" IsChecked="{Binding IsGridView}" MinHeight="24" Padding="8,2" ToolTip.Tip="G 网格视图，E 单张视图">
+                  <Button DockPanel.Dock="Right" Classes="ghost" MinHeight="24" Padding="8,2" Margin="4,0,0,0" ToolTip.Tip="{local:Tr '把一组照片存为项目，以后一键打开'}">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                      <Path Classes="icon" Data="M2.5,4.5 H13.5 V13 H2.5 Z M5.5,4.5 V2.5 H10.5 V4.5" />
+                      <TextBlock Text="{local:Tr '项目'}" />
+                    </StackPanel>
+                    <Button.Flyout>
+                      <Flyout Placement="BottomEdgeAlignedLeft">
+                        <DockPanel Width="260" MaxHeight="420">
+              <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+                <TextBox Text="{Binding NewProjectName}" Watermark="{local:Tr '项目名称'}" />
+                <Button Content="{local:Tr '把当前照片存为项目'}" Command="{Binding SaveProjectCommand}" IsEnabled="{Binding HasPhotos}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              </StackPanel>
+              <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="{local:Tr '项目只记住是哪些照片；照片本身和修图参数仍在原处。'}" Margin="0,8,0,0" />
+              <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Projects}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:Project">
+                      <Border Background="{StaticResource OpRaisedBrush}" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
+                        <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto">
+                          <TextBlock Text="{Binding Name}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Grid.Row="1" Text="{Binding CountLabel}" FontSize="10" Classes="muted" />
+                          <Button Grid.Column="1" Grid.RowSpan="2" Classes="ghost" Content="{local:Tr '打开'}" FontSize="11" Padding="6,2" MinHeight="22"
+                                  Command="{Binding $parent[ItemsControl].((local:MainViewModel)DataContext).OpenProjectCommand}" CommandParameter="{Binding}" />
+                          <Button Grid.Column="2" Grid.RowSpan="2" Classes="ghost" Content="{local:Tr '删除'}" FontSize="11" Padding="6,2" MinHeight="22"
+                                  Command="{Binding $parent[ItemsControl].((local:MainViewModel)DataContext).DeleteProjectCommand}" CommandParameter="{Binding}" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+                      </Flyout>
+                    </Button.Flyout>
+                  </Button>
+                  <ToggleButton DockPanel.Dock="Right" Classes="ghost" IsChecked="{Binding IsGridView}" MinHeight="24" Padding="8,2" ToolTip.Tip="{local:Tr 'G 网格视图，E 单张视图'}">
                     <StackPanel Orientation="Horizontal" Spacing="5">
                       <Path Classes="icon" Data="M2.5,2.5 H6.5 V6.5 H2.5 Z M9.5,2.5 H13.5 V6.5 H9.5 Z M2.5,9.5 H6.5 V13.5 H2.5 Z M9.5,9.5 H13.5 V13.5 H9.5 Z" />
-                      <TextBlock Text="网格" />
+                      <TextBlock Text="{local:Tr '网格'}" />
                     </StackPanel>
                   </ToggleButton>
                   <TextBlock Text="{Binding VisibleCount}" Classes="label" VerticalAlignment="Center" />
                 </DockPanel>
                 <UniformGrid Columns="2" ColumnSpacing="6" RowSpacing="6">
-                  <ComboBox ItemsSource="{Binding RatingFilters}" SelectedIndex="{Binding RatingFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="按星级筛选" />
-                  <ComboBox ItemsSource="{Binding FlagFilters}" SelectedIndex="{Binding FlagFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="按旗标筛选" />
-                  <ComboBox ItemsSource="{Binding LabelFilters}" SelectedIndex="{Binding LabelFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="按色标筛选" />
-                  <ComboBox ItemsSource="{Binding GroupFilters}" SelectedIndex="{Binding GroupFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="先点“智能分组”" />
+                  <ComboBox ItemsSource="{Binding RatingFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding RatingFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '按星级筛选'}" />
+                  <ComboBox ItemsSource="{Binding FlagFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding FlagFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '按旗标筛选'}" />
+                  <ComboBox ItemsSource="{Binding LabelFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding LabelFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '按色标筛选'}" />
+                  <ComboBox ItemsSource="{Binding GroupFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding GroupFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '先点“智能分组”'}" />
                 </UniformGrid>
                 <UniformGrid Columns="2" ColumnSpacing="6">
-                  <Button Content="智能分组" Command="{Binding AnalyzeCommand}" IsEnabled="{Binding !IsBusy}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                          ToolTip.Tip="按拍摄时间和画面相似度把同一时刻的照片分成组，并给每张评分" />
-                  <Button Content="自动选片" Command="{Binding AutoPickCommand}" IsEnabled="{Binding !IsBusy}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                          ToolTip.Tip="每组选中最好的一张，淘汰明显失败的；已手动标记的不改" />
+                  <Button Content="{local:Tr '智能分组'}" Command="{Binding AnalyzeCommand}" IsEnabled="{Binding !IsBusy}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          ToolTip.Tip="{local:Tr '按拍摄时间和画面相似度把同一时刻的照片分成组，并给每张评分'}" />
+                  <Button Content="{local:Tr '自动选片'}" Command="{Binding AutoPickCommand}" IsEnabled="{Binding !IsBusy}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          ToolTip.Tip="{local:Tr '每组选中最好的一张，淘汰明显失败的；已手动标记的不改'}" />
                 </UniformGrid>
                 <DockPanel IsVisible="{Binding LibraryStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                  <Button DockPanel.Dock="Right" Classes="ghost" Content="取消" Command="{Binding CancelBatchCommand}" IsVisible="{Binding IsBusy}" MinHeight="22" Padding="6,1" FontSize="11" />
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '取消'}" Command="{Binding CancelBatchCommand}" IsVisible="{Binding IsBusy}" MinHeight="22" Padding="6,1" FontSize="11" />
                   <TextBlock Classes="hint" Text="{Binding LibraryStatus}" />
                 </DockPanel>
               </StackPanel>
@@ -176,10 +214,10 @@
                         <Panel>
                           <Image Source="{Binding Thumbnail}" Stretch="Uniform" Opacity="{Binding IsRejected, Converter={x:Static local:Converters.RejectedOpacity}}" />
                           <Border HorizontalAlignment="Left" VerticalAlignment="Top" Background="#CC111113" CornerRadius="4" Padding="4,1" IsVisible="{Binding IsPicked}">
-                            <TextBlock Text="✓ 选中" FontSize="10" Foreground="#7BD88F" />
+                            <TextBlock Text="{local:Tr '✓ 选中'}" FontSize="10" Foreground="#7BD88F" />
                           </Border>
                           <Border HorizontalAlignment="Left" VerticalAlignment="Top" Background="#CC111113" CornerRadius="4" Padding="4,1" IsVisible="{Binding IsRejected}">
-                            <TextBlock Text="✕ 淘汰" FontSize="10" Foreground="#A0A0A8" />
+                            <TextBlock Text="{local:Tr '✕ 淘汰'}" FontSize="10" Foreground="#A0A0A8" />
                           </Border>
                           <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="#CC111113" CornerRadius="4" Padding="4,1" IsVisible="{Binding GroupText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                             <TextBlock Text="{Binding GroupText}" FontSize="10" Foreground="{Binding IsBest, Converter={x:Static local:Converters.BestForeground}}" />
@@ -197,7 +235,7 @@
               </ListBox>
             </DockPanel>
           </TabItem>
-          <TabItem Header="历史">
+          <TabItem Header="{local:Tr '历史'}">
             <ListBox Classes="list" ItemsSource="{Binding HistoryRows}" SelectedIndex="{Binding HistoryIndex}" Margin="0,4,0,0">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="local:HistoryRow">
@@ -206,15 +244,15 @@
               </ListBox.ItemTemplate>
             </ListBox>
           </TabItem>
-          <TabItem Header="快照">
+          <TabItem Header="{local:Tr '快照'}">
             <DockPanel Margin="12,8">
               <Button DockPanel.Dock="Top" Command="{Binding TakeSnapshotCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,0,0,8">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <Path Classes="icon" Data="M8,3.5 V12.5 M3.5,8 H12.5" />
-                  <TextBlock Text="新建快照" />
+                  <TextBlock Text="{local:Tr '新建快照'}" />
                 </StackPanel>
               </Button>
-              <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="快照保存当前的全部调整，之后随时可以回到这个状态。" Margin="0,8,0,0" />
+              <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="{local:Tr '快照保存当前的全部调整，之后随时可以回到这个状态。'}" Margin="0,8,0,0" />
               <ScrollViewer>
                 <ItemsControl ItemsSource="{Binding Snapshots}">
                   <ItemsControl.ItemTemplate>
@@ -222,37 +260,10 @@
                       <Border Background="{StaticResource OpRaisedBrush}" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
                         <Grid ColumnDefinitions="*,Auto,Auto">
                           <TextBlock Text="{Binding Name}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                          <Button Grid.Column="1" Classes="ghost" Content="应用" FontSize="11" Padding="6,2" MinHeight="22"
+                          <Button Grid.Column="1" Classes="ghost" Content="{local:Tr '应用'}" FontSize="11" Padding="6,2" MinHeight="22"
                                   Command="{Binding $parent[Window].((local:MainViewModel)DataContext).ApplySnapshotCommand}" CommandParameter="{Binding}" />
-                          <Button Grid.Column="2" Classes="ghost" Content="删除" FontSize="11" Padding="6,2" MinHeight="22"
+                          <Button Grid.Column="2" Classes="ghost" Content="{local:Tr '删除'}" FontSize="11" Padding="6,2" MinHeight="22"
                                   Command="{Binding $parent[Window].((local:MainViewModel)DataContext).DeleteSnapshotCommand}" CommandParameter="{Binding}" />
-                        </Grid>
-                      </Border>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </ScrollViewer>
-            </DockPanel>
-          </TabItem>
-          <TabItem Header="项目">
-            <DockPanel Margin="12,8">
-              <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
-                <TextBox Text="{Binding NewProjectName}" Watermark="项目名称" />
-                <Button Content="把当前照片存为项目" Command="{Binding SaveProjectCommand}" IsEnabled="{Binding HasPhotos}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-              </StackPanel>
-              <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="项目只记住是哪些照片；照片本身和修图参数仍在原处。" Margin="0,8,0,0" />
-              <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding Projects}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="local:Project">
-                      <Border Background="{StaticResource OpRaisedBrush}" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
-                        <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto">
-                          <TextBlock Text="{Binding Name}" FontSize="12" TextTrimming="CharacterEllipsis" />
-                          <TextBlock Grid.Row="1" Text="{Binding Paths.Count, StringFormat='{}{0} 张'}" FontSize="10" Classes="muted" />
-                          <Button Grid.Column="1" Grid.RowSpan="2" Classes="ghost" Content="打开" FontSize="11" Padding="6,2" MinHeight="22"
-                                  Command="{Binding $parent[Window].((local:MainViewModel)DataContext).OpenProjectCommand}" CommandParameter="{Binding}" />
-                          <Button Grid.Column="2" Grid.RowSpan="2" Classes="ghost" Content="删除" FontSize="11" Padding="6,2" MinHeight="22"
-                                  Command="{Binding $parent[Window].((local:MainViewModel)DataContext).DeleteProjectCommand}" CommandParameter="{Binding}" />
                         </Grid>
                       </Border>
                     </DataTemplate>
@@ -272,9 +283,9 @@
               <Grid>
                 <local:HistogramView Data="{Binding Histogram}" />
                 <ToggleButton IsChecked="{Binding ClipShadows}" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6" Width="12" Height="12" Padding="0" MinWidth="0" MinHeight="0" CornerRadius="3"
-                              Background="{Binding Histogram, Converter={x:Static local:Converters.ShadowClipBrush}}" ToolTip.Tip="显示阴影溢出（J 同时切换两侧）" />
+                              Background="{Binding Histogram, Converter={x:Static local:Converters.ShadowClipBrush}}" ToolTip.Tip="{local:Tr '显示阴影溢出（J 同时切换两侧）'}" />
                 <ToggleButton IsChecked="{Binding ClipHighlights}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6" Width="12" Height="12" Padding="0" MinWidth="0" MinHeight="0" CornerRadius="3"
-                              Background="{Binding Histogram, Converter={x:Static local:Converters.HighlightClipBrush}}" ToolTip.Tip="显示高光溢出（J 同时切换两侧）" />
+                              Background="{Binding Histogram, Converter={x:Static local:Converters.HighlightClipBrush}}" ToolTip.Tip="{local:Tr '显示高光溢出（J 同时切换两侧）'}" />
               </Grid>
             </Border>
             <DockPanel>
@@ -285,64 +296,65 @@
           <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource OpLineBrush}" />
           <ScrollViewer>
             <StackPanel>
-              <Expander Header="基本" IsExpanded="True">
+              <Expander Header="{local:Tr '基本'}" IsExpanded="True">
                 <StackPanel>
-                  <TextBlock Classes="sub" Text="白平衡" Margin="0,0,0,2" />
+                  <TextBlock Classes="sub" Text="{local:Tr '白平衡'}" Margin="0,0,0,2" />
                   <ItemsControl ItemsSource="{Binding WhiteBalanceGroup.Sliders}" />
-                  <TextBlock Classes="sub" Text="影调" />
+                  <TextBlock Classes="sub" Text="{local:Tr '影调'}" />
                   <ItemsControl ItemsSource="{Binding ToneGroup.Sliders}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="修复">
+              <Expander Header="{local:Tr '修复'}">
               <StackPanel Spacing="8">
-                <UniformGrid Columns="4" ColumnSpacing="4">
-                  <ToggleButton Classes="tool" Content="污点" IsChecked="{Binding IsSpot, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Spot"
-                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="污点修复：点击斑点，自动找周围的纹理盖上" />
-                  <ToggleButton Classes="tool" Content="仿制" IsChecked="{Binding IsClone, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Clone"
-                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="仿制图章：按住 Option（Alt）取样，再涂抹" />
-                  <ToggleButton Classes="tool" Content="红眼" IsChecked="{Binding IsRedEye, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RedEye"
-                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="红眼去除：点击瞳孔" />
-                  <ToggleButton Classes="tool" Content="AI 消除" IsChecked="{Binding IsErase, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Erase"
-                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="涂抹要去掉的物体，LaMa 模型补上背景" />
+                <UniformGrid Columns="2" ColumnSpacing="4" RowSpacing="4">
+                  <ToggleButton Classes="tool" Content="{local:Tr '污点'}" IsChecked="{Binding IsSpot, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Spot"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '污点修复：点击斑点，自动找周围的纹理盖上'}" />
+                  <ToggleButton Classes="tool" Content="{local:Tr '仿制'}" IsChecked="{Binding IsClone, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Clone"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '仿制图章：按住 Option（Alt）取样，再涂抹'}" />
+                  <ToggleButton Classes="tool" Content="{local:Tr '红眼'}" IsChecked="{Binding IsRedEye, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RedEye"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '红眼去除：点击瞳孔'}" />
+                  <ToggleButton Classes="tool" Content="{local:Tr 'AI 消除'}" IsChecked="{Binding IsErase, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Erase"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '涂抹要去掉的物体，LaMa 模型补上背景'}" />
                 </UniformGrid>
-                <Grid ColumnDefinitions="84,*,40" Classes="sliderRow">
-                  <TextBlock Text="画笔大小" FontSize="12" VerticalAlignment="Center" Classes="muted" />
+                <Grid Classes="sliderRow">
+<Grid.ColumnDefinitions><ColumnDefinition Width="{x:Static local:LanguageLayout.LabelColumn}" /><ColumnDefinition Width="*" /><ColumnDefinition Width="40" /></Grid.ColumnDefinitions>
+                  <TextBlock Text="{local:Tr '画笔大小'}" FontSize="12" VerticalAlignment="Center" Classes="muted" />
                   <Slider Grid.Column="1" Minimum="0.002" Maximum="0.06" Value="{Binding HealRadius}" Margin="4,0" />
                   <TextBlock Grid.Column="2" Text="{Binding HealRadius, StringFormat='{}{0:P1}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Classes="muted" />
                 </Grid>
                 <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsErase}">
-                  <Button Classes="accent" Content="消除" Command="{Binding RunEraseCommand}" IsEnabled="{Binding CanRunErase}" />
-                  <Button Classes="ghost" Content="清除涂抹" Command="{Binding ClearEraseMarksCommand}" />
+                  <Button Classes="accent" Content="{local:Tr '消除'}" Command="{Binding RunEraseCommand}" IsEnabled="{Binding CanRunErase}" />
+                  <Button Classes="ghost" Content="{local:Tr '清除涂抹'}" Command="{Binding ClearEraseMarksCommand}" />
                 </StackPanel>
                 <UniformGrid Columns="2" ColumnSpacing="6" RowSpacing="6">
-                  <Button Content="撤销上一处修复" Command="{Binding UndoHealCommand}" IsEnabled="{Binding HasHeals}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                  <Button Content="清除全部修复" Command="{Binding ClearHealsCommand}" IsEnabled="{Binding HasHeals}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                  <Button Content="撤销上一次消除" Command="{Binding UndoEraseCommand}" IsEnabled="{Binding HasErases}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                  <Button Content="清除全部消除" Command="{Binding ClearErasesCommand}" IsEnabled="{Binding HasErases}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="{local:Tr '撤销上一处修复'}" Command="{Binding UndoHealCommand}" IsEnabled="{Binding HasHeals}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="{local:Tr '清除全部修复'}" Command="{Binding ClearHealsCommand}" IsEnabled="{Binding HasHeals}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="{local:Tr '撤销上一次消除'}" Command="{Binding UndoEraseCommand}" IsEnabled="{Binding HasErases}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="{local:Tr '清除全部消除'}" Command="{Binding ClearErasesCommand}" IsEnabled="{Binding HasErases}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                 </UniformGrid>
                 <TextBlock Classes="hint" Text="{Binding HealSummary}" IsVisible="{Binding HealSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <TextBlock Classes="hint" Text="{Binding RetouchStatus}" IsVisible="{Binding RetouchStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               </StackPanel>
             </Expander>
 
-            <Expander Header="局部调整">
+            <Expander Header="{local:Tr '局部调整'}">
               <StackPanel Spacing="8">
-                <UniformGrid Columns="4" ColumnSpacing="4" RowSpacing="4">
-                  <ToggleButton Classes="tool" Content="线性" IsChecked="{Binding IsLinear, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Linear"
-                                IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="在画面上拖出渐变" />
-                  <ToggleButton Classes="tool" Content="径向" IsChecked="{Binding IsRadial, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Radial"
-                                IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="从中心向外拖出范围" />
-                  <ToggleButton Classes="tool" Content="画笔" IsChecked="{Binding IsBrush, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Brush"
-                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="涂抹要调整的区域" />
-                  <Button Content="全图" Command="{Binding AddFullLayerCommand}" IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                          ToolTip.Tip="作用于整张照片，常与亮度或颜色范围一起用" />
-                  <Button Content="主体" Command="{Binding AddAiLayerCommand}" CommandParameter="Subject" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding AiAvailable}"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="AI 识别画面主体（MODNet）" />
-                  <Button Content="背景" Command="{Binding AddAiLayerCommand}" CommandParameter="Background" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding AiAvailable}"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="主体以外的部分" />
-                  <Button Content="天空" Command="{Binding AddAiLayerCommand}" CommandParameter="Sky" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding SkyAvailable}"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="AI 识别天空（SkyWater-Seg）" />
+                <UniformGrid Columns="3" ColumnSpacing="4" RowSpacing="4">
+                  <ToggleButton Classes="tool" Content="{local:Tr '线性'}" IsChecked="{Binding IsLinear, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Linear"
+                                IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '在画面上拖出渐变'}" />
+                  <ToggleButton Classes="tool" Content="{local:Tr '径向'}" IsChecked="{Binding IsRadial, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Radial"
+                                IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '从中心向外拖出范围'}" />
+                  <ToggleButton Classes="tool" Content="{local:Tr '画笔'}" IsChecked="{Binding IsBrush, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Brush"
+                                IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '涂抹要调整的区域'}" />
+                  <Button Content="{local:Tr '全图'}" Command="{Binding AddFullLayerCommand}" IsEnabled="{Binding CanAddLayer}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          ToolTip.Tip="{local:Tr '作用于整张照片，常与亮度或颜色范围一起用'}" />
+                  <Button Content="{local:Tr '主体'}" Command="{Binding AddAiLayerCommand}" CommandParameter="Subject" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding AiAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr 'AI 识别画面主体（MODNet）'}" />
+                  <Button Content="{local:Tr '背景'}" Command="{Binding AddAiLayerCommand}" CommandParameter="Background" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding AiAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '主体以外的部分'}" />
+                  <Button Content="{local:Tr '天空'}" Command="{Binding AddAiLayerCommand}" CommandParameter="Sky" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding SkyAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr 'AI 识别天空（SkyWater-Seg）'}" />
                 </UniformGrid>
                 <TextBlock Classes="hint" Text="{Binding RetouchStatus}" IsVisible="{Binding AiBusy}" />
                 <ItemsControl ItemsSource="{Binding Layers}">
@@ -352,7 +364,7 @@
                         <Grid ColumnDefinitions="*,Auto">
                           <Button Classes="ghost" Content="{Binding Title}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="0,2" MinHeight="22"
                                   Command="{Binding $parent[Window].((local:MainViewModel)DataContext).SelectLayerCommand}" CommandParameter="{Binding}" />
-                          <Button Grid.Column="1" Classes="ghost" Content="删除" FontSize="11" Padding="6,1" MinHeight="22"
+                          <Button Grid.Column="1" Classes="ghost" Content="{local:Tr '删除'}" FontSize="11" Padding="6,1" MinHeight="22"
                                   Command="{Binding $parent[Window].((local:MainViewModel)DataContext).DeleteLayerCommand}" CommandParameter="{Binding}" />
                         </Grid>
                       </Border>
@@ -362,36 +374,83 @@
                 <StackPanel Spacing="6" IsVisible="{Binding HasActiveLayer}">
                   <ItemsControl ItemsSource="{Binding ActiveLocalSliders}" />
                   <DockPanel>
-                    <TextBlock Text="范围" Width="84" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                    <TextBlock Text="{local:Tr '范围'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
                     <ComboBox ItemsSource="{Binding RangeModes}" SelectedIndex="{Binding ActiveRangeMode}" HorizontalAlignment="Stretch" />
                   </DockPanel>
                   <ItemsControl ItemsSource="{Binding ActiveRangeSliders}" />
                   <StackPanel Orientation="Horizontal" Spacing="12">
-                    <CheckBox Content="反相" IsChecked="{Binding ActiveInvert}" />
-                    <CheckBox Content="显示蒙版" IsChecked="{Binding ShowMask}" />
+                    <CheckBox Content="{local:Tr '反相'}" IsChecked="{Binding ActiveInvert}" />
+                    <CheckBox Content="{local:Tr '显示蒙版'}" IsChecked="{Binding ShowMask}" />
                   </StackPanel>
                   <StackPanel Spacing="6" IsVisible="{Binding ActiveIsBrushable}">
                     <UniformGrid Columns="2" ColumnSpacing="6">
-                      <ToggleButton Classes="tool" Content="涂抹加入" IsChecked="{Binding IsRefineAdd, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RefineAdd"
+                      <ToggleButton Classes="tool" Content="{local:Tr '涂抹加入'}" IsChecked="{Binding IsRefineAdd, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RefineAdd"
                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                      <ToggleButton Classes="tool" Content="涂抹去掉" IsChecked="{Binding IsRefineSubtract, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RefineSubtract"
+                      <ToggleButton Classes="tool" Content="{local:Tr '涂抹去掉'}" IsChecked="{Binding IsRefineSubtract, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="RefineSubtract"
                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </UniformGrid>
                   </StackPanel>
-                  <Grid ColumnDefinitions="84,*,40" Classes="sliderRow">
-                    <TextBlock Text="画笔大小" FontSize="12" VerticalAlignment="Center" Classes="muted" />
+                  <Grid Classes="sliderRow">
+<Grid.ColumnDefinitions><ColumnDefinition Width="{x:Static local:LanguageLayout.LabelColumn}" /><ColumnDefinition Width="*" /><ColumnDefinition Width="40" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="{local:Tr '画笔大小'}" FontSize="12" VerticalAlignment="Center" Classes="muted" />
                     <Slider Grid.Column="1" Minimum="0.005" Maximum="0.15" Value="{Binding LocalBrushRadius}" Margin="4,0" />
                     <TextBlock Grid.Column="2" Text="{Binding LocalBrushRadius, StringFormat='{}{0:P0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Classes="muted" />
                   </Grid>
                 </StackPanel>
-                <TextBlock Classes="hint" Text="最多 4 个图层。选中线性或径向图层后，可以直接拖动画面上的控制点。" />
+                <TextBlock Classes="hint" Text="{local:Tr '最多 4 个图层。选中线性或径向图层后，可以直接拖动画面上的控制点。'}" />
               </StackPanel>
             </Expander>
 
-            <Expander Header="曲线">
+            <Expander Header="{local:Tr '液化'}">
+              <StackPanel Spacing="8">
+                <DockPanel>
+                  <ToggleButton DockPanel.Dock="Left" Classes="tool" Content="{local:Tr '液化'}" IsChecked="{Binding IsLiquify, Mode=OneWay}" Command="{Binding ChooseToolCommand}"
+                                CommandParameter="Liquify" IsEnabled="{Binding CanEdit}" Margin="0,0,8,0" />
+                  <ComboBox ItemsSource="{Binding LiquifyModes}" SelectedIndex="{Binding LiquifyMode}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '液化模式'}" />
+                </DockPanel>
+                <Grid Classes="sliderRow">
+<Grid.ColumnDefinitions><ColumnDefinition Width="{x:Static local:LanguageLayout.LabelColumn}" /><ColumnDefinition Width="*" /><ColumnDefinition Width="40" /></Grid.ColumnDefinitions>
+                  <TextBlock Text="{local:Tr '液化大小'}" FontSize="12" VerticalAlignment="Center" Classes="muted" />
+                  <Slider Grid.Column="1" Minimum="0.01" Maximum="0.25" Value="{Binding LiquifyRadius}" Margin="4,0" />
+                  <TextBlock Grid.Column="2" Text="{Binding LiquifyRadius, StringFormat='{}{0:P0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Classes="muted" />
+                </Grid>
+                <Grid Classes="sliderRow">
+<Grid.ColumnDefinitions><ColumnDefinition Width="{x:Static local:LanguageLayout.LabelColumn}" /><ColumnDefinition Width="*" /><ColumnDefinition Width="40" /></Grid.ColumnDefinitions>
+                  <TextBlock Text="{local:Tr '液化强度'}" FontSize="12" VerticalAlignment="Center" Classes="muted" />
+                  <Slider Grid.Column="1" Minimum="0.05" Maximum="1" Value="{Binding LiquifyStrength}" Margin="4,0" />
+                  <TextBlock Grid.Column="2" Text="{Binding LiquifyStrength, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Classes="muted" />
+                </Grid>
+                <UniformGrid Columns="2" ColumnSpacing="6">
+                  <Button Content="{local:Tr '撤销上一次液化'}" Command="{Binding UndoLiquifyCommand}" IsEnabled="{Binding HasWarps}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Content="{local:Tr '清除全部液化'}" Command="{Binding ClearLiquifyCommand}" IsEnabled="{Binding HasWarps}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                </UniformGrid>
+              </StackPanel>
+            </Expander>
+
+            <Expander Header="{local:Tr '换背景 / 换天'}" IsVisible="{Binding AiAvailable}">
+              <StackPanel Spacing="8">
+                <TextBlock Classes="sub" Text="{local:Tr '换背景'}" Margin="0,0,0,0" />
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '导入图片'}" Click="OnImportBackground" Margin="6,0,0,0" />
+                  <ComboBox ItemsSource="{Binding BackgroundChoices}" SelectedItem="{Binding SelectedBackground}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" />
+                </DockPanel>
+                <ItemsControl ItemsSource="{Binding BackgroundGroup.Sliders}" />
+                <StackPanel Spacing="8" IsVisible="{Binding SkyAvailable}">
+                  <TextBlock Classes="sub" Text="{local:Tr '换天'}" />
+                  <DockPanel>
+                    <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '导入图片'}" Click="OnImportSky" Margin="6,0,0,0" />
+                    <ComboBox ItemsSource="{Binding SkyChoices}" SelectedItem="{Binding SelectedSky}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" />
+                  </DockPanel>
+                  <ItemsControl ItemsSource="{Binding SkyGroup.Sliders}" />
+                </StackPanel>
+                <TextBlock Classes="hint" Text="{Binding FullStatus}" IsVisible="{Binding FullStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+            </Expander>
+
+            <Expander Header="{local:Tr '曲线'}">
                 <StackPanel Spacing="8">
                   <DockPanel>
-                    <Button DockPanel.Dock="Right" Classes="ghost" Content="重置" FontSize="11" MinHeight="24" Padding="8,2" Command="{Binding ResetCurveCommand}" IsEnabled="{Binding CanEdit}" />
+                    <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '重置'}" FontSize="11" MinHeight="24" Padding="8,2" Command="{Binding ResetCurveCommand}" IsEnabled="{Binding CanEdit}" />
                     <ListBox Classes="segments" ItemsSource="{Binding CurveChannelNames}" SelectedIndex="{Binding CurveChannelIndex}" HorizontalAlignment="Left">
                       <ListBox.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -402,8 +461,8 @@
                   </DockPanel>
                   <local:CurveEditor x:Name="Curve" Height="296" Edit="{Binding CurrentEdit}" Channel="{Binding CurveChannel}"
                                      Histogram="{Binding Histogram}" IsEnabled="{Binding CanEdit}" />
-                  <TextBlock Classes="hint" Text="点击曲线加点，拖动调整。双击或拖出框外可删除。" />
-                  <TextBlock Classes="sub" Text="参数曲线" />
+                  <TextBlock Classes="hint" Text="{local:Tr '点击曲线加点，拖动调整。双击或拖出框外可删除。'}" />
+                  <TextBlock Classes="sub" Text="{local:Tr '参数曲线'}" />
                   <ItemsControl ItemsSource="{Binding ParametricGroup.Sliders}" />
                 </StackPanel>
               </Expander>
@@ -421,24 +480,24 @@
                 </StackPanel>
               </Expander>
 
-              <Expander Header="颜色混合点">
+              <Expander Header="{local:Tr '颜色混合点'}">
                 <StackPanel Spacing="8">
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <ToggleButton Classes="tool" IsChecked="{Binding PickingPoint, Mode=OneWay}" Command="{Binding PickPointColourCommand}" IsEnabled="{Binding CanEdit}">
                       <StackPanel Orientation="Horizontal" Spacing="6">
                         <Path Classes="icon" Data="M10.5,2.5 L13.5,5.5 M12,4 L5,11 L3,11.5 L2.5,13.5 L4.5,13 L5,11 M8.5,5.5 L10.5,7.5" />
-                        <TextBlock Text="吸管取色" />
+                        <TextBlock Text="{local:Tr '吸管取色'}" />
                       </StackPanel>
                     </ToggleButton>
                     <Border Width="22" Height="22" CornerRadius="11" Background="{Binding PointSwatch}" IsVisible="{Binding PointActive}" BorderBrush="#40FFFFFF" BorderThickness="1" />
-                    <Button Classes="ghost" Content="移除" Command="{Binding RemovePointColourCommand}" IsVisible="{Binding PointActive}" />
+                    <Button Classes="ghost" Content="{local:Tr '移除'}" Command="{Binding RemovePointColourCommand}" IsVisible="{Binding PointActive}" />
                   </StackPanel>
                   <ItemsControl ItemsSource="{Binding PointGroup.Sliders}" IsVisible="{Binding PointActive}" />
-                  <TextBlock Classes="hint" Text="在画面上点一种颜色，只调整与它相近的颜色。" IsVisible="{Binding !PointActive}" />
+                  <TextBlock Classes="hint" Text="{local:Tr '在画面上点一种颜色，只调整与它相近的颜色。'}" IsVisible="{Binding !PointActive}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="色调分离">
+              <Expander Header="{local:Tr '色调分离'}">
                 <StackPanel Spacing="4">
                   <ItemsControl ItemsSource="{Binding Grades}">
                     <ItemsControl.ItemsPanel>
@@ -449,107 +508,120 @@
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="local:GradeItem">
                         <StackPanel Spacing="6" Margin="2,4">
-                          <local:ColorWheel Width="84" Height="84" Hue="{Binding Hue, Mode=OneWay}" Amount="{Binding Amount, Mode=OneWay}" Picked="OnWheelPicked"
+                          <local:ColorWheel Width="{x:Static local:LanguageLayout.LabelWidth}" Height="84" Hue="{Binding Hue, Mode=OneWay}" Amount="{Binding Amount, Mode=OneWay}" Picked="OnWheelPicked"
                                             IsEnabled="{Binding $parent[Window].((local:MainViewModel)DataContext).CanEdit}" />
                           <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" FontSize="11" Classes="muted" />
                         </StackPanel>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <TextBlock Classes="hint" Text="拖动选择色相和强度，双击复位。" HorizontalAlignment="Center" />
+                  <TextBlock Classes="hint" Text="{local:Tr '拖动选择色相和强度，双击复位。'}" HorizontalAlignment="Center" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="色彩与效果">
+              <Expander Header="{local:Tr '色彩与效果'}">
                 <ItemsControl ItemsSource="{Binding EffectsGroup.Sliders}" />
               </Expander>
 
-              <Expander Header="风格滤镜">
+              <Expander Header="{local:Tr '风格滤镜'}">
                 <StackPanel Spacing="8">
                   <DockPanel>
-                    <Button DockPanel.Dock="Right" Classes="ghost" Content="导入 .cube" Click="OnImportLook" Margin="6,0,0,0" />
+                    <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '导入 .cube'}" Click="OnImportLook" Margin="6,0,0,0" />
                     <ComboBox ItemsSource="{Binding LookChoices}" SelectedItem="{Binding SelectedLook}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" MaxDropDownHeight="420" />
                   </DockPanel>
                   <ContentControl Content="{Binding LookAmount}" />
+                <TextBlock Classes="sub" Text="{local:Tr '追色'}" />
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Content="{local:Tr '用作参考'}" Command="{Binding MatchFromPhotoCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />
+                  <ComboBox ItemsSource="{Binding Photos}" SelectedItem="{Binding MatchReference}" PlaceholderText="{local:Tr '选择参考照片'}" HorizontalAlignment="Stretch">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="local:PhotoItem">
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </DockPanel>
+                <Button Classes="ghost" Content="{local:Tr '导入参考图'}" Click="OnMatchFromFile" HorizontalAlignment="Left" />
+                <TextBlock Classes="hint" Text="{Binding FullStatus}" IsVisible="{Binding FullStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="相机与镜头">
+              <Expander Header="{local:Tr '相机与镜头'}">
                 <StackPanel Spacing="8">
                   <DockPanel>
-                    <TextBlock Text="色彩配置" Width="84" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                    <TextBlock Text="{local:Tr '色彩配置'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
                     <ComboBox ItemsSource="{Binding CameraProfiles}" SelectedIndex="{Binding CameraProfileIndex}" IsEnabled="{Binding CameraProfileAvailable}" HorizontalAlignment="Stretch" />
                   </DockPanel>
-                  <CheckBox Content="使用自动镜头校正" IsChecked="{Binding LensAuto}" IsEnabled="{Binding LensAutoAvailable}" />
+                  <CheckBox Content="{local:Tr '使用自动镜头校正'}" IsChecked="{Binding LensAuto}" IsEnabled="{Binding LensAutoAvailable}" />
                   <TextBlock Classes="hint" Text="{Binding LensStatus}" />
-                  <TextBlock Classes="sub" Text="手动校正" />
+                  <TextBlock Classes="sub" Text="{local:Tr '手动校正'}" />
                   <ItemsControl ItemsSource="{Binding LensGroup.Sliders}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="透视矫正">
+              <Expander Header="{local:Tr '透视矫正'}">
                 <StackPanel Spacing="4">
                   <ItemsControl ItemsSource="{Binding PerspectiveGroup.Sliders}" />
-                  <CheckBox Content="保留全图（显示黑边）" IsChecked="{Binding PerspectiveKeep}" IsEnabled="{Binding CanEdit}" />
+                  <CheckBox Content="{local:Tr '保留全图（显示黑边）'}" IsChecked="{Binding PerspectiveKeep}" IsEnabled="{Binding CanEdit}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="裁剪与旋转">
+              <Expander Header="{local:Tr '裁剪与旋转'}">
                 <StackPanel Spacing="8">
                   <DockPanel>
-                    <TextBlock Text="比例" Width="84" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                    <TextBlock Text="{local:Tr '比例'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
                     <ComboBox ItemsSource="{Binding CropRatioNames}" SelectedIndex="{Binding CropRatioIndex}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" />
                   </DockPanel>
                   <ContentControl Content="{Binding RotateSlider}" />
                   <UniformGrid Columns="3" ColumnSpacing="6">
-                    <Button Content="向左 90°" Command="{Binding TurnCommand}" CommandParameter="left" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                    <Button Content="向右 90°" Command="{Binding TurnCommand}" CommandParameter="right" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                    <Button Content="重置" Command="{Binding ResetCropCommand}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    <Button Content="{local:Tr '向左 90°'}" Command="{Binding TurnCommand}" CommandParameter="left" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    <Button Content="{local:Tr '向右 90°'}" Command="{Binding TurnCommand}" CommandParameter="right" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    <Button Content="{local:Tr '重置'}" Command="{Binding ResetCropCommand}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                   </UniformGrid>
-                  <TextBlock Classes="hint" Text="点顶栏的“裁剪”或按 R 编辑裁剪框，拖动框或四角，按 Esc 完成。" />
+                  <TextBlock Classes="hint" Text="{local:Tr '点顶栏的“裁剪”或按 R 编辑裁剪框，拖动框或四角，按 Esc 完成。'}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="预设与同步">
+              <Expander Header="{local:Tr '预设与同步'}">
                 <StackPanel Spacing="8">
                   <DockPanel>
-                    <Button DockPanel.Dock="Right" Classes="ghost" Content="删除" Command="{Binding DeletePresetCommand}" Margin="4,0,0,0" />
-                    <Button DockPanel.Dock="Right" Content="套用" Command="{Binding ApplyPresetCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />
-                    <ComboBox ItemsSource="{Binding PresetNames}" SelectedItem="{Binding SelectedPreset}" PlaceholderText="选择预设" HorizontalAlignment="Stretch" />
+                    <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '删除'}" Command="{Binding DeletePresetCommand}" Margin="4,0,0,0" />
+                    <Button DockPanel.Dock="Right" Content="{local:Tr '套用'}" Command="{Binding ApplyPresetCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />
+                    <ComboBox ItemsSource="{Binding PresetNames}" SelectedItem="{Binding SelectedPreset}" PlaceholderText="{local:Tr '选择预设'}" HorizontalAlignment="Stretch" />
                   </DockPanel>
                   <DockPanel>
-                    <Button DockPanel.Dock="Right" Content="保存当前" Command="{Binding SavePresetCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />
-                    <TextBox Text="{Binding NewPresetName}" Watermark="新预设名称" />
+                    <Button DockPanel.Dock="Right" Content="{local:Tr '保存当前'}" Command="{Binding SavePresetCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />
+                    <TextBox Text="{Binding NewPresetName}" Watermark="{local:Tr '新预设名称'}" />
                   </DockPanel>
-                  <TextBlock Classes="hint" Text="预设、粘贴和同步不包括裁剪、旋转等只属于一张照片的设置。" />
+                  <TextBlock Classes="hint" Text="{local:Tr '预设、粘贴和同步不包括裁剪、旋转等只属于一张照片的设置。'}" />
                   <UniformGrid Columns="2" ColumnSpacing="6" RowSpacing="6">
-                    <Button Content="复制设置" Command="{Binding CopySettingsCommand}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="⇧⌘C" />
+                    <Button Content="{local:Tr '复制设置'}" Command="{Binding CopySettingsCommand}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="⇧⌘C" />
                     <Button Content="{Binding PasteLabel}" Command="{Binding PasteSettingsCommand}" IsEnabled="{Binding HasCopied}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="⇧⌘V" />
                     <Button Content="{Binding SyncSelectedLabel}" Command="{Binding SyncToSelectedCommand}" IsEnabled="{Binding HasOthersSelected}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                            ToolTip.Tip="在照片列表里按住 ⌘ 或 Shift 多选" />
-                    <Button Content="同步到全部" Command="{Binding SyncToAllCommand}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                            ToolTip.Tip="{local:Tr '在照片列表里按住 ⌘ 或 Shift 多选'}" />
+                    <Button Content="{local:Tr '同步到全部'}" Command="{Binding SyncToAllCommand}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                   </UniformGrid>
                 </StackPanel>
               </Expander>
 
-              <Expander Header="软打样">
+              <Expander Header="{local:Tr '软打样'}">
                 <StackPanel Spacing="8">
-                  <CheckBox Content="显示软打样（S）" IsChecked="{Binding ProofOn}" IsEnabled="{Binding SelectedProofProfile, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                  <CheckBox Content="{local:Tr '显示软打样（S）'}" IsChecked="{Binding ProofOn}" IsEnabled="{Binding SelectedProofProfile, Converter={x:Static ObjectConverters.IsNotNull}}" />
                   <DockPanel>
-                    <Button DockPanel.Dock="Right" Classes="ghost" Content="导入 ICC" Click="OnImportProfile" Margin="6,0,0,0" />
-                    <ComboBox ItemsSource="{Binding ProofProfiles}" SelectedItem="{Binding SelectedProofProfile}" PlaceholderText="选择打印机或显示器配置" HorizontalAlignment="Stretch" MaxDropDownHeight="420" />
+                    <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '导入 ICC'}" Click="OnImportProfile" Margin="6,0,0,0" />
+                    <ComboBox ItemsSource="{Binding ProofProfiles}" SelectedItem="{Binding SelectedProofProfile}" PlaceholderText="{local:Tr '选择打印机或显示器配置'}" HorizontalAlignment="Stretch" MaxDropDownHeight="420" />
                   </DockPanel>
                   <DockPanel>
-                    <TextBlock Text="渲染方式" Width="84" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                    <TextBlock Text="{local:Tr '渲染方式'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
                     <ComboBox ItemsSource="{Binding ProofIntents}" SelectedIndex="{Binding ProofIntentIndex}" HorizontalAlignment="Stretch" />
                   </DockPanel>
-                  <CheckBox Content="模拟纸张和油墨" IsChecked="{Binding ProofPaper}" IsEnabled="{Binding PaperAvailable}" ToolTip.Tip="只对打印机等输出配置有效" />
-                  <CheckBox Content="色域警告" IsChecked="{Binding ProofGamut}" ToolTip.Tip="用洋红标出配置无法还原的颜色" />
+                  <CheckBox Content="{local:Tr '模拟纸张和油墨'}" IsChecked="{Binding ProofPaper}" IsEnabled="{Binding PaperAvailable}" ToolTip.Tip="{local:Tr '只对打印机等输出配置有效'}" />
+                  <CheckBox Content="{local:Tr '色域警告'}" IsChecked="{Binding ProofGamut}" ToolTip.Tip="{local:Tr '用洋红标出配置无法还原的颜色'}" />
                   <TextBlock Classes="hint" Text="{Binding ProofStatus}" />
                 </StackPanel>
               </Expander>
 
-              <Expander Header="校准">
+              <Expander Header="{local:Tr '校准'}">
                 <ItemsControl ItemsSource="{Binding CalibrationGroup.Sliders}" />
               </Expander>
             </StackPanel>
@@ -569,10 +641,10 @@
             <Canvas x:Name="CompareLayer" IsVisible="{Binding CompareOn}" IsHitTestVisible="False">
               <Border x:Name="Divider" Width="2" Background="#E6FFFFFF" />
               <Border x:Name="BeforeLabel" Background="#99000000" CornerRadius="4" Padding="6,2">
-                <TextBlock Text="修图前" FontSize="11" Foreground="White" />
+                <TextBlock Text="{local:Tr '修图前'}" FontSize="11" Foreground="White" />
               </Border>
               <Border x:Name="AfterLabel" Background="#99000000" CornerRadius="4" Padding="6,2">
-                <TextBlock Text="修图后" FontSize="11" Foreground="White" />
+                <TextBlock Text="{local:Tr '修图后'}" FontSize="11" Foreground="White" />
               </Border>
             </Canvas>
           </Panel>
@@ -585,11 +657,11 @@
           <!-- Empty state -->
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14" IsVisible="{Binding !HasPhotos}">
             <local:LogoMark Width="64" Height="64" HorizontalAlignment="Center" Margin="0,0,0,6" />
-            <TextBlock Text="把照片或文件夹拖到这里" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
-            <TextBlock Text="支持 RAW、JPEG、PNG、TIFF 和 HEIC。照片只在本机处理，原图不会被修改。" Classes="muted" FontSize="12" HorizontalAlignment="Center" />
+            <TextBlock Text="{local:Tr '把照片或文件夹拖到这里'}" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
+            <TextBlock Text="{local:Tr '支持 RAW、JPEG、PNG、TIFF 和 HEIC。照片只在本机处理，原图不会被修改。'}" Classes="muted" FontSize="12" HorizontalAlignment="Center" />
             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,6,0,0">
-              <Button Classes="accent" Content="打开照片" Click="OnOpen" Padding="16,6" />
-              <Button Content="导入文件夹" Click="OnOpenFolder" Padding="16,6" />
+              <Button Classes="accent" Content="{local:Tr '打开照片'}" Click="OnOpen" Padding="16,6" />
+              <Button Content="{local:Tr '导入文件夹'}" Click="OnOpenFolder" Padding="16,6" />
             </StackPanel>
             <Button Classes="ghost" Content="{Binding ResumeLabel}" Command="{Binding ResumeCommand}" IsVisible="{Binding CanResume}" HorizontalAlignment="Center" />
           </StackPanel>

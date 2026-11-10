@@ -36,7 +36,7 @@ public static class PlatformDecoder
     public static DecodedRaster Decode(byte[] bytes)
     {
         if (OperatingSystem.IsMacOS()) return ImageIO.Decode(bytes);
-        throw new EngineException("这个系统暂时不能打开 HEIC，请先转换为 JPEG");
+        throw new UserMessageException(I18n.T("这个系统暂时不能打开 HEIC，请先转换为 JPEG"));
     }
 
     /// <summary>macOS ImageIO and Core Graphics.</summary>
@@ -80,7 +80,7 @@ public static class PlatformDecoder
             try
             {
                 source = CGImageSourceCreateWithData(data, 0);
-                if (source == 0) throw new EngineException("无法读取这个 HEIC 文件");
+                if (source == 0) throw new UserMessageException(I18n.T("无法读取这个 HEIC 文件"));
                 // A "thumbnail" with no size limit is the full image with its rotation applied.
                 var yes = Constant(CoreFoundationPath, "kCFBooleanTrue");
                 var keys = stackalloc nint[]
@@ -91,7 +91,7 @@ public static class PlatformDecoder
                 var values = stackalloc nint[] { yes, yes };
                 options = CFDictionaryCreate(0, keys, values, 2, Address(CoreFoundationPath, "kCFTypeDictionaryKeyCallBacks"), Address(CoreFoundationPath, "kCFTypeDictionaryValueCallBacks"));
                 image = CGImageSourceCreateThumbnailAtIndex(source, 0, options);
-                if (image == 0) throw new EngineException("HEIC 文件里没有可解码的图像");
+                if (image == 0) throw new UserMessageException(I18n.T("HEIC 文件里没有可解码的图像"));
                 var (width, height) = ((int)CGImageGetWidth(image), (int)CGImageGetHeight(image));
                 var rgba = new byte[width * height * 4];
                 // Drawing into an sRGB context converts from the file's colour space (often Display P3).
@@ -99,7 +99,7 @@ public static class PlatformDecoder
                 fixed (byte* pixels = rgba)
                 {
                     context = CGBitmapContextCreate(pixels, (nuint)width, (nuint)height, 8, (nuint)(width * 4), space, PremultipliedLast);
-                    if (context == 0) throw new EngineException("HEIC 解码失败");
+                    if (context == 0) throw new UserMessageException(I18n.T("HEIC 解码失败"));
                     CGContextDrawImage(context, new CGRect(0, 0, width, height), image);
                 }
                 for (var at = 3; at < rgba.Length; at += 4) rgba[at] = 255;

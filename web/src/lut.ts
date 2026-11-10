@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 /** A 3D colour lookup table: `size`^3 RGB triples in 0..1, with red varying fastest. */
 export interface Lut {
   size: number;
@@ -26,7 +28,7 @@ function generate(grade: Grade): Lut {
   return { size, data };
 }
 
-const BASIC_GROUP = "基础";
+const BASIC_GROUP = t("基础");
 
 type Rgb = [number, number, number];
 
@@ -127,11 +129,11 @@ function fromRecipe(recipe: Recipe): Grade {
 }
 
 const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
-  { id: 6, group: "胶片", name: "标准正片", recipe: { contrast: 0.1, saturation: 1.08, bands: [{ hue: 120, width: 60, shift: -6 }] } },
+  { id: 6, group: t("胶片"), name: t("标准正片"), recipe: { contrast: 0.1, saturation: 1.08, bands: [{ hue: 120, width: 60, shift: -6 }] } },
   {
     id: 7,
-    group: "胶片",
-    name: "鲜艳正片",
+    group: t("胶片"),
+    name: t("鲜艳正片"),
     recipe: {
       contrast: 0.24,
       saturation: 1.32,
@@ -144,8 +146,8 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
   },
   {
     id: 8,
-    group: "胶片",
-    name: "经典反转",
+    group: t("胶片"),
+    name: t("经典反转"),
     recipe: {
       contrast: 0.16,
       saturation: 0.78,
@@ -158,11 +160,11 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
       ],
     },
   },
-  { id: 9, group: "胶片", name: "柔和负片", recipe: { contrast: -0.06, fade: 0.015, saturation: 0.92, gains: [1.01, 1, 0.99], bands: [{ hue: 25, width: 35, value: 0.03 }] } },
+  { id: 9, group: t("胶片"), name: t("柔和负片"), recipe: { contrast: -0.06, fade: 0.015, saturation: 0.92, gains: [1.01, 1, 0.99], bands: [{ hue: 25, width: 35, value: 0.03 }] } },
   {
     id: 10,
-    group: "胶片",
-    name: "人像暖调负片",
+    group: t("胶片"),
+    name: t("人像暖调负片"),
     recipe: {
       contrast: 0.03,
       fade: 0.025,
@@ -176,23 +178,23 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
       shadows: [0.012, 0, -0.008],
     },
   },
-  { id: 11, group: "胶片", name: "金色负片", recipe: { contrast: 0.12, saturation: 1.14, gains: [1.05, 1, 0.9], fade: 0.01, bands: [{ hue: 45, width: 40, saturation: 0.15 }] } },
+  { id: 11, group: t("胶片"), name: t("金色负片"), recipe: { contrast: 0.12, saturation: 1.14, gains: [1.05, 1, 0.9], fade: 0.01, bands: [{ hue: 45, width: 40, saturation: 0.15 }] } },
   {
     id: 12,
-    group: "胶片",
-    name: "拍立得",
+    group: t("胶片"),
+    name: t("拍立得"),
     recipe: { contrast: -0.08, fade: 0.07, roll: 0.05, saturation: 0.86, gains: [1.03, 1, 0.94], shadows: [0, 0.015, 0.03], highlights: [0.015, 0.01, -0.02] },
   },
   {
     id: 13,
-    group: "电影",
-    name: "低饱和电影",
+    group: t("电影"),
+    name: t("低饱和电影"),
     recipe: { contrast: -0.1, fade: 0.025, roll: 0.02, saturation: 0.72, shadows: [-0.01, 0.012, 0.02], bands: [{ hue: 110, width: 60, saturation: -0.2 }] },
   },
   {
     id: 14,
-    group: "电影",
-    name: "钨丝灯夜景",
+    group: t("电影"),
+    name: t("钨丝灯夜景"),
     recipe: {
       contrast: 0.14,
       saturation: 1.05,
@@ -202,11 +204,11 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
       bands: [{ hue: 0, width: 40, saturation: 0.2 }],
     },
   },
-  { id: 15, group: "电影", name: "褪银", recipe: { contrast: 0.32, saturation: 0.5, roll: 0.01 } },
+  { id: 15, group: t("电影"), name: t("褪银"), recipe: { contrast: 0.32, saturation: 0.5, roll: 0.01 } },
   {
     id: 16,
-    group: "电影",
-    name: "末日橙",
+    group: t("电影"),
+    name: t("末日橙"),
     recipe: {
       contrast: 0.26,
       saturation: 1.05,
@@ -220,8 +222,8 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
   },
   {
     id: 17,
-    group: "创意",
-    name: "赛博朋克",
+    group: t("创意"),
+    name: t("赛博朋克"),
     recipe: {
       contrast: 0.2,
       saturation: 1.18,
@@ -237,8 +239,8 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
   },
   {
     id: 18,
-    group: "创意",
-    name: "霓虹夜色",
+    group: t("创意"),
+    name: t("霓虹夜色"),
     recipe: {
       contrast: 0.18,
       saturation: 1.2,
@@ -252,8 +254,8 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
   },
   {
     id: 19,
-    group: "创意",
-    name: "港风复古",
+    group: t("创意"),
+    name: t("港风复古"),
     recipe: {
       contrast: 0.12,
       fade: 0.03,
@@ -268,8 +270,8 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
   },
   {
     id: 20,
-    group: "创意",
-    name: "日系清新",
+    group: t("创意"),
+    name: t("日系清新"),
     recipe: {
       contrast: -0.12,
       fade: 0.06,
@@ -284,13 +286,13 @@ const RECIPES: { id: number; group: string; name: string; recipe: Recipe }[] = [
   },
   {
     id: 21,
-    group: "创意",
-    name: "交叉冲洗",
+    group: t("创意"),
+    name: t("交叉冲洗"),
     recipe: { contrast: 0.26, saturation: 1.15, shadows: [-0.02, 0.01, 0.1], highlights: [0.03, 0.04, -0.07], bands: [{ hue: 120, width: 70, shift: -15 }] },
   },
-  { id: 22, group: "黑白", name: "细腻黑白", recipe: { mono: [0.25, 0.65, 0.1], contrast: 0.1 } },
-  { id: 23, group: "黑白", name: "高反差黑白", recipe: { mono: [0.4, 0.5, 0.1], contrast: 0.34 } },
-  { id: 24, group: "黑白", name: "复古棕调", recipe: { mono: [0.3, 0.6, 0.1], contrast: 0.08, fade: 0.04, shadows: [0.03, 0.01, -0.03], highlights: [0.03, 0.005, -0.05] } },
+  { id: 22, group: t("黑白"), name: t("细腻黑白"), recipe: { mono: [0.25, 0.65, 0.1], contrast: 0.1 } },
+  { id: 23, group: t("黑白"), name: t("高反差黑白"), recipe: { mono: [0.4, 0.5, 0.1], contrast: 0.34 } },
+  { id: 24, group: t("黑白"), name: t("复古棕调"), recipe: { mono: [0.3, 0.6, 0.1], contrast: 0.08, fade: 0.04, shadows: [0.03, 0.01, -0.03], highlights: [0.03, 0.005, -0.05] } },
 ];
 
 /** Looks made for this project, addressed by `lutId`. */
@@ -298,19 +300,19 @@ export const BUILT_IN_LOOKS: { id: number; group: string; name: string; grade: G
   {
     id: 1,
     group: BASIC_GROUP,
-    name: "暖调胶片",
+    name: t("暖调胶片"),
     grade: (r, g, b) => [ceiling(scurve(r, 0.12) * 1.04 + 0.015, 1.055), ceiling(scurve(g, 0.1) + 0.005, 1.005), scurve(b, 0.08) * 0.92 + 0.03],
   },
   {
     id: 2,
     group: BASIC_GROUP,
-    name: "清冷",
+    name: t("清冷"),
     grade: (r, g, b) => [scurve(r, 0.08) * 0.95, scurve(g, 0.08) * 0.99, ceiling(scurve(b, 0.06) * 1.05 + 0.01, 1.06)],
   },
   {
     id: 3,
     group: BASIC_GROUP,
-    name: "青橙",
+    name: t("青橙"),
     grade: (r, g, b) => {
       const y = luma(r, g, b);
       const warm = y;
@@ -321,7 +323,7 @@ export const BUILT_IN_LOOKS: { id: number; group: string; name: string; grade: G
   {
     id: 4,
     group: BASIC_GROUP,
-    name: "褪色",
+    name: t("褪色"),
     grade: (r, g, b) => {
       const lift = (v: number) => 0.08 + v * 0.86;
       const y = luma(r, g, b);
@@ -332,7 +334,7 @@ export const BUILT_IN_LOOKS: { id: number; group: string; name: string; grade: G
   {
     id: 5,
     group: BASIC_GROUP,
-    name: "黑白",
+    name: t("黑白"),
     grade: (r, g, b) => {
       const y = scurve(0.3 * r + 0.6 * g + 0.1 * b, 0.15);
       return [y, y, y];
@@ -363,10 +365,10 @@ export function parseCube(text: string): Lut {
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#") || line.startsWith("TITLE")) continue;
-    if (line.startsWith("LUT_1D_SIZE")) throw new Error("只支持 3D LUT，这是 1D LUT");
+    if (line.startsWith("LUT_1D_SIZE")) throw new Error(t("只支持 3D LUT，这是 1D LUT"));
     if (line.startsWith("DOMAIN_MIN") || line.startsWith("DOMAIN_MAX")) {
       const wanted = line.startsWith("DOMAIN_MIN") ? 0 : 1;
-      if (line.split(/\s+/).slice(1).some((value) => Number(value) !== wanted)) throw new Error("只支持定义域为 0–1 的 LUT");
+      if (line.split(/\s+/).slice(1).some((value) => Number(value) !== wanted)) throw new Error(t("只支持定义域为 0–1 的 LUT"));
       continue;
     }
     if (line.startsWith("LUT_3D_SIZE")) {
@@ -377,9 +379,9 @@ export function parseCube(text: string): Lut {
     const parts = line.split(/\s+/).map(Number);
     if (parts.length === 3 && parts.every(Number.isFinite)) values.push(...parts);
   }
-  if (!Number.isInteger(size) || size < 2 || size > 129) throw new Error("没有找到有效的 LUT_3D_SIZE");
+  if (!Number.isInteger(size) || size < 2 || size > 129) throw new Error(t("没有找到有效的 LUT_3D_SIZE"));
   if (values.length !== size * size * size * 3) {
-    throw new Error(`LUT 数据不完整：应有 ${size ** 3} 行，实际 ${values.length / 3} 行`);
+    throw new Error(t("LUT 数据不完整：应有 {expected} 行，实际 {actual} 行", { expected: size ** 3, actual: values.length / 3 }));
   }
   return { size, data: Float32Array.from(values, (value) => Math.min(Math.max(value, 0), 1)) };
 }

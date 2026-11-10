@@ -55,7 +55,7 @@ public sealed partial class PhotoItem(string path) : ObservableObject
     public Avalonia.Media.IBrush LabelBrush => Label > 0
         ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(ColourLabels.All[Label - 1].Colour))
         : Avalonia.Media.Brushes.Transparent;
-    public string GroupText => Group == 0 ? "" : IsBest ? $"组 {Group} · 最佳" : $"组 {Group}";
+    public string GroupText => Group == 0 ? "" : IsBest ? I18n.T("组 {group} · 最佳", ("group", Group)) : I18n.T("组 {group}", ("group", Group));
 }
 
 public sealed partial class SliderItem(SliderSpec spec, Action<SliderItem> changed) : ObservableObject
@@ -123,7 +123,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private const double CompareAll = 1.01;
 
     public static readonly (string Label, double? Ratio)[] CropRatios =
-        [("自由", null), ("1:1", 1), ("4:5", 4 / 5.0), ("3:4", 3 / 4.0), ("2:3", 2 / 3.0), ("5:7", 5 / 7.0), ("3:2", 3 / 2.0), ("16:9", 16 / 9.0)];
+        [(I18n.T("自由"), null), ("1:1", 1), ("4:5", 4 / 5.0), ("3:4", 3 / 4.0), ("2:3", 2 / 3.0), ("5:7", 5 / 7.0), ("3:2", 3 / 2.0), ("16:9", 16 / 9.0)];
 
     private readonly EngineClient _engine = new();
     private readonly Lazy<EngineClient> _thumbnailer = new(() => new EngineClient());
@@ -174,7 +174,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         LookAmount = Make(Edits.LookAmount);
         RotateSlider = Make(Edits.Rotate);
         MakeLocalSliders();
-        Groups = [WhiteBalanceGroup, ToneGroup, ParametricGroup, EffectsGroup, CalibrationGroup, LensGroup, PerspectiveGroup, PointGroup, new("HSL", HslAll), new("其他", [LookAmount, RotateSlider])];
+        MakeFullSliders();
+        Groups = [WhiteBalanceGroup, ToneGroup, ParametricGroup, EffectsGroup, CalibrationGroup, LensGroup, PerspectiveGroup, PointGroup, new("HSL", HslAll), new(I18n.T("其他"), [LookAmount, RotateSlider])];
         Grades = Edits.GradeRanges.Select(range => new GradeItem(range.Key, range.Label)).ToList();
         RefreshLookChoices();
         Output = _outputFile.Load();
@@ -225,9 +226,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public SliderItem RotateSlider { get; }
     public IReadOnlyList<GradeItem> Grades { get; }
     public string[] HslBandNames { get; } = Edits.HslBands.Select(band => band.Name).ToArray();
-    public string[] CurveChannelNames { get; } = ["RGB", "红", "绿", "蓝"];
+    public string[] CurveChannelNames { get; } = ["RGB", I18n.T("红"), I18n.T("绿"), I18n.T("蓝")];
     public string[] CropRatioNames { get; } = CropRatios.Select(ratio => ratio.Label).ToArray();
-    public string[] CameraProfiles { get; } = ["标准", "相机匹配"];
+    public string[] CameraProfiles { get; } = [I18n.T("标准"), I18n.T("相机匹配")];
     public ObservableCollection<LookInfo> LookChoices { get; } = [];
     public ObservableCollection<HistoryRow> HistoryRows { get; } = [];
     public ObservableCollection<Snapshot> Snapshots { get; } = [];
@@ -243,13 +244,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string _photoInfo = "";
 
     public bool HasPhotos => Photos.Count > 0;
-    public string PhotoCount => Photos.Count == 0 ? "" : $"{Photos.Count} 张";
+
+    /// <summary>Interface languages by their own names; a new choice applies from the next start.</summary>
+    public string[] LanguageNames { get; } = I18n.Languages.Select(language => language.Name).ToArray();
+
+    public int LanguageIndex
+    {
+        get => Math.Max(0, Array.FindIndex(I18n.Languages, language => language.Code == (_chosenLanguage ?? I18n.Language)));
+        set
+        {
+            if (value < 0 || value >= I18n.Languages.Length || value == LanguageIndex) return;
+            _chosenLanguage = I18n.Languages[value].Code;
+            I18n.Choose(_chosenLanguage);
+            OnPropertyChanged();
+            Status = I18n.T("界面语言已更改，重新启动后生效");
+        }
+    }
+
+    private string? _chosenLanguage;
+    public string PhotoCount => Photos.Count == 0 ? "" : I18n.T("{count} 张", ("count", Photos.Count));
 
     [ObservableProperty]
     private Bitmap? _preview;
 
     [ObservableProperty]
-    private string _status = "正在启动引擎…";
+    private string _status = I18n.T("正在启动引擎…");
 
     /// <summary>The engine's own wording of the last error, shown as a tooltip.</summary>
     [ObservableProperty]
@@ -306,7 +325,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private double _compareSplit = 0.5;
 
     [ObservableProperty]
-    private string _zoomLabel = "适合";
+    private string _zoomLabel = I18n.T("适合");
 
     [ObservableProperty]
     private string _lensStatus = "";
@@ -337,8 +356,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(PickingPoint));
         ToolHint = value switch
         {
-            Picker.WhiteBalance => "点击画面中应为中性灰或白色的地方",
-            Picker.Point => "点击画面中要调整的颜色",
+            Picker.WhiteBalance => I18n.T("点击画面中应为中性灰或白色的地方"),
+            Picker.Point => I18n.T("点击画面中要调整的颜色"),
             _ => "",
         };
     }
@@ -348,12 +367,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             await _engine.Ready;
-            Status = "打开照片开始修图";
+            Status = I18n.T("打开照片开始修图");
             _ = LoadProfilesAsync();
         }
         catch (Exception exception)
         {
-            Status = $"引擎无法启动：{exception.Message}";
+            Status = I18n.T("引擎无法启动：{message}", ("message", exception.Message));
         }
     }
 
@@ -382,7 +401,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         var files = Directory.EnumerateFiles(folder).Where(PhotoLoader.IsPhoto).Order(StringComparer.OrdinalIgnoreCase).ToList();
         AddPhotos(files);
-        if (files.Count == 0) Status = "这个文件夹里没有可以打开的照片";
+        if (files.Count == 0) Status = I18n.T("这个文件夹里没有可以打开的照片");
         return files.Count;
     }
 
@@ -395,7 +414,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (Directory.Exists(path)) files.AddRange(Directory.EnumerateFiles(path).Where(PhotoLoader.IsPhoto).Order(StringComparer.OrdinalIgnoreCase));
             else if (PhotoLoader.IsPhoto(path)) files.Add(path);
         }
-        if (files.Count == 0) Status = "拖入的文件里没有可以打开的照片";
+        if (files.Count == 0) Status = I18n.T("拖入的文件里没有可以打开的照片");
         else AddPhotos(files);
     }
 
@@ -466,7 +485,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Picker = Picker.None;
         CropEditing = false;
         StatusDetail = null;
-        Status = $"正在打开 {photo.Name}…";
+        Status = I18n.T("正在打开 {name}…", ("name", photo.Name));
         try
         {
             var started = Environment.TickCount64;
@@ -509,7 +528,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _imageOpen = false;
             _info = null;
             Preview = null;
-            Status = $"无法打开 {photo.Name}：{Messages.Friendly(exception)}";
+            Status = I18n.T("无法打开 {name}：{exception}", ("name", photo.Name), ("exception", Messages.Friendly(exception)));
             StatusDetail = Messages.Detail(exception);
             photo.ThumbnailFailed = true;
         }
@@ -523,12 +542,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(CameraProfileIndex));
         OnPropertyChanged(nameof(LensAuto));
         var lensName = _info?["lensQuery"]?["lens"]?.GetValue<string>();
-        var camera = !isRaw ? "" : CameraProfileAvailable ? "已按机内 JPEG 拟合相机色彩。" : "默认色彩已接近机内 JPEG，无需相机匹配。";
+        var camera = !isRaw ? "" : CameraProfileAvailable ? I18n.T("已按机内 JPEG 拟合相机色彩。") : I18n.T("默认色彩已接近机内 JPEG，无需相机匹配。");
         var lens = _info?["lensSource"]?.GetValue<string>() == "lensfun"
-            ? $"Lensfun 镜头库有 {lensName} 的校正数据（CC BY-SA 3.0），勾选上方选项后生效。"
-            : LensAutoAvailable ? "文件内含镜头数据。"
-            : lensName is not null ? $"镜头库里没有 {lensName} 的数据，可用下方滑块手动校正。"
-            : "文件没有可用的镜头数据，可用下方滑块手动校正。";
+            ? I18n.T("Lensfun 镜头库有 {lens} 的校正数据（CC BY-SA 3.0），勾选上方选项后生效。", ("lens", lensName))
+            : LensAutoAvailable ? I18n.T("文件内含镜头数据。")
+            : lensName is not null ? I18n.T("镜头库里没有 {lens} 的数据，可用下方滑块手动校正。", ("lens", lensName))
+            : I18n.T("文件没有可用的镜头数据，可用下方滑块手动校正。");
         LensStatus = (camera + lens).Trim();
     }
 
@@ -583,6 +602,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             SelectedLook = LookChoices.FirstOrDefault(look => look.Id == lookId) ?? LookChoices[0];
             PointActive = _edit.GetValueOrDefault("pointWidth") > 0;
             PointSwatch = new Avalonia.Media.SolidColorBrush(ColorWheel.HsvColour(_edit.GetValueOrDefault("pointHue"), 0.75, 0.85));
+            ShowFullEdit();
             OnPropertyChanged(nameof(CurrentEdit));
             OnPropertyChanged(nameof(CameraProfileIndex));
             OnPropertyChanged(nameof(LensAuto));
@@ -612,6 +632,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _store.Save(SelectedPhoto.Id, _edit);
         var lookId = (int)_edit.GetValueOrDefault("lutId");
         if (lookId != (int)before.GetValueOrDefault("lutId")) _ = Fire(() => SetLookAsync(_engine, lookId));
+        if (ReplacementChanged(before, _edit)) _ = UpdateReplacementAsync();
         ShowEdit();
         SyncHistory();
         _editChanged = true;
@@ -690,9 +711,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void RefreshLookChoices()
     {
         LookChoices.Clear();
-        LookChoices.Add(new LookInfo(0, "", "无"));
+        LookChoices.Add(new LookInfo(0, "", I18n.T("无")));
         foreach (var look in Looks.BuiltInLooks) LookChoices.Add(look);
-        foreach (var look in _looks.Imported) LookChoices.Add(new LookInfo(look.Id, "导入", look.Name));
+        foreach (var look in _looks.Imported) LookChoices.Add(new LookInfo(look.Id, I18n.T("导入"), look.Name));
     }
 
     private async Task SetLookAsync(EngineClient engine, int id)
@@ -717,14 +738,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _showingEdit = true;
             RefreshLookChoices();
             _showingEdit = false;
-            Status = $"已导入滤镜 {look.Name}";
-            if (_imageOpen) ApplyEdit(With(("lutId", look.Id, 0), ("lutAmount", 1, 0)), $"滤镜 {look.Name}");
+            Status = I18n.T("已导入滤镜 {name}", ("name", look.Name));
+            if (_imageOpen) ApplyEdit(With(("lutId", look.Id, 0), ("lutAmount", 1, 0)), I18n.T("滤镜 {name}", ("name", look.Name)));
             else ShowEdit();
         }
         catch (Exception exception) when (exception is FormatException or IOException or UnauthorizedAccessException)
         {
             _showingEdit = false;
-            Status = $"无法导入 LUT：{Messages.Friendly(exception)}";
+            Status = I18n.T("无法导入 LUT：{exception}", ("exception", Messages.Friendly(exception)));
         }
     }
 
@@ -738,7 +759,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [RelayCommand]
     private void RemovePointColour() =>
-        ApplyEdit(With(("pointHue", 0, 0), ("pointWidth", 0, 0), ("pointHueShift", 0, 0), ("pointSatShift", 0, 0), ("pointLumShift", 0, 0)), "移除颜色混合点");
+        ApplyEdit(With(("pointHue", 0, 0), ("pointWidth", 0, 0), ("pointHueShift", 0, 0), ("pointSatShift", 0, 0), ("pointLumShift", 0, 0)), I18n.T("移除颜色混合点"));
 
     [RelayCommand(CanExecute = nameof(CanEdit))]
     private async Task AutoTone()
@@ -754,16 +775,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 if (number == 0) next.Remove(key);
                 else next[key] = number;
             }
-            ApplyEdit(next, "智能调色");
+            ApplyEdit(next, I18n.T("智能调色"));
         }
         catch (EngineException exception)
         {
-            Status = $"智能调色失败：{Messages.Friendly(exception)}";
+            Status = I18n.T("智能调色失败：{exception}", ("exception", Messages.Friendly(exception)));
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanEdit))]
-    private void Reset() => ApplyEdit([], "全部重置");
+    private void Reset() => ApplyEdit([], I18n.T("全部重置"));
 
     // ---- History and snapshots ----
 
@@ -821,17 +842,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void TakeSnapshot()
     {
         if (SelectedPhoto is null) return;
-        var name = $"快照 {Snapshots.Count + 1}（{DateTime.Now:HH:mm}）";
+        var name = I18n.T("快照 {number}（{time}）", ("number", Snapshots.Count + 1), ("time", DateTime.Now.ToString("HH:mm")));
         Snapshots.Add(new Snapshot(name, EditStore.Kept(_edit)));
         _store.SaveSnapshots(SelectedPhoto.Id, Snapshots);
-        Status = $"已保存{name}";
+        Status = I18n.T("已保存{name}", ("name", name));
     }
 
     [RelayCommand]
     private void ApplySnapshot(Snapshot snapshot)
     {
         // Framing comes with the snapshot: it is part of how the photo looked then.
-        ApplyEdit(new Dictionary<string, double>(snapshot.Edit), $"应用{snapshot.Name}");
+        ApplyEdit(new Dictionary<string, double>(snapshot.Edit), I18n.T("应用{name}", ("name", snapshot.Name)));
     }
 
     [RelayCommand]
@@ -897,7 +918,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void UpdateZoomLabel()
     {
-        ZoomLabel = !_imageOpen || _view.Zoom <= 1 ? "适合" : $"{Math.Round(_view.Zoom / ActualPixelsZoom() * 100)}%";
+        ZoomLabel = !_imageOpen || _view.Zoom <= 1 ? I18n.T("适合") : $"{Math.Round(_view.Zoom / ActualPixelsZoom() * 100)}%";
         OnPropertyChanged(nameof(IsZoomed));
     }
 
@@ -951,9 +972,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if ((await _engine.CallAsync("needsDetail")).Json?.GetValue<bool>() != true) return;
             if ((await _engine.CallAsync("hasFullImage")).Json?.GetValue<bool>() == false)
             {
-                Status = "正在冲洗全尺寸细节…";
+                Status = I18n.T("正在冲洗全尺寸细节…");
                 await _engine.CallAsync("developFull");
-                if (ticket == _openTicket) Status = "已显示全尺寸细节";
+                if (ticket == _openTicket) Status = I18n.T("已显示全尺寸细节");
             }
             if (ticket != _openTicket) return;
             await _engine.CallAsync("updateDetail");
@@ -961,7 +982,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (EngineException exception)
         {
-            if (ticket == _openTicket) Status = $"无法显示细节：{Messages.Friendly(exception)}";
+            if (ticket == _openTicket) Status = I18n.T("无法显示细节：{exception}", ("exception", Messages.Friendly(exception)));
         }
     }
 
@@ -1022,7 +1043,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 if (ticket != _openTicket) return;
                 if (hue < 0)
                 {
-                    ToolHint = "这里接近灰色，请点一处有颜色的地方。";
+                    ToolHint = I18n.T("这里接近灰色，请点一处有颜色的地方。");
                     return;
                 }
                 Picker = Picker.None;
@@ -1034,7 +1055,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (ticket != _openTicket) return;
             if (balance is null)
             {
-                ToolHint = "这里太暗或已过曝，请点一处中性灰。";
+                ToolHint = I18n.T("这里太暗或已过曝，请点一处中性灰。");
                 return;
             }
             Picker = Picker.None;
@@ -1096,7 +1117,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var next = With(("quarter", _edit.GetValueOrDefault("quarter") + (direction == "left" ? -1 : 1), 0), ("rotate", 0, 0));
         Frame.SetCrop(next, Crop.Full);
         CropRatioIndex = 0;
-        ApplyEdit(next, direction == "left" ? "向左旋转 90°" : "向右旋转 90°");
+        ApplyEdit(next, direction == "left" ? I18n.T("向左旋转 90°") : I18n.T("向右旋转 90°"));
     }
 
     [RelayCommand]
@@ -1105,7 +1126,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var next = With(("quarter", 0, 0), ("rotate", 0, 0));
         Frame.SetCrop(next, Crop.Full);
         CropRatioIndex = 0;
-        ApplyEdit(next, "重置裁剪");
+        ApplyEdit(next, I18n.T("重置裁剪"));
     }
 
     [RelayCommand]
@@ -1164,7 +1185,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception)
         {
-            if (ticket == _openTicket) Status = $"预览失败：{Messages.Friendly(exception)}";
+            if (ticket == _openTicket) Status = I18n.T("预览失败：{exception}", ("exception", Messages.Friendly(exception)));
         }
         finally
         {
@@ -1251,7 +1272,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!_imageOpen) return null;
         var ticket = _openTicket;
-        Status = "导出中…";
+        Status = I18n.T("导出中…");
         StatusDetail = null;
         try
         {
@@ -1259,7 +1280,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             var full = await _engine.CallAsync("hasFullImage");
             if (full.Json?.GetValue<bool>() == false)
             {
-                Status = "正在冲洗全尺寸图像…";
+                Status = I18n.T("正在冲洗全尺寸图像…");
                 await _engine.CallAsync("developFull");
             }
             var size = (await _engine.CallAsync("exportSize", new { longEdge = settings.LongEdge })).Json!;
@@ -1275,17 +1296,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             var bytes = (await _engine.CallAsync("exportImage", args, overlay?.Rgba)).Data;
             if (ticket != _openTicket)
             {
-                Status = "导出已取消：导出时切换了照片";
+                Status = I18n.T("导出已取消：导出时切换了照片");
                 return null;
             }
             var path = pathFor(settings.Extension);
             await File.WriteAllBytesAsync(path, bytes);
-            Status = $"已导出 {System.IO.Path.GetFileName(path)}（{bytes.Length / 1048576.0:0.0} MB，{Environment.TickCount64 - started} ms）";
+            Status = I18n.T("已导出 {file}（{size} MB，{ms} ms）", ("file", System.IO.Path.GetFileName(path)), ("size", (bytes.Length / 1048576.0).ToString("0.0")), ("ms", Environment.TickCount64 - started));
             return path;
         }
         catch (Exception exception)
         {
-            Status = $"导出失败：{Messages.Friendly(exception)}";
+            Status = I18n.T("导出失败：{exception}", ("exception", Messages.Friendly(exception)));
             StatusDetail = Messages.Detail(exception);
             return null;
         }

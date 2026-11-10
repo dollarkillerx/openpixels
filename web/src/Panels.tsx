@@ -1,14 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { IS_LITE } from "./edition";
+import { t } from "./i18n";
 
 export type PanelTab = "color" | "compose" | "retouch" | "smart" | "output";
 
 export const PANEL_TABS: { id: PanelTab; label: string }[] = [
-  { id: "color", label: "调色" },
-  { id: "compose", label: "构图" },
-  { id: "retouch", label: "修饰" },
-  ...(IS_LITE ? [] : [{ id: "smart" as const, label: "智能" }]),
-  { id: "output", label: "输出" },
+  { id: "color", label: t("调色") },
+  { id: "compose", label: t("构图") },
+  { id: "retouch", label: t("修饰") },
+  ...(IS_LITE ? [] : [{ id: "smart" as const, label: t("智能") }]),
+  { id: "output", label: t("输出") },
 ];
 
 /** Which tab each section belongs to, and where it sits in that tab. */

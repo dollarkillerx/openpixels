@@ -53,6 +53,7 @@ import {
   type Presets, loadLastProject, saveLastProject } from "./library";
 import type { Adjustments, ErasePatch, HealSpot, HistogramData, LoadResult, Thumbnail, WarpStroke } from "./protocol";
 import { INPAINT_MODEL } from "./model";
+import { LANGUAGES, currentLanguage, setLanguage, t, type Language } from "./i18n";
 
 interface SliderDef {
   key: string;
@@ -63,86 +64,92 @@ interface SliderDef {
   fallback?: number;
 }
 
-const GROUPS: { title: string; sliders: SliderDef[] }[] = [
+const GROUPS: { section: SectionId; title: string; sliders: SliderDef[] }[] = [
   {
-    title: "白平衡",
+    section: "whiteBalance",
+    title: t("白平衡"),
     sliders: [
-      { key: "temperature", label: "色温", min: -2, max: 2 },
-      { key: "tint", label: "色调", min: -2, max: 2 },
+      { key: "temperature", label: t("色温"), min: -2, max: 2 },
+      { key: "tint", label: t("色调"), min: -2, max: 2 },
     ],
   },
   {
-    title: "影调",
+    section: "tone",
+    title: t("影调"),
     sliders: [
-      { key: "exposure", label: "曝光", min: -4, max: 4 },
-      { key: "contrast", label: "对比度", min: -1, max: 1 },
-      { key: "highlights", label: "高光", min: -1, max: 1 },
-      { key: "shadows", label: "阴影", min: -1, max: 1 },
-      { key: "whites", label: "白色", min: -1, max: 1 },
-      { key: "blacks", label: "黑色", min: -1, max: 1 },
+      { key: "exposure", label: t("曝光"), min: -4, max: 4 },
+      { key: "contrast", label: t("对比度"), min: -1, max: 1 },
+      { key: "highlights", label: t("高光"), min: -1, max: 1 },
+      { key: "shadows", label: t("阴影"), min: -1, max: 1 },
+      { key: "whites", label: t("白色"), min: -1, max: 1 },
+      { key: "blacks", label: t("黑色"), min: -1, max: 1 },
     ],
   },
   {
-    title: "色彩与效果",
+    section: "colorEffects",
+    title: t("色彩与效果"),
     sliders: [
-      { key: "vibrance", label: "自然饱和度", min: -1, max: 1 },
-      { key: "saturation", label: "饱和度", min: -1, max: 1 },
-      { key: "dehaze", label: "去雾", min: -1, max: 1 },
-      { key: "clarity", label: "清晰度", min: -1, max: 1 },
-      { key: "texture", label: "纹理", min: -1, max: 1 },
-      { key: "sharpen", label: "锐化", min: 0, max: 1 },
-      { key: "sharpenRadius", label: "锐化半径", min: 1, max: 3, fallback: 1 },
-      { key: "sharpenDetail", label: "锐化细节", min: 0, max: 1 },
-      { key: "sharpenMasking", label: "锐化蒙版", min: 0, max: 1 },
-      { key: "denoiseLuma", label: "明度降噪", min: 0, max: 1 },
-      { key: "denoiseChroma", label: "色彩降噪", min: 0, max: 1 },
-      { key: "vignette", label: "暗角", min: -1, max: 1 },
-      { key: "postCropVignette", label: "裁剪后暗角", min: -1, max: 1 },
-      { key: "grain", label: "颗粒", min: 0, max: 1 },
-      { key: "grainSize", label: "颗粒大小", min: 0, max: 1 },
+      { key: "vibrance", label: t("自然饱和度"), min: -1, max: 1 },
+      { key: "saturation", label: t("饱和度"), min: -1, max: 1 },
+      { key: "dehaze", label: t("去雾"), min: -1, max: 1 },
+      { key: "clarity", label: t("清晰度"), min: -1, max: 1 },
+      { key: "texture", label: t("纹理"), min: -1, max: 1 },
+      { key: "sharpen", label: t("锐化"), min: 0, max: 1 },
+      { key: "sharpenRadius", label: t("锐化半径"), min: 1, max: 3, fallback: 1 },
+      { key: "sharpenDetail", label: t("锐化细节"), min: 0, max: 1 },
+      { key: "sharpenMasking", label: t("锐化蒙版"), min: 0, max: 1 },
+      { key: "denoiseLuma", label: t("明度降噪"), min: 0, max: 1 },
+      { key: "denoiseChroma", label: t("色彩降噪"), min: 0, max: 1 },
+      { key: "vignette", label: t("暗角"), min: -1, max: 1 },
+      { key: "postCropVignette", label: t("裁剪后暗角"), min: -1, max: 1 },
+      { key: "grain", label: t("颗粒"), min: 0, max: 1 },
+      { key: "grainSize", label: t("颗粒大小"), min: 0, max: 1 },
     ],
   },
   {
-    title: "校准",
+    section: "calibration",
+    title: t("校准"),
     sliders: [
-      { key: "calibrationRedHue", label: "红原色色相", min: -1, max: 1 },
-      { key: "calibrationRedSat", label: "红原色饱和度", min: -1, max: 1 },
-      { key: "calibrationGreenHue", label: "绿原色色相", min: -1, max: 1 },
-      { key: "calibrationGreenSat", label: "绿原色饱和度", min: -1, max: 1 },
-      { key: "calibrationBlueHue", label: "蓝原色色相", min: -1, max: 1 },
-      { key: "calibrationBlueSat", label: "蓝原色饱和度", min: -1, max: 1 },
+      { key: "calibrationRedHue", label: t("红原色色相"), min: -1, max: 1 },
+      { key: "calibrationRedSat", label: t("红原色饱和度"), min: -1, max: 1 },
+      { key: "calibrationGreenHue", label: t("绿原色色相"), min: -1, max: 1 },
+      { key: "calibrationGreenSat", label: t("绿原色饱和度"), min: -1, max: 1 },
+      { key: "calibrationBlueHue", label: t("蓝原色色相"), min: -1, max: 1 },
+      { key: "calibrationBlueSat", label: t("蓝原色饱和度"), min: -1, max: 1 },
     ],
   },
   {
-    title: "镜头校正",
+    section: "lensManual",
+    title: t("镜头校正"),
     sliders: [
-      { key: "lensDistortion", label: "畸变", min: -1, max: 1 },
-      { key: "lensVignette", label: "暗角补偿", min: -1, max: 1 },
-      { key: "lensCaRed", label: "红/青边", min: -1, max: 1 },
-      { key: "lensCaBlue", label: "蓝/黄边", min: -1, max: 1 },
+      { key: "lensDistortion", label: t("畸变"), min: -1, max: 1 },
+      { key: "lensVignette", label: t("暗角补偿"), min: -1, max: 1 },
+      { key: "lensCaRed", label: t("红/青边"), min: -1, max: 1 },
+      { key: "lensCaBlue", label: t("蓝/黄边"), min: -1, max: 1 },
     ],
   },
   {
-    title: "透视矫正",
+    section: "perspective",
+    title: t("透视矫正"),
     sliders: [
-      { key: "perspectiveV", label: "垂直透视", min: -1, max: 1 },
-      { key: "perspectiveH", label: "水平透视", min: -1, max: 1 },
+      { key: "perspectiveV", label: t("垂直透视"), min: -1, max: 1 },
+      { key: "perspectiveH", label: t("水平透视"), min: -1, max: 1 },
     ],
   },
 ];
 
 const PARAMETRIC_SLIDERS: SliderDef[] = [
-  { key: "curveHighlights", label: "曲线高光", min: -1, max: 1 },
-  { key: "curveLights", label: "曲线亮调", min: -1, max: 1 },
-  { key: "curveDarks", label: "曲线暗调", min: -1, max: 1 },
-  { key: "curveShadows", label: "曲线阴影", min: -1, max: 1 },
+  { key: "curveHighlights", label: t("曲线高光"), min: -1, max: 1 },
+  { key: "curveLights", label: t("曲线亮调"), min: -1, max: 1 },
+  { key: "curveDarks", label: t("曲线暗调"), min: -1, max: 1 },
+  { key: "curveShadows", label: t("曲线阴影"), min: -1, max: 1 },
 ];
 
 const POINT_SLIDERS: SliderDef[] = [
-  { key: "pointWidth", label: "混合点范围", min: 10, max: 90, fallback: 30 },
-  { key: "pointHueShift", label: "混合点色相", min: -1, max: 1 },
-  { key: "pointSatShift", label: "混合点饱和度", min: -1, max: 1 },
-  { key: "pointLumShift", label: "混合点明度", min: -1, max: 1 },
+  { key: "pointWidth", label: t("混合点范围"), min: 10, max: 90, fallback: 30 },
+  { key: "pointHueShift", label: t("混合点色相"), min: -1, max: 1 },
+  { key: "pointSatShift", label: t("混合点饱和度"), min: -1, max: 1 },
+  { key: "pointLumShift", label: t("混合点明度"), min: -1, max: 1 },
 ];
 
 const SETTING_LABELS: Record<string, string> = Object.fromEntries(
@@ -161,46 +168,46 @@ interface SettingName {
   numeric?: boolean;
 }
 
-const CURVE_CHANNELS: Record<string, string> = { M: "RGB 曲线", R: "红色曲线", G: "绿色曲线", B: "蓝色曲线" };
+const CURVE_CHANNELS: Record<string, string> = { M: t("RGB 曲线"), R: t("红色曲线"), G: t("绿色曲线"), B: t("蓝色曲线") };
 /** History names for edits made by one action rather than by moving a setting. */
 const ACTION_LABELS = new WeakMap<Adjustments, string>();
-const CROP_GROUP = "裁剪与旋转";
-const POINT_GROUP = "颜色混合点";
+const CROP_GROUP = t("裁剪与旋转");
+const POINT_GROUP = t("颜色混合点");
 
 /** What an edit key is called in the history list, or null if it has no name. */
 function nameOfSetting(key: string): SettingName | null {
   const slider = SETTING_LABELS[key];
-  if (key === "temperature" || key === "tint") return { label: slider, group: "白平衡", numeric: true };
-  if (key === "pointHue") return { label: "混合点取色", group: POINT_GROUP };
+  if (key === "temperature" || key === "tint") return { label: slider, group: t("白平衡"), numeric: true };
+  if (key === "pointHue") return { label: t("混合点取色"), group: POINT_GROUP };
   if (key.startsWith("point") && slider) return { label: slider, group: POINT_GROUP, numeric: true };
   if (slider) return { label: slider, numeric: true };
-  if (key === "rotate") return { label: "旋转", group: CROP_GROUP, numeric: true };
+  if (key === "rotate") return { label: t("旋转"), group: CROP_GROUP, numeric: true };
   if (key === "quarter" || /^crop[XYWH]$/.test(key)) return { label: CROP_GROUP, group: CROP_GROUP };
-  if (key === "lutId") return { label: "滤镜", group: "滤镜" };
-  if (key === "lutAmount") return { label: "滤镜强度", group: "滤镜", numeric: true };
-  if (key === "cameraProfile") return { label: "色彩配置" };
-  if (key === "lensAuto") return { label: "自动镜头校正" };
-  if (key === "perspectiveKeep") return { label: "保留全图" };
-  if (key === "backgroundExposure") return { label: "背景曝光", numeric: true };
-  if (key === "maskOverlay" || key === "localOverlay") return { label: "显示蒙版" };
+  if (key === "lutId") return { label: t("滤镜"), group: t("滤镜") };
+  if (key === "lutAmount") return { label: t("滤镜强度"), group: t("滤镜"), numeric: true };
+  if (key === "cameraProfile") return { label: t("色彩配置") };
+  if (key === "lensAuto") return { label: t("自动镜头校正") };
+  if (key === "perspectiveKeep") return { label: t("保留全图") };
+  if (key === "backgroundExposure") return { label: t("背景曝光"), numeric: true };
+  if (key === "maskOverlay" || key === "localOverlay") return { label: t("显示蒙版") };
 
   const hsl = key.match(/^hsl(Hue|Sat|Lum)(\d)$/);
   if (hsl) {
     const channel = HSL_CHANNELS.find((item) => item.prefix === `hsl${hsl[1]}`)!;
-    return { label: `${HSL_BANDS[Number(hsl[2])].name}${channel.label}`, numeric: true };
+    return { label: t("{band}{channel}", { band: HSL_BANDS[Number(hsl[2])].name, channel: channel.label }), numeric: true };
   }
   const curve = key.match(/^curve([MRGB])(?:\d|N|[XY]\d+)$/);
   if (curve) return { label: CURVE_CHANNELS[curve[1]], group: CURVE_CHANNELS[curve[1]] };
   const grade = key.match(/^grade(Shadow|Mid|High)(Hue|Amount)$/);
   if (grade) {
-    const label = `${GRADE_RANGES.find((item) => item.key === grade[1])!.label}色轮`;
+    const label = t("{range}色轮", { range: GRADE_RANGES.find((item) => item.key === grade[1])!.label });
     return { label, group: label };
   }
   const local = key.match(/^local\d(.+)$/);
   if (local) {
     const slider = LOCAL_SLIDERS.find((item) => item.suffix === local[1]);
-    if (slider) return { label: `局部${slider.label}`, numeric: true };
-    if (LOCAL_RANGE_SUFFIXES.includes(local[1])) return { label: "局部范围", group: "局部范围" };
+    if (slider) return { label: t("局部{setting}", { setting: slider.label }), numeric: true };
+    if (LOCAL_RANGE_SUFFIXES.includes(local[1])) return { label: t("局部范围"), group: t("局部范围") };
   }
   return null;
 }
@@ -208,67 +215,58 @@ function nameOfSetting(key: string): SettingName | null {
 /** Names the change between two states of an edit, for the history list. */
 function describeChange(before: Adjustments, after: Adjustments) {
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => (before[key] ?? 0) !== (after[key] ?? 0));
-  if (changed.length === 0) return "无变化";
+  if (changed.length === 0) return t("无变化");
   const action = ACTION_LABELS.get(after);
   if (action) return action;
   if (changed.every((key) => /^local\d/.test(key))) {
     // A layer always has an exposure, so that key coming or going means the layer did.
     const exposures = changed.filter((key) => /^local\dExposure$/.test(key));
-    if (exposures.some((key) => !(key in before))) return "添加局部图层";
-    if (exposures.some((key) => !(key in after))) return "删除局部图层";
+    if (exposures.some((key) => !(key in before))) return t("添加局部图层");
+    if (exposures.some((key) => !(key in after))) return t("删除局部图层");
   }
   const names = changed.map(nameOfSetting);
   const groups = new Set(names.map((name) => name?.group));
   if (changed.length > 1 && groups.size === 1 && names[0]?.group) return names[0].group;
-  if (changed.length > 3) return `多项调整（${changed.length}）`;
+  if (changed.length > 3) return t("多项调整（{count}）", { count: changed.length });
   const position = names.findIndex((name) => name);
-  if (position < 0) return "调整";
+  if (position < 0) return t("调整");
   const { label, numeric } = names[position]!;
   if (!numeric) return label;
   const delta = (after[changed[position]] ?? 0) - (before[changed[position]] ?? 0);
   return `${label} ${delta > 0 ? "+" : ""}${delta.toFixed(2)}`;
 }
 
-const GROUP_SECTIONS: Record<string, SectionId> = {
-  白平衡: "whiteBalance",
-  影调: "tone",
-  色彩与效果: "colorEffects",
-  校准: "calibration",
-  镜头校正: "lensManual",
-  透视矫正: "perspective",
-};
-
 const HSL_BANDS = [
-  { name: "红", color: "#e0483e" },
-  { name: "橙", color: "#e88a2e" },
-  { name: "黄", color: "#e5cb3a" },
-  { name: "绿", color: "#55b04a" },
-  { name: "青", color: "#3fbcc0" },
-  { name: "蓝", color: "#3f73d8" },
-  { name: "紫", color: "#7e52c8" },
-  { name: "品红", color: "#cc4aa8" },
+  { name: t("红"), color: "#e0483e" },
+  { name: t("橙"), color: "#e88a2e" },
+  { name: t("黄"), color: "#e5cb3a" },
+  { name: t("绿"), color: "#55b04a" },
+  { name: t("青"), color: "#3fbcc0" },
+  { name: t("蓝"), color: "#3f73d8" },
+  { name: t("紫"), color: "#7e52c8" },
+  { name: t("品红"), color: "#cc4aa8" },
 ];
 
 const HSL_CHANNELS = [
-  { prefix: "hslHue", label: "色相" },
-  { prefix: "hslSat", label: "饱和度" },
-  { prefix: "hslLum", label: "明度" },
+  { prefix: "hslHue", label: t("色相") },
+  { prefix: "hslSat", label: t("饱和度") },
+  { prefix: "hslLum", label: t("明度") },
 ];
 
 const GRADE_RANGES = [
-  { key: "Shadow", label: "阴影" },
-  { key: "Mid", label: "中间调" },
-  { key: "High", label: "高光" },
+  { key: "Shadow", label: t("阴影") },
+  { key: "Mid", label: t("中间调") },
+  { key: "High", label: t("高光") },
 ];
 
 const LIQUIFY_MODES = [
-  { value: 0, label: "推动" },
-  { value: 1, label: "膨胀" },
-  { value: 2, label: "收缩" },
+  { value: 0, label: t("推动") },
+  { value: 1, label: t("膨胀") },
+  { value: 2, label: t("收缩") },
 ];
 
 const CROP_RATIOS: { label: string; value: number | null }[] = [
-  { label: "自由", value: null },
+  { label: t("自由"), value: null },
   { label: "1:1", value: 1 },
   { label: "4:5", value: 4 / 5 },
   { label: "3:4", value: 3 / 4 },
@@ -283,11 +281,11 @@ const MIN_LIQUIFY_STEP = 2;
 const LIQUIFY_SETTLE_MS = 120;
 const LONG_EDGE_CHOICES = [0, 6000, 4096, 3000, 2048, 1600, 1080];
 const WATERMARK_POSITIONS: { value: WatermarkPosition; label: string }[] = [
-  { value: "bottomRight", label: "右下" },
-  { value: "bottomLeft", label: "左下" },
-  { value: "topRight", label: "右上" },
-  { value: "topLeft", label: "左上" },
-  { value: "center", label: "居中" },
+  { value: "bottomRight", label: t("右下") },
+  { value: "bottomLeft", label: t("左下") },
+  { value: "topRight", label: t("右上") },
+  { value: "topLeft", label: t("左上") },
+  { value: "center", label: t("居中") },
 ];
 const WATERMARK_LOGO_LONG_EDGE = 512;
 /** Past the right edge, so the whole frame shows the unedited image. */
@@ -295,11 +293,11 @@ const COMPARE_ALL = 1.01;
 const STAMP_SPACING = 0.35;
 const STAMP_FLUSH_MS = 40;
 const COLOR_LABELS = [
-  { name: "红", color: "#e0483e" },
-  { name: "黄", color: "#e5cb3a" },
-  { name: "绿", color: "#55b04a" },
-  { name: "蓝", color: "#3f73d8" },
-  { name: "紫", color: "#7e52c8" },
+  { name: t("红"), color: "#e0483e" },
+  { name: t("黄"), color: "#e5cb3a" },
+  { name: t("绿"), color: "#55b04a" },
+  { name: t("蓝"), color: "#3f73d8" },
+  { name: t("紫"), color: "#7e52c8" },
 ];
 /** Shown instead of the photo's own, until it has been opened. */
 const QUICK_THUMBNAIL_LONG_EDGE = 320;
@@ -370,25 +368,25 @@ const needsSky = (edit: Adjustments) => (edit.skyAsset ?? 0) > 0;
 const REPLACE_LAYERS = [
   {
     mode: REPLACE_BACKGROUND,
-    title: "换背景",
+    title: t("换背景"),
     asset: "backgroundAsset",
     amount: "backgroundAmount",
     sliders: [
-      { key: "backgroundAmount", label: "融合强度", min: 0, max: 1 },
-      { key: "backgroundFillExposure", label: "亮度", min: -3, max: 3 },
-      { key: "backgroundShift", label: "上下位置", min: -0.5, max: 0.5 },
+      { key: "backgroundAmount", label: t("融合强度"), min: 0, max: 1 },
+      { key: "backgroundFillExposure", label: t("亮度"), min: -3, max: 3 },
+      { key: "backgroundShift", label: t("上下位置"), min: -0.5, max: 0.5 },
     ],
   },
   {
     mode: REPLACE_SKY,
-    title: "换天",
+    title: t("换天"),
     asset: "skyAsset",
     amount: "skyAmount",
     sliders: [
-      { key: "skyAmount", label: "融合强度", min: 0, max: 1 },
-      { key: "skyFillExposure", label: "亮度", min: -3, max: 3 },
-      { key: "skyShift", label: "上下位置", min: -0.5, max: 0.5 },
-      { key: "skyRelight", label: "前景融合", min: 0, max: 1 },
+      { key: "skyAmount", label: t("融合强度"), min: 0, max: 1 },
+      { key: "skyFillExposure", label: t("亮度"), min: -3, max: 3 },
+      { key: "skyShift", label: t("上下位置"), min: -0.5, max: 0.5 },
+      { key: "skyRelight", label: t("前景融合"), min: 0, max: 1 },
     ],
   },
 ];
@@ -700,7 +698,7 @@ export function App() {
       localsAtRef.current.set(edit, layers);
       setCurrentId(photo.id);
       setAdjustments(edit);
-      setBusy("解码中…");
+      setBusy(t("解码中…"));
       setError("");
       setExported(null);
       setMaskStats(null);
@@ -1228,7 +1226,7 @@ export function App() {
         const hue = await engineRef.current!.hueAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
         if (ticket !== openTicketRef.current) return;
         if (hue < 0) {
-          setToolHint("这里接近灰色，请点一处有颜色的地方。");
+          setToolHint(t("这里接近灰色，请点一处有颜色的地方。"));
           return;
         }
         setToolHint("");
@@ -1240,7 +1238,7 @@ export function App() {
       const balance = await engineRef.current!.whiteBalanceAt(u, v, Math.round(bounds.width), Math.round(bounds.height));
       if (ticket !== openTicketRef.current) return;
       if (!balance) {
-        setToolHint("这里太暗或已过曝，请点一处中性灰。");
+        setToolHint(t("这里太暗或已过曝，请点一处中性灰。"));
         return;
       }
       setToolHint("");
@@ -1288,7 +1286,7 @@ export function App() {
     if (!ready) return;
     const engine = engineRef.current!;
     const options = { perceptual: proof.perceptual, paper: proof.paper, gamut: proof.gamut };
-    engine.setProof(proofActive ? proofProfile.bytes : null, options).catch((reason: Error) => setError(`软打样失败：${reason.message}`));
+    engine.setProof(proofActive ? proofProfile.bytes : null, options).catch((reason: Error) => setError(t("软打样失败：{message}", { message: reason.message })));
   }, [ready, proofActive, proofProfile, proof.perceptual, proof.paper, proof.gamut]);
 
   const importProfile = async (file: File) => {
@@ -1299,7 +1297,7 @@ export function App() {
       setProfiles((list) => [...list, stored]);
       updateProof({ profileId: stored.id, on: true });
     } catch (reason) {
-      setError(`导入 ICC 失败：${(reason as Error).message}`);
+      setError(t("导入 ICC 失败：{message}", { message: (reason as Error).message }));
     }
   };
 
@@ -1321,10 +1319,10 @@ export function App() {
       if (ticket !== openTicketRef.current) return;
       // Keeps edits made while waiting; only the suggested settings change.
       const next = { ...(editsRef.current[photoId] ?? adjustments), ...suggestion };
-      ACTION_LABELS.set(next, "智能调色");
+      ACTION_LABELS.set(next, t("智能调色"));
       applyEdit(next, true);
     } catch (reason) {
-      setError(`智能调色失败：${(reason as Error).message}`);
+      setError(t("智能调色失败：{message}", { message: (reason as Error).message }));
     } finally {
       setAutoToning(false);
     }
@@ -1350,7 +1348,7 @@ export function App() {
       bitmap.close();
       updateWatermark({ logo: canvas.toDataURL("image/png") });
     } catch {
-      setError("无法读取这张水印图片");
+      setError(t("无法读取这张水印图片"));
     }
   };
 
@@ -1408,7 +1406,7 @@ export function App() {
       return;
     }
     if (!stamp.source) {
-      setToolHint("先按住 Alt（Option）点击要取样的位置。");
+      setToolHint(t("先按住 Alt（Option）点击要取样的位置。"));
       return;
     }
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -1504,7 +1502,7 @@ export function App() {
       ]);
       setEraseDabs([]);
     } catch (reason) {
-      setError(`消除失败：${(reason as Error).message}`);
+      setError(t("消除失败：{message}", { message: (reason as Error).message }));
     } finally {
       setErasing(false);
     }
@@ -1615,7 +1613,7 @@ export function App() {
       setReplaceAssets((list) => [...list, stored]);
       chooseReplacement(layer, stored.id);
     } catch {
-      setError("无法读取这张图片");
+      setError(t("无法读取这张图片"));
     }
   };
 
@@ -1636,13 +1634,13 @@ export function App() {
       await engine.setLook(null);
       const thumbnail = await engine.thumbnail(MATCH_LONG_EDGE, false);
       const lut = matchColours(new Uint8Array(thumbnail.rgb), 3, context.getImageData(0, 0, width, height).data, 4);
-      const stored = await saveLut(`追色 ${name}`, lut);
+      const stored = await saveLut(t("追色 {name}", { name }), lut);
       setImportedLuts((list) => [...list, stored]);
       // The look is kept for later; it is only applied to the photo it was made from.
       if (ticket !== openTicketRef.current) return;
       applyEdit({ ...(editsRef.current[photoId] ?? adjustments), lutId: stored.id, lutAmount: 1 }, true);
     } catch (reason) {
-      setError(reason instanceof DOMException ? "浏览器读不了这个文件。RAW 请先打开一次，再用它作参考。" : `追色失败：${(reason as Error).message}`);
+      setError(reason instanceof DOMException ? t("浏览器读不了这个文件。RAW 请先打开一次，再用它作参考。") : t("追色失败：{message}", { message: (reason as Error).message }));
       if (ticket === openTicketRef.current) await engine.setLook(await resolveLook(lookId));
     } finally {
       setMatching(false);
@@ -1665,7 +1663,7 @@ export function App() {
     setCullStatus("");
     setError("");
     if (pending.length === 0) {
-      setCullStatus(`${photos.length} 张都已分析过，共 ${groupCount} 组。`);
+      setCullStatus(t("{count} 张都已分析过，共 {groups} 组。", { count: photos.length, groups: groupCount }));
       return;
     }
     flushPendingEdit();
@@ -1688,13 +1686,13 @@ export function App() {
       }
       finished = true;
     } catch (reason) {
-      setError(`分析失败：${(reason as Error).message}`);
+      setError(t("分析失败：{message}", { message: (reason as Error).message }));
     } finally {
       setBatchRunning(false);
       setAnalyzing(null);
       await selectPhoto(returnTo);
     }
-    if (finished) setCullStatus(`已分析 ${pending.length} 张，共 ${groupPhotos(analyzedItems(photos, known)).length} 组。`);
+    if (finished) setCullStatus(t("已分析 {count} 张，共 {groups} 组。", { count: pending.length, groups: groupPhotos(analyzedItems(photos, known)).length }));
   };
 
   /** Flags the best and the clearly failed shots of each group, keeping manual flags. */
@@ -1711,7 +1709,7 @@ export function App() {
         rejected++;
       }
     }
-    setCullStatus(`选中 ${picked} 张，淘汰 ${rejected} 张。已手动标记的照片没有改动。`);
+    setCullStatus(t("选中 {picked} 张，淘汰 {rejected} 张。已手动标记的照片没有改动。", { picked, rejected }));
   };
 
   const importLut = async (file: File | undefined) => {
@@ -1721,7 +1719,7 @@ export function App() {
       setImportedLuts((list) => [...list, stored]);
       applyEdit({ ...adjustments, lutId: stored.id, lutAmount: 1 }, true);
     } catch (reason) {
-      setError(`导入 LUT 失败：${(reason as Error).message}`);
+      setError(t("导入 LUT 失败：{message}", { message: (reason as Error).message }));
     }
   };
 
@@ -1769,7 +1767,7 @@ export function App() {
     try {
       await addHandles(granted);
     } catch (reason) {
-      setError(`恢复图库失败：${(reason as Error).message}`);
+      setError(t("恢复图库失败：{message}", { message: (reason as Error).message }));
     }
   };
 
@@ -1815,9 +1813,9 @@ export function App() {
       const opened = files.filter((file): file is File => !!file);
       addFiles(opened);
       const missing = project.photoIds.length - opened.length;
-      if (missing > 0) setProjectNotice(`有 ${missing} 张没有读取权限或已移动，重新添加同一文件即可恢复修图。`);
+      if (missing > 0) setProjectNotice(t("有 {count} 张没有读取权限或已移动，重新添加同一文件即可恢复修图。", { count: missing }));
     } catch (reason) {
-      setError(`打开项目失败：${(reason as Error).message}`);
+      setError(t("打开项目失败：{message}", { message: (reason as Error).message }));
     }
   };
 
@@ -2111,7 +2109,7 @@ export function App() {
       const stats = await engineRef.current!.detectSubject(loaded.proxyWidth, loaded.proxyHeight);
       if (ticket === openTicketRef.current) setMaskStats(stats);
     } catch (reason) {
-      setError(`主体识别失败：${(reason as Error).message}`);
+      setError(t("主体识别失败：{message}", { message: (reason as Error).message }));
     } finally {
       setDetecting(false);
     }
@@ -2126,7 +2124,7 @@ export function App() {
       const stats = await engineRef.current!.prepareSkin(loaded.proxyWidth, loaded.proxyHeight);
       if (ticket === openTicketRef.current) setSkinStats(stats);
     } catch (reason) {
-      setError(`人脸识别失败：${(reason as Error).message}`);
+      setError(t("人脸识别失败：{message}", { message: (reason as Error).message }));
     } finally {
       setFindingFaces(false);
     }
@@ -2142,7 +2140,7 @@ export function App() {
 
   const startExport = async () => {
     if (!current) return;
-    setBusy("导出中…");
+    setBusy(t("导出中…"));
     setExported(null);
     try {
       const result = await engineRef.current!.exportImage(output);
@@ -2268,7 +2266,7 @@ export function App() {
 
   const addSnapshot = () => {
     flushPendingEdit();
-    storeSnapshots([...snapshots, { name: `快照 ${snapshots.length + 1}`, edit: persistable(adjustments) }]);
+    storeSnapshots([...snapshots, { name: t("快照 {number}", { number: snapshots.length + 1 }), edit: persistable(adjustments) }]);
   };
 
   const saveOutputPreset = () => {
@@ -2340,7 +2338,7 @@ export function App() {
       }
       setBatchUrl(await target.finish());
     } catch (reason) {
-      setError(`批量导出失败：${(reason as Error).message}`);
+      setError(t("批量导出失败：{message}", { message: (reason as Error).message }));
     } finally {
       setBatchRunning(false);
       await selectPhoto(returnTo);
@@ -2355,8 +2353,8 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <h1>OpenPixels{IS_LITE && " Lite"}</h1>
-        <button className="button ghost" disabled={!ready || locked} onClick={() => setLibraryOpen(true)}>项目库</button>
-        <button className="button ghost" disabled={!ready || locked} onClick={() => void openPicker()}>添加图片</button>
+        <button className="button ghost" disabled={!ready || locked} onClick={() => setLibraryOpen(true)}>{t("项目库")}</button>
+        <button className="button ghost" disabled={!ready || locked} onClick={() => void openPicker()}>{t("添加图片")}</button>
         <input
           ref={fileInputRef}
           type="file"
@@ -2372,31 +2370,36 @@ export function App() {
         {projectOfActive && (
           <div className="project-bar" data-testid="active-project">
             <span>{projectOfActive.name}</span>
-            <button className="button ghost" disabled={!current || locked} onClick={removeFromProject}>移出当前图片</button>
+            <button className="button ghost" disabled={!current || locked} onClick={removeFromProject}>{t("移出当前图片")}</button>
           </div>
         )}
         <div className="topbar-center">
-          <button className="button ghost" disabled={!history?.past.length || locked} onClick={() => stepHistory("undo")}>撤销</button>
-          <button className="button ghost" disabled={!history?.future.length || locked} onClick={() => stepHistory("redo")}>重做</button>
-          <button className="button ghost" disabled={!loaded || locked} onClick={reset}>重置</button>
+          <button className="button ghost" disabled={!history?.past.length || locked} onClick={() => stepHistory("undo")}>{t("撤销")}</button>
+          <button className="button ghost" disabled={!history?.future.length || locked} onClick={() => stepHistory("redo")}>{t("重做")}</button>
+          <button className="button ghost" disabled={!loaded || locked} onClick={reset}>{t("重置")}</button>
           <button
             className={`button ${proofActive ? "" : "ghost"}`}
             aria-pressed={proofActive}
             disabled={!proofProfile || locked}
-            title={proofProfile ? "按打样配置预览（S）" : "先在“输出”页导入 ICC 配置"}
+            title={proofProfile ? t("按打样配置预览（S）") : t("先在“输出”页导入 ICC 配置")}
             onClick={() => updateProof({ on: !proof.on })}
           >
-            软打样
+            {t("软打样")}
           </button>
-          <button className={`button ${compare > 0 ? "" : "ghost"}`} title="按住 \\ 键可查看整张修图前" disabled={!loaded || locked} onClick={() => setCompare((split) => (split > 0 ? 0 : 0.5))}>对比</button>
+          <button className={`button ${compare > 0 ? "" : "ghost"}`} title={t("按住 \\ 键可查看整张修图前")} disabled={!loaded || locked} onClick={() => setCompare((split) => (split > 0 ? 0 : 0.5))}>{t("对比")}</button>
         </div>
-        {exported && <a className="download" href={exported.url} download={exported.name} title={exported.name}>下载 {exported.name}</a>}
-        <button className="button" disabled={!loaded || !!busy || locked} onClick={() => void startExport()}>导出当前</button>
+        {exported && <a className="download" href={exported.url} download={exported.name} title={exported.name}>{t("下载 {name}", { name: exported.name })}</a>}
+        <select className="language" aria-label={t("界面语言")} value={currentLanguage()} onChange={(event) => setLanguage(event.target.value as Language)}>
+          {LANGUAGES.map((language) => (
+            <option key={language.code} value={language.code}>{language.name}</option>
+          ))}
+        </select>
+        <button className="button" disabled={!loaded || !!busy || locked} onClick={() => void startExport()}>{t("导出当前")}</button>
       </header>
       {error && (
         <p className="error" role="alert">
           <span>{error}</span>
-          <button type="button" aria-label="关闭错误提示" title="关闭" onClick={() => setError("")}>×</button>
+          <button type="button" aria-label={t("关闭错误提示")} title={t("关闭")} onClick={() => setError("")}>×</button>
         </p>
       )}
       {projectNotice && <p className="notice">{projectNotice}</p>}
@@ -2472,13 +2475,13 @@ export function App() {
           {toolHint && <p className="stage-hint" data-testid="tool-hint">{toolHint}</p>}
           {proofActive && loaded && (
             <p className="proof-badge" data-testid="proof-badge">
-              软打样：{proofProfile.name}
-              {proof.gamut && "（粉色为超出色域）"}
+              {t("软打样：{profile}", { profile: proofProfile.name })}
+              {proof.gamut && t("（粉色为超出色域）")}
             </p>
           )}
           {loaded && !cropEditing && (
-            <div className="zoom-bar" role="group" aria-label="缩放" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-              <button type="button" className={view.zoom === 1 ? "current" : ""} title="适合窗口（Z 在适合和 100% 之间切换）" onClick={() => applyView(FIT_VIEW)}>适合</button>
+            <div className="zoom-bar" role="group" aria-label={t("缩放")} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+              <button type="button" className={view.zoom === 1 ? "current" : ""} title={t("适合窗口（Z 在适合和 100% 之间切换）")} onClick={() => applyView(FIT_VIEW)}>{t("适合")}</button>
               <button type="button" className={zoomPercent === 100 ? "current" : ""} onClick={() => zoomToRatio(1)}>100%</button>
               <button type="button" className={zoomPercent === 200 ? "current" : ""} onClick={() => zoomToRatio(2)}>200%</button>
               <output data-testid="zoom-percent">{zoomPercent}%</output>
@@ -2487,19 +2490,19 @@ export function App() {
           <canvas ref={canvasRef} style={{ visibility: loaded ? undefined : "hidden" }} />
           {!loaded && !busy && (
             <div className="empty" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-              <p>{ready ? "拖入一组 RAW、JPEG、PNG 或 HEIC" : "正在初始化 WebGPU…"}</p>
-              {ready && <button className="button" onClick={() => void openPicker()}>选择图片</button>}
+              <p>{ready ? t("拖入一组 RAW、JPEG、PNG 或 HEIC") : t("正在初始化 WebGPU…")}</p>
+              {ready && <button className="button" onClick={() => void openPicker()}>{t("选择图片")}</button>}
               {resumable && photos.length === 0 && (
                 <div className="restore" data-testid="resume-project">
-                  <span>上次的项目：{resumable.name}（{resumable.photoIds.length} 张）</span>
-                  <button className="button secondary" disabled={!ready} onClick={() => void openProject(resumable)}>打开</button>
+                  <span>{t("上次的项目：{name}（{count} 张）", { name: resumable.name, count: resumable.photoIds.length })}</span>
+                  <button className="button secondary" disabled={!ready} onClick={() => void openProject(resumable)}>{t("打开")}</button>
                 </div>
               )}
               {restorable.length > 0 && photos.length === 0 && (
                 <div className="restore" data-testid="restore">
-                  <span>上次有 {restorable.length} 张图片</span>
-                  <button className="button secondary" disabled={!ready} onClick={() => void restoreLibrary()}>恢复</button>
-                  <button className="button ghost" onClick={clearLibrary}>忽略</button>
+                  <span>{t("上次有 {count} 张图片", { count: restorable.length })}</span>
+                  <button className="button secondary" disabled={!ready} onClick={() => void restoreLibrary()}>{t("恢复")}</button>
+                  <button className="button ghost" onClick={clearLibrary}>{t("忽略")}</button>
                 </div>
               )}
             </div>
@@ -2549,8 +2552,8 @@ export function App() {
               onPointerCancel={() => { compareDragRef.current = false; }}
               onClick={(event) => event.stopPropagation()}
             >
-              <span className="compare-label before">修图前</span>
-              <span className="compare-label after">修图后</span>
+              <span className="compare-label before">{t("修图前")}</span>
+              <span className="compare-label after">{t("修图后")}</span>
             </div>
           )}
           {healing && healMode === "erase" && eraseDabs.length > 0 && loaded && (
@@ -2592,7 +2595,7 @@ export function App() {
           )}
         </main>
         {gridView && (
-          <div className="grid-view" role="listbox" aria-label="图库网格" aria-multiselectable="true">
+          <div className="grid-view" role="listbox" aria-label={t("图库网格")} aria-multiselectable="true">
             {shownPhotos.map((photo) => (
               <button
                 key={photo.id}
@@ -2610,8 +2613,8 @@ export function App() {
                   {(ratings[photo.id] ?? 0) > 0 && <span className="grid-stars">{"★".repeat(ratings[photo.id])}</span>}
                 </span>
                 {labels[photo.id] > 0 && <i className="thumb-label" style={{ background: COLOR_LABELS[labels[photo.id] - 1].color }} />}
-                {flags[photo.id] === FLAG_PICK && <i className="thumb-flag pick" aria-label="已选中" />}
-                {flags[photo.id] === FLAG_REJECT && <i className="thumb-flag reject" aria-label="已淘汰" />}
+                {flags[photo.id] === FLAG_PICK && <i className="thumb-flag pick" aria-label={t("已选中")} />}
+                {flags[photo.id] === FLAG_REJECT && <i className="thumb-flag reject" aria-label={t("已淘汰")} />}
               </button>
             ))}
           </div>
@@ -2619,15 +2622,15 @@ export function App() {
         </div>
 
         {photos.length > 0 && (
-          <div className="filmbar" role="toolbar" aria-label="选片">
-            <button className={`button ${gridView ? "" : "ghost"}`} title="G 网格，E 单张" onClick={() => setGridView((on) => !on)}>{gridView ? "单张" : "网格"}</button>
+          <div className="filmbar" role="toolbar" aria-label={t("选片")}>
+            <button className={`button ${gridView ? "" : "ghost"}`} title={t("G 网格，E 单张")} onClick={() => setGridView((on) => !on)}>{gridView ? t("单张") : t("网格")}</button>
             <span className="filmbar-gap" />
-            <div className="stars" role="group" aria-label="星标">
+            <div className="stars" role="group" aria-label={t("星标")}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <button
                   key={star}
                   className={`star ${(current ? (ratings[current.id] ?? 0) : 0) >= star ? "on" : ""}`}
-                  aria-label={`${star} 星`}
+                  aria-label={t("{count} 星", { count: star })}
                   disabled={!current || locked}
                   onClick={() => current && rate(current.id, ratings[current.id] === star ? 0 : star)}
                 >
@@ -2635,58 +2638,58 @@ export function App() {
                 </button>
               ))}
             </div>
-            <button className={`button ${current && flags[current.id] === FLAG_PICK ? "" : "ghost"}`} aria-label="选中" title="快捷键 P" disabled={!current || locked} onClick={() => current && flag(current.id, flags[current.id] === FLAG_PICK ? 0 : FLAG_PICK)}>选中</button>
-            <button className={`button ${current && flags[current.id] === FLAG_REJECT ? "" : "ghost"}`} aria-label="淘汰" title="快捷键 X" disabled={!current || locked} onClick={() => current && flag(current.id, flags[current.id] === FLAG_REJECT ? 0 : FLAG_REJECT)}>淘汰</button>
-            <div className="labels" role="group" aria-label="色标">
+            <button className={`button ${current && flags[current.id] === FLAG_PICK ? "" : "ghost"}`} aria-label={t("选中")} title={t("快捷键 P")} disabled={!current || locked} onClick={() => current && flag(current.id, flags[current.id] === FLAG_PICK ? 0 : FLAG_PICK)}>{t("选中")}</button>
+            <button className={`button ${current && flags[current.id] === FLAG_REJECT ? "" : "ghost"}`} aria-label={t("淘汰")} title={t("快捷键 X")} disabled={!current || locked} onClick={() => current && flag(current.id, flags[current.id] === FLAG_REJECT ? 0 : FLAG_REJECT)}>{t("淘汰")}</button>
+            <div className="labels" role="group" aria-label={t("色标")}>
               {COLOR_LABELS.map((item, index) => (
                 <button
                   key={item.name}
                   className={current && labels[current.id] === index + 1 ? "on" : ""}
                   style={{ background: item.color }}
-                  aria-label={`${item.name}色标`}
-                  title={index < 4 ? `快捷键 ${index + 6}` : undefined}
+                  aria-label={t("{color}色标", { color: item.name })}
+                  title={index < 4 ? t("快捷键 {key}", { key: index + 6 }) : undefined}
                   disabled={!current || locked}
                   onClick={() => current && label(current.id, labels[current.id] === index + 1 ? 0 : index + 1)}
                 />
               ))}
             </div>
             <span className="filmbar-gap" />
-            <select aria-label="星标筛选" value={minRating} disabled={locked} onChange={(event) => setMinRating(Number(event.target.value))}>
-              <option value={0}>全部星标</option>
+            <select aria-label={t("星标筛选")} value={minRating} disabled={locked} onChange={(event) => setMinRating(Number(event.target.value))}>
+              <option value={0}>{t("全部星标")}</option>
               {[1, 2, 3, 4, 5].map((star) => (
-                <option key={star} value={star}>{star} 星及以上</option>
+                <option key={star} value={star}>{t("{count} 星及以上", { count: star })}</option>
               ))}
             </select>
-            <select aria-label="色标筛选" value={labelFilter} disabled={locked} onChange={(event) => setLabelFilter(Number(event.target.value))}>
-              <option value={0}>全部色标</option>
+            <select aria-label={t("色标筛选")} value={labelFilter} disabled={locked} onChange={(event) => setLabelFilter(Number(event.target.value))}>
+              <option value={0}>{t("全部色标")}</option>
               {COLOR_LABELS.map((item, index) => (
-                <option key={item.name} value={index + 1}>{item.name}色</option>
+                <option key={item.name} value={index + 1}>{t("{color}色", { color: item.name })}</option>
               ))}
             </select>
-            <select aria-label="旗标筛选" value={flagFilter} disabled={locked} onChange={(event) => setFlagFilter(Number(event.target.value))}>
-              <option value={0}>全部旗标</option>
-              <option value={FLAG_PICK}>只看选中</option>
-              <option value={2}>隐藏淘汰</option>
-              <option value={FLAG_REJECT}>只看淘汰</option>
+            <select aria-label={t("旗标筛选")} value={flagFilter} disabled={locked} onChange={(event) => setFlagFilter(Number(event.target.value))}>
+              <option value={0}>{t("全部旗标")}</option>
+              <option value={FLAG_PICK}>{t("只看选中")}</option>
+              <option value={2}>{t("隐藏淘汰")}</option>
+              <option value={FLAG_REJECT}>{t("只看淘汰")}</option>
             </select>
-            <select aria-label="分组筛选" value={groupFilter} disabled={locked || verdicts.size === 0} onChange={(event) => setGroupFilter(Number(event.target.value))}>
-              <option value={0}>全部分组</option>
-              <option value={GROUP_BEST}>每组最佳</option>
+            <select aria-label={t("分组筛选")} value={groupFilter} disabled={locked || verdicts.size === 0} onChange={(event) => setGroupFilter(Number(event.target.value))}>
+              <option value={0}>{t("全部分组")}</option>
+              <option value={GROUP_BEST}>{t("每组最佳")}</option>
               {Array.from({ length: groupCount }, (_, index) => (
-                <option key={index} value={index + 1}>第 {index + 1} 组</option>
+                <option key={index} value={index + 1}>{t("第 {number} 组", { number: index + 1 })}</option>
               ))}
             </select>
             <span className="filmbar-gap" />
-            <button className="button ghost" disabled={!current || locked} onClick={() => void runAnalysis()}>分析并分组</button>
-            <button className="button ghost" disabled={verdicts.size === 0 || locked} onClick={autoPick}>自动选片</button>
+            <button className="button ghost" disabled={!current || locked} onClick={() => void runAnalysis()}>{t("分析并分组")}</button>
+            <button className="button ghost" disabled={verdicts.size === 0 || locked} onClick={autoPick}>{t("自动选片")}</button>
             {(analyzing || cullStatus) && (
-              <p className="progress" data-testid="cull-status">{analyzing ? `正在分析 ${analyzing.done}/${analyzing.total}…` : cullStatus}</p>
+              <p className="progress" data-testid="cull-status">{analyzing ? t("正在分析 {done}/{total}…", { done: analyzing.done, total: analyzing.total }) : cullStatus}</p>
             )}
-            <span className="filmbar-count">{selectedIds.size > 0 && `已选 ${selectedIds.size}，`}{shownPhotos.length} / {photos.length} 张</span>
+            <span className="filmbar-count">{selectedIds.size > 0 ? t("已选 {selected}，{shown} / {total} 张", { selected: selectedIds.size, shown: shownPhotos.length, total: photos.length }) : t("{shown} / {total} 张", { shown: shownPhotos.length, total: photos.length })}</span>
           </div>
         )}
         {photos.length > 0 && !gridView && (
-          <nav className="strip" aria-label="图库">
+          <nav className="strip" aria-label={t("图库")}>
             {shownPhotos.map((photo) => (
               <button
                 key={photo.id}
@@ -2697,9 +2700,9 @@ export function App() {
               >
                 {labels[photo.id] > 0 && <i className="thumb-label" style={{ background: COLOR_LABELS[labels[photo.id] - 1].color }} />}
                 {photo.thumbnail ? <img src={photo.thumbnail} alt={photo.file.name} /> : <span>{photo.file.name}</span>}
-                {groupOf.has(photo.id) && <i className={`thumb-score ${verdicts.get(photo.id)?.best ? "best" : ""}`} title="分组 · 评分">{groupOf.get(photo.id)} · {verdicts.get(photo.id)?.score}</i>}
-                {flags[photo.id] === FLAG_PICK && <i className="thumb-flag pick" aria-label="已选中" />}
-                {flags[photo.id] === FLAG_REJECT && <i className="thumb-flag reject" aria-label="已淘汰" />}
+                {groupOf.has(photo.id) && <i className={`thumb-score ${verdicts.get(photo.id)?.best ? "best" : ""}`} title={t("分组 · 评分")}>{groupOf.get(photo.id)} · {verdicts.get(photo.id)?.score}</i>}
+                {flags[photo.id] === FLAG_PICK && <i className="thumb-flag pick" aria-label={t("已选中")} />}
+                {flags[photo.id] === FLAG_REJECT && <i className="thumb-flag reject" aria-label={t("已淘汰")} />}
               </button>
             ))}
           </nav>
@@ -2727,7 +2730,7 @@ export function App() {
           onToggleShadows={() => setClipWarnings((all) => ({ ...all, shadows: !all.shadows }))}
           onToggleHighlights={() => setClipWarnings((all) => ({ ...all, highlights: !all.highlights }))}
         />
-        <nav className="panel-tabs" role="tablist" aria-label="功能">
+        <nav className="panel-tabs" role="tablist" aria-label={t("功能")}>
           {PANEL_TABS.map((tab) => (
             <button key={tab.id} type="button" role="tab" aria-selected={panelTab === tab.id} className={panelTab === tab.id ? "current" : ""} onClick={() => setPanelTab(tab.id)}>
               {tab.label}
@@ -2736,83 +2739,83 @@ export function App() {
         </nav>
         <div className="panel-body">
         {GROUPS.map((group) => (
-          <Section key={group.title} id={GROUP_SECTIONS[group.title]} title={group.title} active={panelTab}>
-            {group.title === "白平衡" && (
+          <Section key={group.section} id={group.section} title={group.title} active={panelTab}>
+            {group.section === "whiteBalance" && (
               <div className="row">
                 <button className={`button ${pickingWhite ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => togglePicker("white")}>
-                  {pickingWhite ? "点击画面中性灰处…" : "吸管"}
+                  {pickingWhite ? t("点击画面中性灰处…") : t("吸管")}
                 </button>
               </div>
             )}
-            {group.title === "影调" && (
+            {group.section === "tone" && (
               <div className="row">
                 <button className="button secondary" disabled={!loaded || locked || autoToning} onClick={() => void runAutoTone()}>
-                  {autoToning ? "计算中…" : "智能调色"}
+                  {autoToning ? t("计算中…") : t("智能调色")}
                 </button>
               </div>
             )}
-            {group.title === "透视矫正" && (
+            {group.section === "perspective" && (
               <label className="check">
                 <input
                   type="checkbox"
-                  aria-label="保留全图"
+                  aria-label={t("保留全图")}
                   checked={!!adjustments.perspectiveKeep}
                   disabled={!loaded || locked}
                   onChange={(event) => setValue("perspectiveKeep", event.target.checked ? 1 : 0)}
                 />
-                保留全图（边缘留黑，不放大裁切）
+                {t("保留全图（边缘留黑，不放大裁切）")}
               </label>
             )}
             {group.sliders.map(renderSlider)}
           </Section>
         ))}
 
-        <Section id="camera" title="相机与镜头" active={panelTab}>
+        <Section id="camera" title={t("相机与镜头")} active={panelTab}>
           <label className="field">
-            <span>色彩配置</span>
+            <span>{t("色彩配置")}</span>
             <select
-              aria-label="色彩配置"
+              aria-label={t("色彩配置")}
               value={loaded?.cameraMatch && adjustments.cameraProfile ? 1 : 0}
               disabled={!loaded?.cameraMatch || locked}
               onChange={(event) => setValue("cameraProfile", Number(event.target.value))}
             >
-              <option value={0}>标准</option>
-              <option value={1}>相机匹配</option>
+              <option value={0}>{t("标准")}</option>
+              <option value={1}>{t("相机匹配")}</option>
             </select>
           </label>
           <label className="check">
             <input
               type="checkbox"
-              aria-label="使用自动镜头校正"
+              aria-label={t("使用自动镜头校正")}
               checked={!!loaded?.lens && !!adjustments.lensAuto}
               disabled={!loaded?.lens || locked}
               onChange={(event) => setValue("lensAuto", event.target.checked ? 1 : 0)}
             />
-            使用自动镜头校正
+            {t("使用自动镜头校正")}
           </label>
           {loaded?.isRaw && (
             <p className="progress" data-testid="camera-status">
-              {loaded.cameraMatch ? "已按机内 JPEG 拟合相机色彩。" : "默认色彩已接近机内 JPEG，无需相机匹配。"}
+              {loaded.cameraMatch ? t("已按机内 JPEG 拟合相机色彩。") : t("默认色彩已接近机内 JPEG，无需相机匹配。")}
               {loaded.lensSource === "lensfun"
-                ? `Lensfun 镜头库有 ${loaded.lensQuery?.lens} 的校正数据（CC BY-SA 3.0），勾选上方选项后生效。`
+                ? t("Lensfun 镜头库有 {lens} 的校正数据（CC BY-SA 3.0），勾选上方选项后生效。", { lens: loaded.lensQuery?.lens ?? "" })
                 : loaded.lens
-                  ? "文件内含镜头数据。"
+                  ? t("文件内含镜头数据。")
                   : loaded.lensQuery
-                    ? `镜头库里没有 ${loaded.lensQuery.lens} 的数据，可用下方滑块手动校正。`
-                    : "文件没有可用的镜头数据，可用下方滑块手动校正。"}
+                    ? t("镜头库里没有 {lens} 的数据，可用下方滑块手动校正。", { lens: loaded.lensQuery.lens })
+                    : t("文件没有可用的镜头数据，可用下方滑块手动校正。")}
             </p>
           )}
         </Section>
 
-        <Section id="curve" title="曲线" active={panelTab}>
+        <Section id="curve" title={t("曲线")} active={panelTab}>
           <ToneCurve adjustments={adjustments} histogram={loaded ? histogram : null} disabled={!loaded || locked} onChange={applyEdit} />
           {PARAMETRIC_SLIDERS.map(renderSlider)}
         </Section>
 
-        <Section id="look" title={IS_LITE ? "滤镜" : "滤镜与追色"} active={panelTab}>
+        <Section id="look" title={IS_LITE ? t("滤镜") : t("滤镜与追色")} active={panelTab}>
           <div className="row">
-            <select aria-label="滤镜" value={lookId} disabled={!loaded || locked} onChange={(event) => chooseLook(Number(event.target.value))}>
-              <option value={0}>无</option>
+            <select aria-label={t("滤镜")} value={lookId} disabled={!loaded || locked} onChange={(event) => chooseLook(Number(event.target.value))}>
+              <option value={0}>{t("无")}</option>
               {LOOK_GROUPS.map((group) => (
                 <optgroup key={group} label={group}>
                   {BUILT_IN_LOOKS.filter((look) => look.group === group).map((look) => (
@@ -2825,12 +2828,12 @@ export function App() {
               ))}
             </select>
             <label className={`button secondary ${!loaded || locked ? "disabled" : ""}`}>
-              导入 .cube
+              {t("导入 .cube")}
               <input
                 type="file"
                 hidden
                 accept=".cube"
-                aria-label="导入 LUT"
+                aria-label={t("导入 LUT")}
                 disabled={!loaded || locked}
                 onChange={(event) => {
                   void importLut(event.target.files?.[0]);
@@ -2840,26 +2843,26 @@ export function App() {
             </label>
           </div>
           <label className="slider">
-            <span>滤镜强度</span>
+            <span>{t("滤镜强度")}</span>
             <output>{(adjustments.lutAmount ?? 0).toFixed(2)}</output>
-            <input aria-label="滤镜强度" type="range" min={0} max={1} step={0.01} value={adjustments.lutAmount ?? 0} disabled={!lookId || locked} onChange={(event) => setValue("lutAmount", Number(event.target.value))} />
+            <input aria-label={t("滤镜强度")} type="range" min={0} max={1} step={0.01} value={adjustments.lutAmount ?? 0} disabled={!lookId || locked} onChange={(event) => setValue("lutAmount", Number(event.target.value))} />
           </label>
           {!IS_LITE && (
           <div className="row">
-            <select aria-label="追色参考" value={matchReference} disabled={!loaded || locked || matching} onChange={(event) => setMatchReference(event.target.value)}>
-              <option value="">选择参考照片</option>
+            <select aria-label={t("追色参考")} value={matchReference} disabled={!loaded || locked || matching} onChange={(event) => setMatchReference(event.target.value)}>
+              <option value="">{t("选择参考照片")}</option>
               {photos.filter((photo) => photo.id !== currentId).map((photo) => (
                 <option key={photo.id} value={photo.id}>{photo.file.name}</option>
               ))}
             </select>
-            <button className="button secondary" disabled={!matchReference || !loaded || locked || matching} onClick={() => void matchFromStrip()}>{matching ? "追色中…" : "追色"}</button>
+            <button className="button secondary" disabled={!matchReference || !loaded || locked || matching} onClick={() => void matchFromStrip()}>{matching ? t("追色中…") : t("追色")}</button>
             <label className={`button secondary ${!loaded || locked || matching ? "disabled" : ""}`}>
-              导入参考图
+              {t("导入参考图")}
               <input
                 type="file"
                 hidden
                 accept="image/*"
-                aria-label="导入追色参考图"
+                aria-label={t("导入追色参考图")}
                 disabled={!loaded || locked || matching}
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -2872,7 +2875,7 @@ export function App() {
           )}
         </Section>
 
-        <Section id="grade" title="色调分离" active={panelTab}>
+        <Section id="grade" title={t("色调分离")} active={panelTab}>
           <div className="wheels">
             {GRADE_RANGES.map(({ key, label }) => (
               <ColorWheel
@@ -2888,7 +2891,7 @@ export function App() {
         </Section>
 
         <Section id="hsl" title="HSL" active={panelTab}>
-          <div className="bands" role="group" aria-label="颜色通道">
+          <div className="bands" role="group" aria-label={t("颜色通道")}>
             {HSL_BANDS.map((band, index) => (
               <button
                 key={band.name}
@@ -2903,7 +2906,7 @@ export function App() {
           {HSL_CHANNELS.map(({ prefix, label }) => {
             const key = `${prefix}${hslBand}`;
             const value = adjustments[key] ?? 0;
-            const name = `${HSL_BANDS[hslBand].name}${label}`;
+            const name = t("{band}{channel}", { band: HSL_BANDS[hslBand].name, channel: label });
             return (
               <label className="slider" key={prefix}>
                 <span>{label}</span>
@@ -2922,40 +2925,40 @@ export function App() {
               </label>
             );
           })}
-          <h3 className="subhead">颜色混合点</h3>
+          <h3 className="subhead">{t("颜色混合点")}</h3>
           <div className="row">
             <button className={`button ${picker === "point" ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => togglePicker("point")}>
-              {picker === "point" ? "点击画面要调的颜色…" : (adjustments.pointWidth ?? 0) > 0 ? "重新取色" : "吸管取色"}
+              {picker === "point" ? t("点击画面要调的颜色…") : (adjustments.pointWidth ?? 0) > 0 ? t("重新取色") : t("吸管取色")}
             </button>
             {(adjustments.pointWidth ?? 0) > 0 && (
               <>
                 <span className="point-swatch" data-testid="point-swatch" style={{ background: `hsl(${adjustments.pointHue ?? 0} 75% 50%)` }} />
-                <button className="button secondary" disabled={locked} onClick={removePointColour}>移除</button>
+                <button className="button secondary" disabled={locked} onClick={removePointColour}>{t("移除")}</button>
               </>
             )}
           </div>
           {(adjustments.pointWidth ?? 0) > 0 && POINT_SLIDERS.map(renderSlider)}
         </Section>
 
-        <Section id="subject" title="AI 主体" active={panelTab}>
+        <Section id="subject" title={t("AI 主体")} active={panelTab}>
           <button className="button" disabled={!loaded || detecting || locked} onClick={() => void detectSubject()}>
-            {detecting ? "识别中…" : maskStats ? "重新识别" : "识别主体"}
+            {detecting ? t("识别中…") : maskStats ? t("重新识别") : t("识别主体")}
           </button>
           <label className="check">
             <input
               type="checkbox"
-              aria-label="显示蒙版"
+              aria-label={t("显示蒙版")}
               disabled={!maskStats || locked}
               checked={(adjustments.maskOverlay ?? 0) > 0}
               onChange={(event) => setValue("maskOverlay", event.target.checked ? 1 : 0)}
             />
-            显示蒙版（背景标红）
+            {t("显示蒙版（背景标红）")}
           </label>
           <label className="slider">
-            <span>背景曝光</span>
+            <span>{t("背景曝光")}</span>
             <output>{backgroundExposure.toFixed(2)}</output>
             <input
-              aria-label="背景曝光"
+              aria-label={t("背景曝光")}
               type="range"
               min={-4}
               max={4}
@@ -2968,15 +2971,15 @@ export function App() {
           </label>
         </Section>
 
-        <Section id="replace" title="换背景 / 换天" active={panelTab}>
+        <Section id="replace" title={t("换背景 / 换天")} active={panelTab}>
           {REPLACE_LAYERS.map((layer) => {
             const asset = adjustments[layer.asset] ?? 0;
             return (
               <div key={layer.mode}>
                 <div className="row">
                   <span className="layer-title">{layer.title}</span>
-                  <select aria-label={`${layer.title}素材`} value={asset} disabled={!loaded || locked} onChange={(event) => chooseReplacement(layer, Number(event.target.value))}>
-                    <option value={0}>不替换</option>
+                  <select aria-label={t("{layer}素材", { layer: layer.title })} value={asset} disabled={!loaded || locked} onChange={(event) => chooseReplacement(layer, Number(event.target.value))}>
+                    <option value={0}>{t("不替换")}</option>
                     {BUILT_IN_REPLACEMENTS.filter((item) => item.mode === layer.mode).map((item) => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
@@ -2985,12 +2988,12 @@ export function App() {
                     ))}
                   </select>
                   <label className={`button secondary ${!loaded || locked ? "disabled" : ""}`}>
-                    导入图片
+                    {t("导入图片")}
                     <input
                       type="file"
                       hidden
                       accept="image/*"
-                      aria-label={`导入${layer.title}图片`}
+                      aria-label={t("导入{layer}图片", { layer: layer.title })}
                       disabled={!loaded || locked}
                       onChange={(event) => {
                         void importReplacement(layer, event.target.files?.[0]);
@@ -3003,22 +3006,22 @@ export function App() {
                   <label className="slider" key={key}>
                     <span>{label}</span>
                     <output>{(adjustments[key] ?? 0).toFixed(2)}</output>
-                    <input aria-label={`${layer.title}${label}`} type="range" min={min} max={max} step={0.01} value={adjustments[key] ?? 0} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} />
+                    <input aria-label={t("{layer}{setting}", { layer: layer.title, setting: label })} type="range" min={min} max={max} step={0.01} value={adjustments[key] ?? 0} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} />
                   </label>
                 ))}
               </div>
             );
           })}
-          {detecting && (backgroundAsset > 0 || skyAsset > 0) && <p className="progress">正在识别…</p>}
+          {detecting && (backgroundAsset > 0 || skyAsset > 0) && <p className="progress">{t("正在识别…")}</p>}
         </Section>
 
-        <Section id="crop" title="裁剪与旋转" active={panelTab}>
+        <Section id="crop" title={t("裁剪与旋转")} active={panelTab}>
           <div className="row">
             <button className={`button ${cropEditing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleCropEditing}>
-              {cropEditing ? "完成裁剪" : "裁剪"}
+              {cropEditing ? t("完成裁剪") : t("裁剪")}
             </button>
             <select
-              aria-label="裁剪比例"
+              aria-label={t("裁剪比例")}
               value={CROP_RATIOS.findIndex((item) => item.value === cropRatio)}
               disabled={!loaded || locked}
               onChange={(event) => chooseRatio(CROP_RATIOS[Number(event.target.value)].value)}
@@ -3029,10 +3032,10 @@ export function App() {
             </select>
           </div>
           <label className="slider">
-            <span>旋转</span>
+            <span>{t("旋转")}</span>
             <output>{rotate.toFixed(1)}°</output>
             <input
-              aria-label="旋转"
+              aria-label={t("旋转")}
               type="range"
               min={-45}
               max={45}
@@ -3044,46 +3047,46 @@ export function App() {
             />
           </label>
           <div className="row">
-            <button className="button secondary" disabled={!loaded || locked} onClick={() => turn(-1)}>左转 90°</button>
-            <button className="button secondary" disabled={!loaded || locked} onClick={() => turn(1)}>右转 90°</button>
-            <button className="button secondary" disabled={!loaded || locked} onClick={resetCrop}>还原</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={() => turn(-1)}>{t("左转 90°")}</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={() => turn(1)}>{t("右转 90°")}</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={resetCrop}>{t("还原")}</button>
           </div>
         </Section>
 
-        <Section id="heal" title="修复与消除" active={panelTab}>
+        <Section id="heal" title={t("修复与消除")} active={panelTab}>
           <div className="row">
             <button className={`button ${healing ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleHealing}>
-              {healing ? "退出修复" : "开始修复"}
+              {healing ? t("退出修复") : t("开始修复")}
             </button>
-            <select aria-label="修复方式" value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone" | "erase" | "redeye")}>
-              <option value="spot">污点修复</option>
-              <option value="clone">仿制图章</option>
-              <option value="redeye">红眼去除</option>
-              <option value="erase">AI 消除</option>
+            <select aria-label={t("修复方式")} value={healMode} disabled={!loaded || locked} onChange={(event) => setHealMode(event.target.value as "spot" | "clone" | "erase" | "redeye")}>
+              <option value="spot">{t("污点修复")}</option>
+              <option value="clone">{t("仿制图章")}</option>
+              <option value="redeye">{t("红眼去除")}</option>
+              <option value="erase">{t("AI 消除")}</option>
             </select>
           </div>
           {healMode === "erase" ? (
             <>
               <div className="row">
-                <button className="button" disabled={eraseDabs.length === 0 || locked} onClick={() => void runErase()}>{erasing ? "消除中…" : "消除涂抹区域"}</button>
-                <button className="button secondary" disabled={eraseDabs.length === 0 || locked} onClick={() => setEraseDabs([])}>清空涂抹</button>
+                <button className="button" disabled={eraseDabs.length === 0 || locked} onClick={() => void runErase()}>{erasing ? t("消除中…") : t("消除涂抹区域")}</button>
+                <button className="button secondary" disabled={eraseDabs.length === 0 || locked} onClick={() => setEraseDabs([])}>{t("清空涂抹")}</button>
               </div>
               <div className="row">
-                <button className="button secondary" disabled={eraseCount === 0 || locked} onClick={() => void commitErases(erasesRef.current.slice(0, -1))}>撤销一步</button>
-                <button className="button secondary" disabled={eraseCount === 0 || locked} onClick={() => void commitErases([])}>清除</button>
+                <button className="button secondary" disabled={eraseCount === 0 || locked} onClick={() => void commitErases(erasesRef.current.slice(0, -1))}>{t("撤销一步")}</button>
+                <button className="button secondary" disabled={eraseCount === 0 || locked} onClick={() => void commitErases([])}>{t("清除")}</button>
               </div>
             </>
           ) : (
             <div className="row">
-              <button className="button secondary" disabled={heals.length === 0 || locked} onClick={undoHeal}>撤销一步</button>
-              <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals([])}>清除</button>
+              <button className="button secondary" disabled={heals.length === 0 || locked} onClick={undoHeal}>{t("撤销一步")}</button>
+              <button className="button secondary" disabled={heals.length === 0 || locked} onClick={() => void replaceHeals([])}>{t("清除")}</button>
             </div>
           )}
           <label className="slider">
-            <span>画笔大小</span>
+            <span>{t("画笔大小")}</span>
             <output>{(healRadius * 100).toFixed(1)}</output>
             <input
-              aria-label="画笔大小"
+              aria-label={t("画笔大小")}
               type="range"
               min={0.002}
               max={0.06}
@@ -3093,47 +3096,47 @@ export function App() {
               onChange={(event) => setHealRadius(Number(event.target.value))}
             />
           </label>
-          {healMode === "redeye" && <p className="progress">把画笔调到盖住瞳孔，点击瞳孔。只会去掉明显偏红的像素。</p>}
-          {healMode === "clone" && <p className="progress">按住 Alt（Option）点击取样，再拖动涂抹。</p>}
-          {healMode === "erase" && <p className="progress">{erasing ? "正在计算，通常需要 10–20 秒…" : "涂抹要去掉的内容，可以多涂几笔，再点“消除涂抹区域”。"}</p>}
-          <p className="progress" data-stat="heals">{healMode === "erase" ? `已消除 ${eraseCount} 处` : `已修复 ${heals.length} 处`}</p>
+          {healMode === "redeye" && <p className="progress">{t("把画笔调到盖住瞳孔，点击瞳孔。只会去掉明显偏红的像素。")}</p>}
+          {healMode === "clone" && <p className="progress">{t("按住 Alt（Option）点击取样，再拖动涂抹。")}</p>}
+          {healMode === "erase" && <p className="progress">{erasing ? t("正在计算，通常需要 10–20 秒…") : t("涂抹要去掉的内容，可以多涂几笔，再点“消除涂抹区域”。")}</p>}
+          <p className="progress" data-stat="heals">{healMode === "erase" ? t("已消除 {count} 处", { count: eraseCount }) : t("已修复 {count} 处", { count: heals.length })}</p>
         </Section>
 
-        <Section id="local" title={`局部调整（${locals.length}/${MAX_LOCAL_LAYERS}）`} active={panelTab}>
+        <Section id="local" title={t("局部调整（{count}/{max}）", { count: locals.length, max: MAX_LOCAL_LAYERS })} active={panelTab}>
           <div className="row">
-            {([["linear", "线性"], ["radial", "径向"], ["brush", "画笔"]] as [LocalKind, string][]).map(([kind, label]) => (
+            {([["linear", t("线性")], ["radial", t("径向")], ["brush", t("画笔")]] as [LocalKind, string][]).map(([kind, label]) => (
               <button key={kind} className={`button ${localTool === kind ? "" : "secondary"}`} disabled={!loaded || locked} onClick={() => chooseLocalTool(kind)}>{label}</button>
             ))}
-            <button className="button secondary" disabled={!loaded || locked || locals.length >= MAX_LOCAL_LAYERS} onClick={addFullLocal}>全图</button>
+            <button className="button secondary" disabled={!loaded || locked || locals.length >= MAX_LOCAL_LAYERS} onClick={addFullLocal}>{t("全图")}</button>
           </div>
-          <div className="row" role="group" aria-label="AI 蒙版">
-            {([["subject", "主体"], ["background", "背景"], ["sky", "天空"]] as [AiLocalKind, string][]).map(([kind, label]) => (
+          <div className="row" role="group" aria-label={t("AI 蒙版")}>
+            {([["subject", t("主体")], ["background", t("背景")], ["sky", t("天空")]] as [AiLocalKind, string][]).map(([kind, label]) => (
               <button key={kind} className="button secondary" disabled={!loaded || locked || detecting || locals.length >= MAX_LOCAL_LAYERS} onClick={() => void addAiLocal(kind)}>{label}</button>
             ))}
-            {detecting && <span className="progress">识别中…</span>}
+            {detecting && <span className="progress">{t("识别中…")}</span>}
           </div>
           {locals[activeLocal] && (isAiLocal(locals[activeLocal].kind) || locals[activeLocal].kind === "brush") && (
             <div className="row">
-              <button className={`button ${localRefine === "add" ? "" : "secondary"}`} disabled={locked} onClick={() => chooseLocalRefine("add")}>添加到蒙版</button>
-              <button className={`button ${localRefine === "subtract" ? "" : "secondary"}`} disabled={locked} onClick={() => chooseLocalRefine("subtract")}>从蒙版减去</button>
+              <button className={`button ${localRefine === "add" ? "" : "secondary"}`} disabled={locked} onClick={() => chooseLocalRefine("add")}>{t("添加到蒙版")}</button>
+              <button className={`button ${localRefine === "subtract" ? "" : "secondary"}`} disabled={locked} onClick={() => chooseLocalRefine("subtract")}>{t("从蒙版减去")}</button>
             </div>
           )}
           {(localTool === "brush" || localRefine) && (
             <label className="slider">
-              <span>局部画笔</span>
+              <span>{t("局部画笔")}</span>
               <output>{(localBrush * 100).toFixed(1)}</output>
-              <input aria-label="局部画笔" type="range" min={0.005} max={0.2} step={0.005} value={localBrush} onChange={(event) => setLocalBrush(Number(event.target.value))} />
+              <input aria-label={t("局部画笔")} type="range" min={0.005} max={0.2} step={0.005} value={localBrush} onChange={(event) => setLocalBrush(Number(event.target.value))} />
             </label>
           )}
           {locals.length > 0 && (
             <>
-              <div className="row" role="group" aria-label="局部图层">
+              <div className="row" role="group" aria-label={t("局部图层")}>
                 {locals.map((layer, index) => (
                   <button key={index} className={`button ${index === activeLocal ? "" : "secondary"}`} disabled={locked} onClick={() => {
                       setActiveLocal(index);
                       setLocalRefine(null);
                     }}>
-                    {{ linear: "线", radial: "圆", brush: "笔", full: "全", subject: "主", background: "背", sky: "天" }[layer.kind]}{index + 1}
+                    {{ linear: t("线"), radial: t("圆"), brush: t("笔"), full: t("全"), subject: t("主"), background: t("背"), sky: t("天") }[layer.kind]}{index + 1}
                   </button>
                 ))}
               </div>
@@ -3144,27 +3147,27 @@ export function App() {
                   <label className="slider" key={suffix}>
                     <span>{label}</span>
                     <output>{value.toFixed(2)}</output>
-                    <input aria-label={`局部${label}`} type="range" min={min} max={max} step={0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} onDoubleClick={() => setValue(key, 0)} />
+                    <input aria-label={t("局部{setting}", { setting: label })} type="range" min={min} max={max} step={0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} onDoubleClick={() => setValue(key, 0)} />
                   </label>
                 );
               })}
               <label className="field">
-                <span>范围</span>
-                <select aria-label="局部范围" value={adjustments[`local${activeLocal}RangeMode`] ?? 0} disabled={locked} onChange={(event) => setValue(`local${activeLocal}RangeMode`, Number(event.target.value))}>
-                  <option value={0}>无</option>
-                  <option value={1}>亮度范围</option>
-                  <option value={2}>色彩范围</option>
+                <span>{t("范围")}</span>
+                <select aria-label={t("局部范围")} value={adjustments[`local${activeLocal}RangeMode`] ?? 0} disabled={locked} onChange={(event) => setValue(`local${activeLocal}RangeMode`, Number(event.target.value))}>
+                  <option value={0}>{t("无")}</option>
+                  <option value={1}>{t("亮度范围")}</option>
+                  <option value={2}>{t("色彩范围")}</option>
                 </select>
               </label>
               {(adjustments[`local${activeLocal}RangeMode`] === 1
                 ? [
-                    { suffix: "RangeLow", label: "最暗", min: 0, max: 1, fallback: 0 },
-                    { suffix: "RangeHigh", label: "最亮", min: 0.02, max: 1, fallback: 1 },
+                    { suffix: "RangeLow", label: t("最暗"), min: 0, max: 1, fallback: 0 },
+                    { suffix: "RangeHigh", label: t("最亮"), min: 0.02, max: 1, fallback: 1 },
                   ]
                 : adjustments[`local${activeLocal}RangeMode`] === 2
                   ? [
-                      { suffix: "RangeHue", label: "色相", min: 0, max: 360, fallback: 0 },
-                      { suffix: "RangeWidth", label: "色相宽度", min: 5, max: 90, fallback: 30 },
+                      { suffix: "RangeHue", label: t("色相"), min: 0, max: 360, fallback: 0 },
+                      { suffix: "RangeWidth", label: t("色相宽度"), min: 5, max: 90, fallback: 30 },
                     ]
                   : []
               ).map(({ suffix, label, min, max, fallback }) => {
@@ -3174,7 +3177,7 @@ export function App() {
                   <label className={`slider ${suffix === "RangeHue" ? "hue-slider" : ""}`} key={suffix}>
                     <span>{label}</span>
                     <output>{value.toFixed(max > 1 ? 0 : 2)}</output>
-                    <input aria-label={`局部${label}`} type="range" min={min} max={max} step={max > 1 ? 1 : 0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} />
+                    <input aria-label={t("局部{setting}", { setting: label })} type="range" min={min} max={max} step={max > 1 ? 1 : 0.01} value={value} disabled={locked} onChange={(event) => setValue(key, Number(event.target.value))} />
                   </label>
                 );
               })}
@@ -3184,55 +3187,55 @@ export function App() {
                   disabled={locked}
                   onClick={() => setValue("localOverlay", (adjustments.localOverlay ?? 0) > 0 ? 0 : activeLocal + 1)}
                 >
-                  显示蒙版
+                  {t("显示蒙版")}
                 </button>
-                <button className="button secondary" disabled={locked} onClick={invertLocal}>反转</button>
-                <button className="button secondary" disabled={locked} onClick={deleteLocal}>删除图层</button>
+                <button className="button secondary" disabled={locked} onClick={invertLocal}>{t("反转")}</button>
+                <button className="button secondary" disabled={locked} onClick={deleteLocal}>{t("删除图层")}</button>
               </div>
             </>
           )}
         </Section>
 
-        <Section id="liquify" title="液化" active={panelTab}>
+        <Section id="liquify" title={t("液化")} active={panelTab}>
           <div className="row">
             <button className={`button ${liquifying ? "" : "secondary"}`} disabled={!loaded || locked} onClick={toggleLiquify}>
-              {liquifying ? "退出液化" : "推动变形"}
+              {liquifying ? t("退出液化") : t("推动变形")}
             </button>
-            <select aria-label="液化模式" value={liquifyMode} disabled={!loaded || locked} onChange={(event) => setLiquifyMode(Number(event.target.value))}>
+            <select aria-label={t("液化模式")} value={liquifyMode} disabled={!loaded || locked} onChange={(event) => setLiquifyMode(Number(event.target.value))}>
               {LIQUIFY_MODES.map((mode) => (
                 <option key={mode.value} value={mode.value}>{mode.label}</option>
               ))}
             </select>
-            <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps(warpGroups.slice(0, -1))}>撤销一笔</button>
-            <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps([])}>清除</button>
+            <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps(warpGroups.slice(0, -1))}>{t("撤销一笔")}</button>
+            <button className="button secondary" disabled={warpGroups.length === 0 || locked} onClick={() => void replaceWarps([])}>{t("清除")}</button>
           </div>
           <label className="slider">
-            <span>液化大小</span>
+            <span>{t("液化大小")}</span>
             <output>{(liquifyRadius * 100).toFixed(1)}</output>
-            <input aria-label="液化大小" type="range" min={0.01} max={0.25} step={0.005} value={liquifyRadius} disabled={!loaded || locked} onChange={(event) => setLiquifyRadius(Number(event.target.value))} />
+            <input aria-label={t("液化大小")} type="range" min={0.01} max={0.25} step={0.005} value={liquifyRadius} disabled={!loaded || locked} onChange={(event) => setLiquifyRadius(Number(event.target.value))} />
           </label>
           <label className="slider">
-            <span>液化强度</span>
+            <span>{t("液化强度")}</span>
             <output>{liquifyStrength.toFixed(2)}</output>
-            <input aria-label="液化强度" type="range" min={0.05} max={1} step={0.05} value={liquifyStrength} disabled={!loaded || locked} onChange={(event) => setLiquifyStrength(Number(event.target.value))} />
+            <input aria-label={t("液化强度")} type="range" min={0.05} max={1} step={0.05} value={liquifyStrength} disabled={!loaded || locked} onChange={(event) => setLiquifyStrength(Number(event.target.value))} />
           </label>
-          <p className="progress" data-stat="warps">{warpGroups.length} 笔</p>
+          <p className="progress" data-stat="warps">{t("{count} 笔", { count: warpGroups.length })}</p>
         </Section>
 
-        <Section id="skin" title="皮肤" active={panelTab}>
+        <Section id="skin" title={t("皮肤")} active={panelTab}>
           <button className="button" disabled={!loaded || findingFaces || locked} onClick={() => void findFaces()}>
-            {findingFaces ? "识别中…" : skinStats ? "重新识别人脸" : "识别人脸"}
+            {findingFaces ? t("识别中…") : skinStats ? t("重新识别人脸") : t("识别人脸")}
           </button>
           {skinStats && (
             <p className="progress" data-stat="faces">
               {skinStats.faces > 0
-                ? `检测到 ${skinStats.faces} 张人脸，${skinStats.ms.toFixed(0)} ms`
-                : "未检测到完整人脸，按画面中的肤色处理"}
+                ? t("检测到 {count} 张人脸，{ms} ms", { count: skinStats.faces, ms: skinStats.ms.toFixed(0) })
+                : t("未检测到完整人脸，按画面中的肤色处理")}
             </p>
           )}
           {[
-            { key: "skinSmooth", label: "磨皮" },
-            { key: "skinBlemish", label: "祛斑" },
+            { key: "skinSmooth", label: t("磨皮") },
+            { key: "skinBlemish", label: t("祛斑") },
           ].map(({ key, label }) => {
             const value = adjustments[key] ?? 0;
             return (
@@ -3255,24 +3258,24 @@ export function App() {
           })}
         </Section>
 
-        <Section id="history" title="历史与快照" active={panelTab}>
+        <Section id="history" title={t("历史与快照")} active={panelTab}>
           <div className="row">
-            <button className="button secondary" disabled={!loaded || locked} onClick={addSnapshot}>保存快照</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={addSnapshot}>{t("保存快照")}</button>
           </div>
           {snapshots.map((snapshot, index) => (
             <div className="list-row" key={index}>
               <button className="list-item" disabled={locked} onClick={() => applyEdit({ ...snapshot.edit, maskOverlay: adjustments.maskOverlay ?? 0 }, true)}>{snapshot.name}</button>
-              <button className="list-remove" aria-label={`删除${snapshot.name}`} disabled={locked} onClick={() => storeSnapshots(snapshots.filter((_, position) => position !== index))}>×</button>
+              <button className="list-remove" aria-label={t("删除{name}", { name: snapshot.name })} disabled={locked} onClick={() => storeSnapshots(snapshots.filter((_, position) => position !== index))}>×</button>
             </div>
           ))}
           <div className="history-list" data-testid="history-list">
-            {!history?.past.length && <p className="progress">还没有调整。</p>}
+            {!history?.past.length && <p className="progress">{t("还没有调整。")}</p>}
             {[...(history?.past ?? [])].map((state, index, past) => ({ index, label: describeChange(state, past[index + 1] ?? adjustments), stepsBack: past.length - index })).reverse().map(({ index, label: text, stepsBack }) => (
               <button
                 className="list-item"
                 key={index}
                 disabled={locked}
-                title="回到这一步之前"
+                title={t("回到这一步之前")}
                 onClick={() => {
                   for (let step = 0; step < stepsBack; step++) stepHistory("undo");
                 }}
@@ -3283,74 +3286,74 @@ export function App() {
           </div>
         </Section>
 
-        <Section id="presets" title="预设" active={panelTab}>
+        <Section id="presets" title={t("预设")} active={panelTab}>
           <div className="row">
-            <button className="button secondary" disabled={!loaded || locked} onClick={copySettings}>复制设置</button>
-            <button className="button secondary" disabled={!copiedEdit || !loaded || locked} onClick={pasteSettings}>{selectedIds.size > 0 ? `粘贴到 ${selectedIds.size + 1} 张` : "粘贴设置"}</button>
+            <button className="button secondary" disabled={!loaded || locked} onClick={copySettings}>{t("复制设置")}</button>
+            <button className="button secondary" disabled={!copiedEdit || !loaded || locked} onClick={pasteSettings}>{selectedIds.size > 0 ? t("粘贴到 {count} 张", { count: selectedIds.size + 1 }) : t("粘贴设置")}</button>
           </div>
           <div className="row">
             <select
-              aria-label="选择预设"
+              aria-label={t("选择预设")}
               value={selectedPreset}
               disabled={locked}
               onChange={(event) => setSelectedPreset(event.target.value)}
             >
-              <option value="">选择预设…</option>
+              <option value="">{t("选择预设…")}</option>
               {Object.keys(presets).map((name) => (
                 <option key={name} value={name}>{name}</option>
               ))}
             </select>
-            <button className="button secondary" disabled={!selectedPreset || !loaded || locked} onClick={applyPreset}>套用</button>
-            <button className="button secondary" disabled={!selectedPreset || locked} onClick={deletePreset}>删除</button>
+            <button className="button secondary" disabled={!selectedPreset || !loaded || locked} onClick={applyPreset}>{t("套用")}</button>
+            <button className="button secondary" disabled={!selectedPreset || locked} onClick={deletePreset}>{t("删除")}</button>
           </div>
           <div className="row">
             <input
-              aria-label="预设名称"
-              placeholder="预设名称"
+              aria-label={t("预设名称")}
+              placeholder={t("预设名称")}
               value={presetName}
               disabled={locked}
               onChange={(event) => setPresetName(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && savePreset()}
             />
-            <button className="button secondary" disabled={!presetName.trim() || !loaded || locked} onClick={savePreset}>保存当前</button>
+            <button className="button secondary" disabled={!presetName.trim() || !loaded || locked} onClick={savePreset}>{t("保存当前")}</button>
           </div>
         </Section>
 
-        <Section id="batch" title={`批量（${shownPhotos.length} 张）`} active={panelTab}>
+        <Section id="batch" title={t("批量（{count} 张）", { count: shownPhotos.length })} active={panelTab}>
           <div className="row">
-            <button className="button secondary" disabled={photos.length < 2 || locked} onClick={syncToAll}>同步到全部</button>
-            <button className="button secondary" disabled={selectedIds.size === 0 || locked} onClick={syncToSelected}>同步到选中（{selectedIds.size}）</button>
-            <button className="button" disabled={shownPhotos.length === 0 || locked} onClick={() => void runBatch()}>批量导出</button>
+            <button className="button secondary" disabled={photos.length < 2 || locked} onClick={syncToAll}>{t("同步到全部")}</button>
+            <button className="button secondary" disabled={selectedIds.size === 0 || locked} onClick={syncToSelected}>{t("同步到选中（{count}）", { count: selectedIds.size })}</button>
+            <button className="button" disabled={shownPhotos.length === 0 || locked} onClick={() => void runBatch()}>{t("批量导出")}</button>
           </div>
           {batch && (
             <p className="progress" data-stat="batch">
-              {batch.done}/{batch.total}，{(batch.ms / 1000).toFixed(1)} 秒
+              {t("{done}/{total}，{seconds} 秒", { done: batch.done, total: batch.total, seconds: (batch.ms / 1000).toFixed(1) })}
             </p>
           )}
-          {batchUrl && <a className="download" data-stat="batch-zip" href={batchUrl} download="openpixels-export.zip">下载 ZIP</a>}
+          {batchUrl && <a className="download" data-stat="batch-zip" href={batchUrl} download="openpixels-export.zip">{t("下载 ZIP")}</a>}
         </Section>
 
-        <Section id="proof" title="软打样" active={panelTab}>
+        <Section id="proof" title={t("软打样")} active={panelTab}>
           <label className="check">
-            <input type="checkbox" aria-label="显示软打样" checked={proofActive} disabled={!proofProfile || locked} onChange={() => updateProof({ on: !proof.on })} />
-            按打样配置预览（S）
+            <input type="checkbox" aria-label={t("显示软打样")} checked={proofActive} disabled={!proofProfile || locked} onChange={() => updateProof({ on: !proof.on })} />
+            {t("按打样配置预览（S）")}
           </label>
           <div className="row">
-            <select aria-label="打样配置" value={proof.profileId ?? ""} disabled={locked || profiles.length === 0} onChange={(event) => updateProof({ profileId: event.target.value ? Number(event.target.value) : null })}>
-              <option value="">{profiles.length ? "选择配置…" : "尚未导入配置"}</option>
+            <select aria-label={t("打样配置")} value={proof.profileId ?? ""} disabled={locked || profiles.length === 0} onChange={(event) => updateProof({ profileId: event.target.value ? Number(event.target.value) : null })}>
+              <option value="">{profiles.length ? t("选择配置…") : t("尚未导入配置")}</option>
               {profiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
-                  {profile.name}（{profile.isOutput ? "打印" : "显示"} {profile.space}）
+                  {t("{name}（{kind} {space}）", { name: profile.name, kind: profile.isOutput ? t("打印") : t("显示"), space: profile.space })}
                 </option>
               ))}
             </select>
             <label className={`button secondary ${locked ? "disabled" : ""}`}>
-              导入 ICC
+              {t("导入 ICC")}
               <input
                 type="file"
                 hidden
                 accept=".icc,.icm"
-                aria-label="导入 ICC 配置"
+                aria-label={t("导入 ICC 配置")}
                 disabled={locked}
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -3361,36 +3364,36 @@ export function App() {
             </label>
             {proofProfile && (
               <button className="button secondary" disabled={locked} onClick={() => void removeProfile(proofProfile.id)}>
-                删除
+                {t("删除")}
               </button>
             )}
           </div>
           <label className="field">
-            <span>渲染方式</span>
-            <select aria-label="渲染方式" value={proof.perceptual ? "perceptual" : "relative"} disabled={locked} onChange={(event) => updateProof({ perceptual: event.target.value === "perceptual" })}>
-              <option value="perceptual">可感知</option>
-              <option value="relative">相对比色</option>
+            <span>{t("渲染方式")}</span>
+            <select aria-label={t("渲染方式")} value={proof.perceptual ? "perceptual" : "relative"} disabled={locked} onChange={(event) => updateProof({ perceptual: event.target.value === "perceptual" })}>
+              <option value="perceptual">{t("可感知")}</option>
+              <option value="relative">{t("相对比色")}</option>
             </select>
           </label>
           <label className="check">
-            <input type="checkbox" aria-label="模拟纸张和油墨" checked={proof.paper} disabled={locked} onChange={() => updateProof({ paper: !proof.paper })} />
-            模拟纸张和油墨
+            <input type="checkbox" aria-label={t("模拟纸张和油墨")} checked={proof.paper} disabled={locked} onChange={() => updateProof({ paper: !proof.paper })} />
+            {t("模拟纸张和油墨")}
           </label>
           <label className="check">
-            <input type="checkbox" aria-label="目标色域警告" checked={proof.gamut} disabled={locked} onChange={() => updateProof({ gamut: !proof.gamut })} />
-            目标色域警告（粉色标出无法还原的颜色）
+            <input type="checkbox" aria-label={t("目标色域警告")} checked={proof.gamut} disabled={locked} onChange={() => updateProof({ gamut: !proof.gamut })} />
+            {t("目标色域警告（粉色标出无法还原的颜色）")}
           </label>
           {profiles.length === 0 && (
             <p className="progress">
-              导入打印机或另一台显示器的 ICC 文件。macOS 在 /System/Library/ColorSync/Profiles，Windows 在 C:\Windows\System32\spool\drivers\color。打样只影响预览，不改变导出。
+              {t("导入打印机或另一台显示器的 ICC 文件。macOS 在 /System/Library/ColorSync/Profiles，Windows 在 C:\\Windows\\System32\\spool\\drivers\\color。打样只影响预览，不改变导出。")}
             </p>
           )}
         </Section>
 
-        <Section id="export" title="导出设置" active={panelTab}>
+        <Section id="export" title={t("导出设置")} active={panelTab}>
           <div className="row">
             <select
-              aria-label="导出预设"
+              aria-label={t("导出预设")}
               value=""
               disabled={locked || Object.keys(outputPresets).length === 0}
               onChange={(event) => {
@@ -3398,82 +3401,82 @@ export function App() {
                 if (preset) updateOutput(preset);
               }}
             >
-              <option value="">{Object.keys(outputPresets).length > 0 ? "套用导出预设…" : "暂无导出预设"}</option>
+              <option value="">{Object.keys(outputPresets).length > 0 ? t("套用导出预设…") : t("暂无导出预设")}</option>
               {Object.keys(outputPresets).map((name) => (
                 <option key={name} value={name}>{name}</option>
               ))}
             </select>
           </div>
           <div className="row">
-            <input aria-label="导出预设名称" placeholder="导出预设名称" value={outputPresetName} disabled={locked} onChange={(event) => setOutputPresetName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveOutputPreset()} />
-            <button className="button secondary" disabled={!outputPresetName.trim() || locked} onClick={saveOutputPreset}>保存</button>
+            <input aria-label={t("导出预设名称")} placeholder={t("导出预设名称")} value={outputPresetName} disabled={locked} onChange={(event) => setOutputPresetName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveOutputPreset()} />
+            <button className="button secondary" disabled={!outputPresetName.trim() || locked} onClick={saveOutputPreset}>{t("保存")}</button>
           </div>
           {Object.keys(outputPresets).map((name) => (
             <div className="list-row" key={name}>
               <span className="list-item static">{name}</span>
-              <button className="list-remove" aria-label={`删除导出预设${name}`} disabled={locked} onClick={() => deleteOutputPreset(name)}>×</button>
+              <button className="list-remove" aria-label={t("删除导出预设{name}", { name })} disabled={locked} onClick={() => deleteOutputPreset(name)}>×</button>
             </div>
           ))}
           <div className="row">
-            <select aria-label="导出格式" value={output.format} disabled={locked} onChange={(event) => updateOutput({ format: event.target.value as OutputFormat })}>
+            <select aria-label={t("导出格式")} value={output.format} disabled={locked} onChange={(event) => updateOutput({ format: event.target.value as OutputFormat })}>
               {(Object.keys(FORMAT_DETAILS) as OutputFormat[]).map((format) => (
                 <option key={format} value={format}>{FORMAT_DETAILS[format].label}</option>
               ))}
             </select>
-            <select aria-label="导出尺寸" value={output.longEdge} disabled={locked} onChange={(event) => updateOutput({ longEdge: Number(event.target.value) })}>
+            <select aria-label={t("导出尺寸")} value={output.longEdge} disabled={locked} onChange={(event) => updateOutput({ longEdge: Number(event.target.value) })}>
               {LONG_EDGE_CHOICES.map((edge) => (
-                <option key={edge} value={edge}>{edge === 0 ? "原尺寸" : `长边 ${edge}`}</option>
+                <option key={edge} value={edge}>{edge === 0 ? t("原尺寸") : t("长边 {pixels}", { pixels: edge })}</option>
               ))}
             </select>
           </div>
           <label className="field">
-            <span>色彩空间</span>
-            <select aria-label="色彩空间" value={output.colorSpace ?? "srgb"} disabled={locked} onChange={(event) => updateOutput({ colorSpace: event.target.value as OutputColorSpace })}>
-              <option value="srgb">sRGB（网页、手机）</option>
+            <span>{t("色彩空间")}</span>
+            <select aria-label={t("色彩空间")} value={output.colorSpace ?? "srgb"} disabled={locked} onChange={(event) => updateOutput({ colorSpace: event.target.value as OutputColorSpace })}>
+              <option value="srgb">{t("sRGB（网页、手机）")}</option>
               <option value="p3">Display P3</option>
               <option value="adobe">Adobe RGB (1998)</option>
               <option value="prophoto">ProPhoto RGB</option>
             </select>
           </label>
           {output.colorSpace === "prophoto" && (output.format === "jpeg" || output.bitDepth === 8) && (
-            <p className="progress">ProPhoto RGB 范围很宽，8 位容易出现色阶断层，建议用 16 位 PNG 或 TIFF。</p>
+            <p className="progress">{t("ProPhoto RGB 范围很宽，8 位容易出现色阶断层，建议用 16 位 PNG 或 TIFF。")}</p>
           )}
           {output.format !== "jpeg" && (
             <div className="row">
-              <select aria-label="位深" value={output.bitDepth} disabled={locked} onChange={(event) => updateOutput({ bitDepth: Number(event.target.value) as 8 | 16 })}>
-                <option value={8}>8 位</option>
-                <option value={16}>16 位</option>
+              <select aria-label={t("位深")} value={output.bitDepth} disabled={locked} onChange={(event) => updateOutput({ bitDepth: Number(event.target.value) as 8 | 16 })}>
+                <option value={8}>{t("8 位")}</option>
+                <option value={16}>{t("16 位")}</option>
               </select>
             </div>
           )}
           {output.format === "jpeg" && (
             <label className="slider">
-              <span>质量</span>
+              <span>{t("质量")}</span>
               <output>{output.quality}</output>
-              <input aria-label="导出质量" type="range" min={40} max={100} step={1} value={output.quality} disabled={locked} onChange={(event) => updateOutput({ quality: Number(event.target.value) })} />
+              <input aria-label={t("导出质量")} type="range" min={40} max={100} step={1} value={output.quality} disabled={locked} onChange={(event) => updateOutput({ quality: Number(event.target.value) })} />
             </label>
           )}
           <div className="row">
-            <input aria-label="文件名规则" title="可用 {name}（原文件名）、{n}（序号）、{date}（日期）" value={output.template} disabled={locked} onChange={(event) => updateOutput({ template: event.target.value })} />
+            <input aria-label={t("文件名规则")} title={t("可用 {name}（原文件名）、{n}（序号）、{date}（日期）")} value={output.template} disabled={locked} onChange={(event) => updateOutput({ template: event.target.value })} />
           </div>
-          <p className="progress">文件名可用 {"{name}"}、{"{n}"}、{"{date}"}</p>
+          <p className="progress">{t("文件名可用 {name}、{n}、{date}")}</p>
           <label className="check">
-            <input type="checkbox" aria-label="添加水印" checked={output.watermark.enabled} disabled={locked} onChange={(event) => updateWatermark({ enabled: event.target.checked })} />
-            添加水印
+            <input type="checkbox" aria-label={t("添加水印")} checked={output.watermark.enabled} disabled={locked} onChange={(event) => updateWatermark({ enabled: event.target.checked })} />
+            {t("添加水印")}
           </label>
           {output.watermark.enabled && (
             <>
               <div className="row">
-                <input aria-label="水印文字" placeholder="水印文字" value={output.watermark.text} disabled={locked} onChange={(event) => updateWatermark({ text: event.target.value })} />
+                <input aria-label={t("水印文字")} placeholder={t("水印文字")} value={output.watermark.text} disabled={locked} onChange={(event) => updateWatermark({ text: event.target.value })} />
               </div>
               <div className="row">
                 <label className={`button secondary ${locked ? "disabled" : ""}`}>
-                  {output.watermark.logo ? "更换 Logo" : "选择 Logo"}
+                  {output.watermark.logo ? t("更换 Logo") : t("选择 Logo")}
                   <input
                     type="file"
                     hidden
                     accept="image/*"
-                    aria-label="水印图片"
+                    aria-label={t("水印图片")}
                     disabled={locked}
                     onChange={(event) => {
                       void chooseLogo(event.target.files?.[0]);
@@ -3481,55 +3484,55 @@ export function App() {
                     }}
                   />
                 </label>
-                {output.watermark.logo && <button className="button secondary" disabled={locked} onClick={() => updateWatermark({ logo: null })}>移除</button>}
-                <select aria-label="水印位置" value={output.watermark.position} disabled={locked} onChange={(event) => updateWatermark({ position: event.target.value as WatermarkPosition })}>
+                {output.watermark.logo && <button className="button secondary" disabled={locked} onClick={() => updateWatermark({ logo: null })}>{t("移除")}</button>}
+                <select aria-label={t("水印位置")} value={output.watermark.position} disabled={locked} onChange={(event) => updateWatermark({ position: event.target.value as WatermarkPosition })}>
                   {WATERMARK_POSITIONS.map((item) => (
                     <option key={item.value} value={item.value}>{item.label}</option>
                   ))}
                 </select>
               </div>
               <label className="slider">
-                <span>水印大小</span>
+                <span>{t("水印大小")}</span>
                 <output>{(output.watermark.size * 100).toFixed(1)}</output>
-                <input aria-label="水印大小" type="range" min={0.01} max={0.12} step={0.001} value={output.watermark.size} disabled={locked} onChange={(event) => updateWatermark({ size: Number(event.target.value) })} />
+                <input aria-label={t("水印大小")} type="range" min={0.01} max={0.12} step={0.001} value={output.watermark.size} disabled={locked} onChange={(event) => updateWatermark({ size: Number(event.target.value) })} />
               </label>
               <label className="slider">
-                <span>水印不透明度</span>
+                <span>{t("水印不透明度")}</span>
                 <output>{output.watermark.opacity.toFixed(2)}</output>
-                <input aria-label="水印不透明度" type="range" min={0.1} max={1} step={0.01} value={output.watermark.opacity} disabled={locked} onChange={(event) => updateWatermark({ opacity: Number(event.target.value) })} />
+                <input aria-label={t("水印不透明度")} type="range" min={0.1} max={1} step={0.01} value={output.watermark.opacity} disabled={locked} onChange={(event) => updateWatermark({ opacity: Number(event.target.value) })} />
               </label>
             </>
           )}
         </Section>
 
-        <Section id="stats" title="性能" active={panelTab} testId="stats">
+        <Section id="stats" title={t("性能")} active={panelTab} testId="stats">
           <dl className="stats">
             {loaded && (
               <>
-                <dt>图像</dt><dd>{loaded.width}×{loaded.height}{loaded.isRaw ? " RAW" : ""}</dd>
-                <dt>文件</dt><dd>{loaded.fileMB.toFixed(0)} MB</dd>
-                <dt>解码</dt><dd data-stat="decode">{loaded.decodeMs.toFixed(0)} ms</dd>
+                <dt>{t("图像")}</dt><dd>{loaded.width}×{loaded.height}{loaded.isRaw ? " RAW" : ""}</dd>
+                <dt>{t("文件")}</dt><dd>{loaded.fileMB.toFixed(0)} MB</dd>
+                <dt>{t("解码")}</dt><dd data-stat="decode">{loaded.decodeMs.toFixed(0)} ms</dd>
                 {loaded.baseExposure !== null && (
-                  <><dt>基础曝光</dt><dd data-stat="base-exposure">{loaded.baseExposure.toFixed(2)} EV</dd></>
+                  <><dt>{t("基础曝光")}</dt><dd data-stat="base-exposure">{loaded.baseExposure.toFixed(2)} EV</dd></>
                 )}
-                <dt>代理图</dt><dd>{loaded.proxyWidth}×{loaded.proxyHeight}，{loaded.proxyMs.toFixed(0)} ms</dd>
+                <dt>{t("代理图")}</dt><dd>{t("{width}×{height}，{ms} ms", { width: loaded.proxyWidth, height: loaded.proxyHeight, ms: loaded.proxyMs.toFixed(0) })}</dd>
               </>
             )}
-            {frame && (<><dt>单帧中位</dt><dd data-stat="frame">{frame.median.toFixed(1)} ms</dd></>)}
+            {frame && (<><dt>{t("单帧中位")}</dt><dd data-stat="frame">{frame.median.toFixed(1)} ms</dd></>)}
             {exported && (
               <>
-                <dt>导出</dt><dd data-stat="export">{exported.ms.toFixed(0)} ms</dd>
-                <dt>文件</dt><dd data-stat="export-size">{exported.sizeMB.toFixed(1)} MB</dd>
+                <dt>{t("导出")}</dt><dd data-stat="export">{exported.ms.toFixed(0)} ms</dd>
+                <dt>{t("文件")}</dt><dd data-stat="export-size">{exported.sizeMB.toFixed(1)} MB</dd>
               </>
             )}
             {maskStats && (
               <>
-                <dt>模型输入</dt><dd>{maskStats.inputMs.toFixed(0)} ms</dd>
-                {maskStats.loadMs > 0 && (<><dt>模型加载</dt><dd data-stat="model-load">{maskStats.loadMs.toFixed(0)} ms</dd></>)}
-                <dt>推理</dt><dd data-stat="infer">{maskStats.inferMs.toFixed(0)} ms</dd>
+                <dt>{t("模型输入")}</dt><dd>{maskStats.inputMs.toFixed(0)} ms</dd>
+                {maskStats.loadMs > 0 && (<><dt>{t("模型加载")}</dt><dd data-stat="model-load">{maskStats.loadMs.toFixed(0)} ms</dd></>)}
+                <dt>{t("推理")}</dt><dd data-stat="infer">{maskStats.inferMs.toFixed(0)} ms</dd>
               </>
             )}
-            {heapMB > 0 && (<><dt>WASM 堆</dt><dd data-stat="heap">{heapMB.toFixed(0)} MB</dd></>)}
+            {heapMB > 0 && (<><dt>{t("WASM 堆")}</dt><dd data-stat="heap">{heapMB.toFixed(0)} MB</dd></>)}
           </dl>
         </Section>
         </div>

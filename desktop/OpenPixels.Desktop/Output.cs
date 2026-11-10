@@ -54,7 +54,7 @@ public static partial class Output
     public static readonly (string Value, string Label)[] ColorSpaces = [("srgb", "sRGB"), ("p3", "Display P3"), ("adobe", "Adobe RGB"), ("prophoto", "ProPhoto RGB")];
     public static readonly int[] LongEdges = [0, 6000, 4096, 3000, 2048, 1600, 1080];
     public static readonly (string Value, string Label)[] Positions =
-        [("bottomRight", "右下"), ("bottomLeft", "左下"), ("topRight", "右上"), ("topLeft", "左上"), ("center", "居中")];
+        [("bottomRight", I18n.T("右下")), ("bottomLeft", I18n.T("左下")), ("topRight", I18n.T("右上")), ("topLeft", I18n.T("左上")), ("center", I18n.T("居中"))];
 
     private const double Margin = 0.02;
     private const double LogoHeight = 2;

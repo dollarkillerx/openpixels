@@ -3,6 +3,7 @@
  * balance of another. Statistical, with no model involved.
  */
 import type { Lut } from "./lut";
+import { t } from "./i18n";
 
 const LUT_SIZE = 33;
 const LUMINANCE_POINTS = 33;
@@ -79,7 +80,7 @@ function measure(rgb: Uint8Array | Uint8ClampedArray, step: number): Statistics 
       total[band][2] += weight;
     }
   }
-  if (count === 0) throw new Error("这张图几乎全是纯黑或纯白，无法分析色彩");
+  if (count === 0) throw new Error(t("这张图几乎全是纯黑或纯白，无法分析色彩"));
   lightness.sort((x, y) => x - y);
   const quantiles = Float32Array.from({ length: LUMINANCE_POINTS }, (_, i) =>
     lightness[Math.min(count - 1, Math.round((i / (LUMINANCE_POINTS - 1)) * (count - 1)))],

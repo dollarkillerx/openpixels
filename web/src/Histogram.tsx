@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { HistogramData } from "./protocol";
+import { t } from "./i18n";
 
 /** Only this share of pixels at an extreme counts as clipping, so noise does not. */
 const CLIPPED_SHARE = 0.002;
@@ -59,21 +60,21 @@ export function Histogram({ data, shadows, highlights, onToggleShadows, onToggle
 
   return (
     <div className="histogram" data-testid="histogram">
-      <canvas ref={canvasRef} aria-label="直方图" />
+      <canvas ref={canvasRef} aria-label={t("直方图")} />
       <button
         type="button"
         className={`clip-toggle shadow ${shadows ? "on" : ""} ${clipped(0) ? "clipped" : ""}`}
-        aria-label="显示阴影溢出"
+        aria-label={t("显示阴影溢出")}
         aria-pressed={shadows}
-        title="显示阴影溢出（J 同时切换两侧）"
+        title={t("显示阴影溢出（J 同时切换两侧）")}
         onClick={onToggleShadows}
       />
       <button
         type="button"
         className={`clip-toggle highlight ${highlights ? "on" : ""} ${clipped(255) ? "clipped" : ""}`}
-        aria-label="显示高光溢出"
+        aria-label={t("显示高光溢出")}
         aria-pressed={highlights}
-        title="显示高光溢出（J 同时切换两侧）"
+        title={t("显示高光溢出（J 同时切换两侧）")}
         onClick={onToggleHighlights}
       />
     </div>

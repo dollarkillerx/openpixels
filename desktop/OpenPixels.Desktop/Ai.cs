@@ -59,7 +59,7 @@ public sealed class AiModels : IDisposable
         {
             if (_sessions.TryGetValue(file, out var session)) return session;
             var path = Path.Combine(Folder, file);
-            if (!System.IO.File.Exists(path)) throw new FileNotFoundException("模型文件不存在，请先运行 scripts/fetch-model.sh", path);
+            if (!System.IO.File.Exists(path)) throw new Engine.UserMessageException(I18n.T("模型文件不存在，请先运行 scripts/fetch-model.sh"));
             using var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL };
             return _sessions[file] = new InferenceSession(path, options);
         }

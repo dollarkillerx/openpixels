@@ -8,7 +8,10 @@ namespace OpenPixels.Desktop.Engine;
 /// <summary>The result of an engine call: JSON (possibly null) and bytes (possibly empty).</summary>
 public sealed record EngineReply(JsonNode? Json, byte[] Data);
 
-public sealed class EngineException(string message) : Exception(message);
+public class EngineException(string message) : Exception(message);
+
+/// <summary>A failure whose message was written, and translated, for the person using the app.</summary>
+public sealed class UserMessageException(string message) : EngineException(message);
 
 /// <summary>
 /// The Rust engine, driven from one dedicated thread. The engine handles one call at a

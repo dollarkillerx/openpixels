@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { IDENTITY_POINTS, curvePoints, parametricOffset, splineThrough, withCurvePoints, type CurvePoint } from "./curve";
 import type { Adjustments, HistogramData } from "./protocol";
+import { t } from "./i18n";
 
 const SIZE = 240;
 const MARGIN = 8;
@@ -18,9 +19,9 @@ const PATH_STEPS = 120;
 const CORNER_SNAP = 0.02;
 const CHANNELS = [
   { key: "M", label: "RGB", color: "#e7e7ea" },
-  { key: "R", label: "红", color: "#e0605a" },
-  { key: "G", label: "绿", color: "#62b868" },
-  { key: "B", label: "蓝", color: "#5a8fe0" },
+  { key: "R", label: t("红"), color: "#e0605a" },
+  { key: "G", label: t("绿"), color: "#62b868" },
+  { key: "B", label: t("蓝"), color: "#5a8fe0" },
 ];
 
 interface Props {
@@ -152,13 +153,13 @@ export function ToneCurve({ adjustments, histogram, disabled, onChange }: Props)
 
   return (
     <div>
-      <div className="row" role="group" aria-label="曲线通道">
+      <div className="row" role="group" aria-label={t("曲线通道")}>
         {CHANNELS.map((item) => (
           <button key={item.key} className={`button ${item.key === channel ? "" : "secondary"}`} onClick={() => setChannel(item.key)}>
             {item.label}
           </button>
         ))}
-        <button className="button ghost" disabled={disabled || untouched} onClick={() => write(IDENTITY_POINTS)}>重置曲线</button>
+        <button className="button ghost" disabled={disabled || untouched} onClick={() => write(IDENTITY_POINTS)}>{t("重置曲线")}</button>
       </div>
       <svg
         ref={svgRef}
@@ -186,7 +187,7 @@ export function ToneCurve({ adjustments, histogram, disabled, onChange }: Props)
           <circle key={index} data-point={index} cx={point.x * SIZE} cy={(1 - shownY(adjustments, point.x, point.y)) * SIZE} r={5} fill={current.color} style={{ cursor: disabled ? "default" : "grab" }} />
         ))}
       </svg>
-      <p className="progress curve-hint">点击曲线加点，拖动调整。双击或拖出框外可删除。</p>
+      <p className="progress curve-hint">{t("点击曲线加点，拖动调整。双击或拖出框外可删除。")}</p>
     </div>
   );
 }

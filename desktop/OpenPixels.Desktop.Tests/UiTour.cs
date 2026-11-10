@@ -44,6 +44,8 @@ public sealed class UiTour
     public async Task Tour()
     {
         if (Folder is null) return;
+        // OPENPIXELS_TOUR_LANGUAGE runs the tour in another interface language, to check layouts.
+        if (Environment.GetEnvironmentVariable("OPENPIXELS_TOUR_LANGUAGE") is { Length: > 0 } language) I18n.Initialize(language);
         Directory.CreateDirectory(Folder);
         Environment.SetEnvironmentVariable("OPENPIXELS_DATA_DIR", Path.Combine(Folder, "data"));
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
@@ -65,11 +67,11 @@ public sealed class UiTour
         await WaitFor(() => model.Photos.All(photo => photo.Thumbnail is not null), 300);
         await Shot(window, "02-opened");
 
-        Expand(window, "曲线");
+        Expand(window, I18n.T("曲线"));
         model.SetCurve(Curves.WithPoints(model.CurrentEdit, "M", [new(0, 0.04), new(0.25, 0.2), new(0.75, 0.82), new(1, 1)]));
         await Shot(window, "03-curve");
 
-        Expand(window, "HSL", "色调分离");
+        Expand(window, I18n.T("HSL"), I18n.T("色调分离"));
         model.HslBand = 5;
         model.Slider("hslSat5").Value = 0.5;
         model.Slider("hslLum5").Value = -0.3;
@@ -77,11 +79,11 @@ public sealed class UiTour
         model.SetGrade(model.Grades[2], 40, 0.25);
         await Shot(window, "04-hsl-grading");
 
-        Expand(window, "风格滤镜");
-        model.SelectedLook = model.LookChoices.Single(look => look.Name == "赛博朋克");
+        Expand(window, I18n.T("风格滤镜"));
+        model.SelectedLook = model.LookChoices.Single(look => look.Id == 17);
         await Shot(window, "05-look");
 
-        Expand(window, "裁剪与旋转");
+        Expand(window, I18n.T("裁剪与旋转"));
         model.CropEditing = true;
         model.CropRatioIndex = 2; // 4:5
         model.RotateSlider.Value = 4;
@@ -99,7 +101,7 @@ public sealed class UiTour
 
         model.SelectedPhoto = model.Photos[2 % model.Photos.Count];
         await WaitFor(() => model.CanEdit && model.Status.Contains("ms"));
-        Expand(window, "相机与镜头");
+        Expand(window, I18n.T("相机与镜头"));
         await Shot(window, "10-raw-lens");
         model.ZoomToRatio(1);
         await WaitFor(() => model.Status.Contains("全尺寸细节") && !model.Status.StartsWith("正在"), 900);
@@ -132,7 +134,7 @@ public sealed class UiTour
 
         model.SelectedPhoto = model.Photos[0];
         await WaitFor(() => model.CanEdit && model.Preview is not null);
-        Expand(window, "软打样", "预设与同步");
+        Expand(window, I18n.T("软打样"), I18n.T("预设与同步"));
         await WaitFor(() => model.ProofStatus.Length > 0);
         model.SelectedProofProfile = model.ProofProfiles.FirstOrDefault(profile => profile.Space == "CMYK");
         model.ProofGamut = true;
@@ -142,16 +144,16 @@ public sealed class UiTour
         File.WriteAllText(Path.Combine(Folder, "proof.txt"), $"{model.ProofStatus} {model.ProofBadge}\n" + string.Join("\n", model.ProofProfiles));
         model.ProofOn = false;
 
-        model.NewProjectName = "巡检";
+        model.NewProjectName = I18n.T("项目");
         model.SaveProjectCommand.Execute(null);
-        ShowTab(window, 3);
-        await Shot(window, "16-projects");
+        ShowTab(window, 2);
+        await Shot(window, "16-snapshots");
         ShowTab(window, 0);
 
         // Batch 3: AI masks, local adjustments and retouching on real photos.
         model.SelectedPhoto = model.Photos[1];
         await WaitFor(() => model.CanEdit && model.Preview is not null);
-        Expand(window, "局部调整");
+        Expand(window, I18n.T("局部调整"));
         await model.AddAiLayerCommand.ExecuteAsync("Subject");
         model.ShowMask = true;
         await Task.Delay(800);
@@ -187,7 +189,7 @@ public sealed class UiTour
 
         model.SelectedPhoto = model.Photos[3 % model.Photos.Count];
         await WaitFor(() => model.CanEdit && model.Preview is not null);
-        Expand(window, "修复");
+        Expand(window, I18n.T("修复"));
         model.ChooseToolCommand.Execute("Erase");
         model.HealRadius = 0.02;
         // The necklace pendant area, painted across.
@@ -202,6 +204,45 @@ public sealed class UiTour
         await Shot(window, "24-erased");
         File.AppendAllText(Path.Combine(Folder, "ai.txt"), "\n" + model.RetouchStatus);
         model.Tool = RetouchTool.None;
+
+        // Batch 4: background and sky replacement, liquify, colour match.
+        model.SelectedPhoto = model.Photos[1];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        Expand(window, I18n.T("换背景 / 换天"));
+        model.SelectedBackground = model.BackgroundChoices.Single(choice => choice.Id == 4);
+        await WaitFor(() => !model.AiBusy);
+        await Task.Delay(1000);
+        await Shot(window, "25-new-background");
+
+        model.SelectedPhoto = model.Photos[0];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        model.SelectedSky = model.SkyChoices.Single(choice => choice.Id == 12);
+        await WaitFor(() => !model.AiBusy);
+        await Task.Delay(1000);
+        await Shot(window, "26-new-sky");
+
+        model.SelectedPhoto = model.Photos[3 % model.Photos.Count];
+        await WaitFor(() => model.CanEdit && model.Preview is not null);
+        Expand(window, I18n.T("液化"));
+        model.ChooseToolCommand.Execute("Liquify");
+        model.LiquifyMode = 1;
+        model.LiquifyRadius = 0.05;
+        foreach (var eye in new[] { new UvPoint(0.39, 0.47), new UvPoint(0.6, 0.47) })
+        {
+            var at = model.StageOf(eye);
+            await model.ToolPressAsync(at.X, at.Y, false);
+            for (var step = 0; step < 6; step++) await model.ToolMoveAsync(at.X + (step % 2 == 0 ? 3 : -3), at.Y);
+            model.ToolRelease();
+        }
+        await Task.Delay(800);
+        await Shot(window, "27-liquify");
+        model.Tool = RetouchTool.None;
+
+        Expand(window, I18n.T("风格滤镜"));
+        model.MatchReference = model.Photos[0];
+        await model.MatchFromPhotoCommand.ExecuteAsync(null);
+        await Task.Delay(800);
+        await Shot(window, "28-colour-match");
 
         var export = new ExportWindow(model.Output, 2, model.Photos.Count);
         export.Show();

@@ -38,10 +38,10 @@ public sealed partial class MainViewModel
     /// <summary>Photos selected in the filmstrip or grid; the open photo is one of them.</summary>
     public ObservableCollection<PhotoItem> SelectedPhotos { get; } = [];
 
-    public string[] RatingFilters { get; } = ["全部星级", "★ 以上", "★★ 以上", "★★★ 以上", "★★★★ 以上", "★★★★★"];
-    public string[] FlagFilters { get; } = ["全部旗标", "已选中", "未淘汰", "已淘汰"];
-    public string[] LabelFilters { get; } = ["全部色标", .. ColourLabels.All.Select(label => label.Name)];
-    public ObservableCollection<string> GroupFilters { get; } = ["全部分组"];
+    public string[] RatingFilters { get; } = [I18n.T("全部星级"), I18n.T("★ 以上"), I18n.T("★★ 以上"), I18n.T("★★★ 以上"), I18n.T("★★★★ 以上"), "★★★★★"];
+    public string[] FlagFilters { get; } = [I18n.T("全部旗标"), I18n.T("已选中"), I18n.T("未淘汰"), I18n.T("已淘汰")];
+    public string[] LabelFilters { get; } = [I18n.T("全部色标"), .. ColourLabels.All.Select(label => label.Name)];
+    public ObservableCollection<string> GroupFilters { get; } = [I18n.T("全部分组")];
 
     [ObservableProperty]
     private int _ratingFilterIndex;
@@ -69,7 +69,7 @@ public sealed partial class MainViewModel
     partial void OnLabelFilterIndexChanged(int value) => RefreshVisible();
     partial void OnGroupFilterIndexChanged(int value) => RefreshVisible();
 
-    public string VisibleCount => VisiblePhotos.Count == Photos.Count ? $"{Photos.Count} 张" : $"{VisiblePhotos.Count} / {Photos.Count} 张";
+    public string VisibleCount => VisiblePhotos.Count == Photos.Count ? I18n.T("{count} 张", ("count", Photos.Count)) : I18n.T("{shown} / {count} 张", ("shown", VisiblePhotos.Count), ("count", Photos.Count));
 
     private bool Passes(PhotoItem photo)
     {
@@ -204,7 +204,7 @@ public sealed partial class MainViewModel
         var open = photo == SelectedPhoto && _imageOpen;
         var edit = open ? _edit : _store.Load(photo.Id);
         await ApplyRetouchAsync(engine, photo.Id, open ? _locals : _retouch.Locals(photo.Id), open ? (JsonArray)_heals.DeepClone() : _retouch.Heals(photo.Id),
-            open ? _erases : _retouch.Erases(photo.Id), ((int)proxy["width"]!, (int)proxy["height"]!), main: false);
+            open ? _erases : _retouch.Erases(photo.Id), ((int)proxy["width"]!, (int)proxy["height"]!), main: false, open ? _warps : _retouch.Warps(photo.Id), edit);
         await engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(edit));
         await SetLookAsync(engine, (int)edit.GetValueOrDefault("lutId"));
         return info;
@@ -218,7 +218,7 @@ public sealed partial class MainViewModel
         if (pending.Count == 0)
         {
             ApplyGroups();
-            LibraryStatus = Photos.Count == 0 ? "" : $"{Photos.Count} 张都已分析过，共 {GroupFilters.Count - 2} 组。";
+            LibraryStatus = Photos.Count == 0 ? "" : I18n.T("{count} 张都已分析过，共 {groups} 组。", ("count", Photos.Count), ("groups", GroupFilters.Count - 2));
             return;
         }
         IsBusy = true;
@@ -228,7 +228,7 @@ public sealed partial class MainViewModel
             for (var index = 0; index < pending.Count; index++)
             {
                 var photo = pending[index];
-                LibraryStatus = $"正在分析 {index + 1} / {pending.Count}…";
+                LibraryStatus = I18n.T("正在分析 {index} / {total}…", ("index", index + 1), ("total", pending.Count));
                 try
                 {
                     Analyses[photo.Id] = await WithBackgroundEngine(async engine =>
@@ -253,7 +253,7 @@ public sealed partial class MainViewModel
             IsBusy = false;
         }
         ApplyGroups();
-        LibraryStatus = $"已分析 {pending.Count - failed} 张，共 {GroupFilters.Count - 2} 组。" + (failed > 0 ? $"{failed} 张无法读取。" : "");
+        LibraryStatus = I18n.T("已分析 {count} 张，共 {groups} 组。", ("count", pending.Count - failed), ("groups", GroupFilters.Count - 2)) + (failed > 0 ? I18n.T("{failed} 张无法读取。", ("failed", failed)) : "");
     }
 
     /// <summary>Numbers the groups among the photos that have been analysed, and judges each group.</summary>
@@ -279,7 +279,7 @@ public sealed partial class MainViewModel
             photo.IsBest = _verdicts.TryGetValue(photo.Id, out var verdict) && verdict.Best && groups.Count < items.Count;
         }
         // Updated in place: clearing the list would reset the filter's selection and empty the filmstrip.
-        string[] names = ["全部分组", "每组最佳", .. groups.Select((group, index) => $"组 {index + 1}（{group.Count} 张）")];
+        string[] names = [I18n.T("全部分组"), I18n.T("每组最佳"), .. groups.Select((group, index) => I18n.T("组 {index}（{count} 张）", ("index", index + 1), ("count", group.Count)))];
         for (var index = 0; index < names.Length; index++)
         {
             if (index < GroupFilters.Count && GroupFilters[index] != names[index]) GroupFilters[index] = names[index];
@@ -315,7 +315,7 @@ public sealed partial class MainViewModel
             _cull.SetFlag(photo.Id, photo.Flag);
         }
         RefreshVisible();
-        LibraryStatus = _verdicts.Count == 0 ? "先点“智能分组”分析照片。" : $"选中 {picked} 张，淘汰 {rejected} 张。已手动标记的照片没有改动。";
+        LibraryStatus = _verdicts.Count == 0 ? I18n.T("先点“智能分组”分析照片。") : I18n.T("选中 {picked} 张，淘汰 {rejected} 张。已手动标记的照片没有改动。", ("picked", picked), ("rejected", rejected));
     }
 
     // ---- Presets, copy and paste, sync ----
@@ -334,8 +334,8 @@ public sealed partial class MainViewModel
     private bool _hasCopied;
 
     public int OthersSelected => SelectedPhotos.Count(photo => photo != SelectedPhoto);
-    public string PasteLabel => OthersSelected > 0 ? $"粘贴到 {OthersSelected + 1} 张" : "粘贴设置";
-    public string SyncSelectedLabel => $"同步到选中（{OthersSelected}）";
+    public string PasteLabel => OthersSelected > 0 ? I18n.T("粘贴到 {count} 张", ("count", OthersSelected + 1)) : I18n.T("粘贴设置");
+    public string SyncSelectedLabel => I18n.T("同步到选中（{count}）", ("count", OthersSelected));
     public bool HasOthersSelected => CanEdit && OthersSelected > 0;
 
     private void RefreshPresetNames()
@@ -353,13 +353,13 @@ public sealed partial class MainViewModel
         RefreshPresetNames();
         SelectedPreset = name;
         NewPresetName = "";
-        Status = $"已保存预设 {name}";
+        Status = I18n.T("已保存预设 {name}", ("name", name));
     }
 
     [RelayCommand]
     private void ApplyPreset()
     {
-        if (SelectedPreset is { } name && _presets.All.TryGetValue(name, out var preset)) ApplyEdit(Edits.Merge(preset, _edit), $"预设 {name}");
+        if (SelectedPreset is { } name && _presets.All.TryGetValue(name, out var preset)) ApplyEdit(Edits.Merge(preset, _edit), I18n.T("预设 {name}", ("name", name)));
     }
 
     [RelayCommand]
@@ -377,7 +377,7 @@ public sealed partial class MainViewModel
         if (!_imageOpen) return;
         _copied = EditStore.Kept(_edit);
         HasCopied = true;
-        Status = "已复制调整设置";
+        Status = I18n.T("已复制调整设置");
     }
 
     /// <summary>Pastes onto the open photo and every other selected one.</summary>
@@ -385,18 +385,18 @@ public sealed partial class MainViewModel
     private void PasteSettings()
     {
         if (_copied is null) return;
-        ApplyEdit(Edits.Merge(_copied, _edit), "粘贴设置");
-        ApplySettingsTo(SelectedPhotos.Where(photo => photo != SelectedPhoto).ToList(), _copied, "粘贴设置");
+        ApplyEdit(Edits.Merge(_copied, _edit), I18n.T("粘贴设置"));
+        ApplySettingsTo(SelectedPhotos.Where(photo => photo != SelectedPhoto).ToList(), _copied, I18n.T("粘贴设置"), pasted: true);
     }
 
     [RelayCommand]
-    private void SyncToSelected() => ApplySettingsTo(SelectedPhotos.Where(photo => photo != SelectedPhoto).ToList(), EditStore.Kept(_edit), "同步设置");
+    private void SyncToSelected() => ApplySettingsTo(SelectedPhotos.Where(photo => photo != SelectedPhoto).ToList(), EditStore.Kept(_edit), I18n.T("同步设置"));
 
     [RelayCommand]
-    private void SyncToAll() => ApplySettingsTo(Photos.Where(photo => photo != SelectedPhoto).ToList(), EditStore.Kept(_edit), "同步设置");
+    private void SyncToAll() => ApplySettingsTo(Photos.Where(photo => photo != SelectedPhoto).ToList(), EditStore.Kept(_edit), I18n.T("同步设置"));
 
     /// <summary>Gives other photos source's settings, keeping their framing; each can be undone when opened.</summary>
-    private void ApplySettingsTo(IReadOnlyList<PhotoItem> targets, IReadOnlyDictionary<string, double> source, string label)
+    private void ApplySettingsTo(IReadOnlyList<PhotoItem> targets, IReadOnlyDictionary<string, double> source, string label, bool pasted = false)
     {
         if (!_imageOpen || targets.Count == 0) return;
         foreach (var photo in targets)
@@ -408,7 +408,7 @@ public sealed partial class MainViewModel
             _store.Save(photo.Id, merged);
             photo.ThumbnailStale = true;
         }
-        Status = $"已把设置{(label == "粘贴设置" ? "粘贴" : "同步")}到 {targets.Count} 张照片";
+        Status = pasted ? I18n.T("已把设置粘贴到 {count} 张照片", ("count", targets.Count)) : I18n.T("已把设置同步到 {count} 张照片", ("count", targets.Count));
         _ = FillThumbnailsAsync();
     }
 
@@ -436,7 +436,7 @@ public sealed partial class MainViewModel
             for (var index = 0; index < photos.Count && !_exportCancelled; index++)
             {
                 var photo = photos[index];
-                LibraryStatus = $"正在导出 {index + 1} / {photos.Count}：{photo.Name}";
+                LibraryStatus = I18n.T("正在导出 {index} / {total}：{name}", ("index", index + 1), ("total", photos.Count), ("name", photo.Name));
                 try
                 {
                     var bytes = await WithBackgroundEngine(async engine =>
@@ -470,8 +470,9 @@ public sealed partial class MainViewModel
             IsBusy = false;
         }
         var seconds = (Environment.TickCount64 - started) / 1000.0;
-        LibraryStatus = (_exportCancelled ? "已取消。" : "") + $"已导出 {done} 张（{seconds:0.0} 秒）"
-            + (failed.Count > 0 ? $"，{failed.Count} 张失败：{string.Join("、", failed.Take(3))}{(failed.Count > 3 ? " 等" : "")}" : "");
+        var summary = I18n.T("已导出 {count} 张（{seconds} 秒）", ("count", done), ("seconds", seconds.ToString("0.0")));
+        if (failed.Count > 0) summary += I18n.T("，{count} 张失败：{names}", ("count", failed.Count), ("names", string.Join(I18n.T("、"), failed.Take(3)) + (failed.Count > 3 ? "…" : "")));
+        LibraryStatus = (_exportCancelled ? I18n.T("已取消。") : "") + summary;
         Status = LibraryStatus;
         return done;
     }
@@ -482,7 +483,7 @@ public sealed partial class MainViewModel
     // ---- Soft proofing ----
 
     public ObservableCollection<ProofProfile> ProofProfiles { get; } = [];
-    public string[] ProofIntents { get; } = ["可感知", "相对比色"];
+    public string[] ProofIntents { get; } = [I18n.T("可感知"), I18n.T("相对比色")];
 
     [ObservableProperty]
     private ProofProfile? _selectedProofProfile;
@@ -505,7 +506,7 @@ public sealed partial class MainViewModel
     private bool _loadingProof;
 
     public bool PaperAvailable => SelectedProofProfile?.IsOutput == true;
-    public string ProofBadge => ProofOn && SelectedProofProfile is { } profile ? $"软打样：{profile.Name}" : "";
+    public string ProofBadge => ProofOn && SelectedProofProfile is { } profile ? I18n.T("软打样：{name}", ("name", profile.Name)) : "";
 
     partial void OnProofOnChanged(bool value) => ProofChanged();
     partial void OnSelectedProofProfileChanged(ProofProfile? value) => ProofChanged();
@@ -558,7 +559,7 @@ public sealed partial class MainViewModel
         _loadingProof = false;
         OnPropertyChanged(nameof(PaperAvailable));
         OnPropertyChanged(nameof(ProofBadge));
-        ProofStatus = $"找到 {ProofProfiles.Count} 个可用的 ICC 配置。";
+        ProofStatus = I18n.T("找到 {count} 个可用的 ICC 配置。", ("count", ProofProfiles.Count));
         if (ProofOn) await SendProofAsync();
     }
 
@@ -578,7 +579,7 @@ public sealed partial class MainViewModel
         }
         catch (Exception exception)
         {
-            Status = $"无法使用这个 ICC 配置：{Messages.Friendly(exception)}";
+            Status = I18n.T("无法使用这个 ICC 配置：{exception}", ("exception", Messages.Friendly(exception)));
             StatusDetail = Messages.Detail(exception);
         }
     }
@@ -604,7 +605,7 @@ public sealed partial class MainViewModel
     {
         if (SelectedProofProfile is null)
         {
-            Status = "先在“软打样”里选择一个 ICC 配置";
+            Status = I18n.T("先在“软打样”里选择一个 ICC 配置");
             return;
         }
         ProofOn = !ProofOn;
@@ -619,7 +620,7 @@ public sealed partial class MainViewModel
 
     public Project? LastSession => _projects.Last is { Paths.Count: > 0 } last ? last : null;
     public bool CanResume => Photos.Count == 0 && LastSession is not null;
-    public string ResumeLabel => LastSession is { } last ? $"继续上次的 {last.Paths.Count} 张照片" : "";
+    public string ResumeLabel => LastSession is { } last ? I18n.T("继续上次的 {count} 张照片", ("count", last.Paths.Count)) : "";
 
     private void RefreshProjects()
     {
@@ -641,7 +642,7 @@ public sealed partial class MainViewModel
         _projects.Save(name, Photos.Select(photo => photo.Path));
         NewProjectName = "";
         RefreshProjects();
-        Status = $"已保存项目 {name}（{Photos.Count} 张）";
+        Status = I18n.T("已保存项目 {name}（{count} 张）", ("name", name), ("count", Photos.Count));
     }
 
     [RelayCommand]
@@ -657,7 +658,7 @@ public sealed partial class MainViewModel
     [RelayCommand]
     private void Resume()
     {
-        if (LastSession is { } last) ReplacePhotos(last.Paths, "上次的照片");
+        if (LastSession is { } last) ReplacePhotos(last.Paths, I18n.T("上次的照片"));
     }
 
     /// <summary>Closes the photos open now and opens these instead.</summary>
@@ -676,6 +677,6 @@ public sealed partial class MainViewModel
         RefreshVisible();
         AddPhotos(existing);
         var missing = paths.Count - existing.Count;
-        Status = $"已打开 {name}" + (missing > 0 ? $"，{missing} 张照片已找不到" : "");
+        Status = I18n.T("已打开 {name}", ("name", name)) + (missing > 0 ? I18n.T("，{missing} 张照片已找不到", ("missing", missing)) : "");
     }
 }

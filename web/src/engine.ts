@@ -1,4 +1,5 @@
 import { buildSkinMask } from "./face";
+import { currentLanguage } from "./i18n";
 import type { Lut } from "./lut";
 import type { OutputSettings } from "./output";
 import type { EraseCrop } from "./erase";
@@ -96,7 +97,7 @@ export class EngineClient {
       this.onCrash(event.message);
     };
 
-    this.ready = this.call<void>({ type: "init", canvas }, [canvas]);
+    this.ready = this.call<void>({ type: "init", canvas, language: currentLanguage() }, [canvas]);
   }
 
   readonly ready: Promise<void>;

@@ -1,4 +1,5 @@
 /** HEIC/HEIF decoding through libheif (LGPL-3.0), loaded only when a HEIC file is opened. */
+import { t } from "./i18n";
 
 const HEVC_BRANDS = new Set(["heic", "heix", "hevc", "hevx", "heim", "heis", "hevm", "hevs"]);
 const CONTAINER_BRANDS = new Set(["mif1", "msf1"]);
@@ -35,14 +36,14 @@ export async function decodeHeic(bytes: Uint8Array): Promise<DecodedRaster> {
   const libheif = await createLibheif();
   const decoder = new libheif.HeifDecoder();
   const images = decoder.decode(bytes);
-  if (!images.length) throw new Error("HEIC 文件里没有可解码的图像");
+  if (!images.length) throw new Error(t("HEIC 文件里没有可解码的图像"));
   const image = images[0];
   const [width, height] = [image.get_width(), image.get_height()];
   try {
     const shown = await new Promise<{ data: Uint8ClampedArray } | null>((resolve) =>
       image.display({ data: new Uint8ClampedArray(width * height * 4), width, height }, resolve),
     );
-    if (!shown) throw new Error("HEIC 解码失败");
+    if (!shown) throw new Error(t("HEIC 解码失败"));
     return { width, height, rgba: new Uint8Array(shown.data.buffer) };
   } finally {
     for (const item of images) item.free();

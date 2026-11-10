@@ -8,7 +8,7 @@ namespace OpenPixels.Desktop;
 
 public partial class MainWindow : Window
 {
-    private static readonly FilePickerFileType Photos = new("照片") { Patterns = PhotoLoader.Extensions.Select(extension => "*" + extension).ToArray() };
+    private static readonly FilePickerFileType Photos = new(I18n.T("照片")) { Patterns = PhotoLoader.Extensions.Select(extension => "*" + extension).ToArray() };
     /// <summary>How near, in device-independent pixels, a press must be to grab the compare divider.</summary>
     private const double DividerGrab = 10;
     private const double WheelZoomSpeed = 0.2;
@@ -38,13 +38,13 @@ public partial class MainWindow : Window
 
     private async void OnOpen(object? sender, RoutedEventArgs e)
     {
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "打开照片", AllowMultiple = true, FileTypeFilter = [Photos] });
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = I18n.T("打开照片"), AllowMultiple = true, FileTypeFilter = [Photos] });
         _model.AddPhotos(files.Select(file => file.TryGetLocalPath()).OfType<string>());
     }
 
     private async void OnOpenFolder(object? sender, RoutedEventArgs e)
     {
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "导入文件夹" });
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = I18n.T("导入文件夹") });
         if (folders.FirstOrDefault()?.TryGetLocalPath() is { } folder) _model.AddFolder(folder);
     }
 
@@ -69,12 +69,36 @@ public partial class MainWindow : Window
         }
     }
 
+    private static readonly FilePickerFileType Images = new(I18n.T("图片")) { Patterns = ["*.png", "*.jpg", "*.jpeg"] };
+
+    private async Task<string?> PickImageAsync(string title, FilePickerFileType type)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = title, FileTypeFilter = [type] });
+        return files.FirstOrDefault()?.TryGetLocalPath();
+    }
+
+    private async void OnImportBackground(object? sender, RoutedEventArgs e)
+    {
+        if (await PickImageAsync(I18n.T("导入图片"), Images) is { } path) _model.ImportReplacement(path, sky: false);
+    }
+
+    private async void OnImportSky(object? sender, RoutedEventArgs e)
+    {
+        if (await PickImageAsync(I18n.T("导入图片"), Images) is { } path) _model.ImportReplacement(path, sky: true);
+    }
+
+    /// <summary>Any photo the app can open works as a reference, RAW included.</summary>
+    private async void OnMatchFromFile(object? sender, RoutedEventArgs e)
+    {
+        if (await PickImageAsync(I18n.T("导入追色参考图"), Photos) is { } path) await _model.MatchFromFileAsync(path);
+    }
+
     private async void OnImportProfile(object? sender, RoutedEventArgs e)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "导入 ICC 配置",
-            FileTypeFilter = [new FilePickerFileType("ICC 配置") { Patterns = ["*.icc", "*.icm"] }],
+            Title = I18n.T("导入 ICC 配置"),
+            FileTypeFilter = [new FilePickerFileType(I18n.T("ICC 配置")) { Patterns = ["*.icc", "*.icm"] }],
         });
         if (files.FirstOrDefault()?.TryGetLocalPath() is { } path) await _model.ImportProfileAsync(path);
     }
@@ -100,7 +124,7 @@ public partial class MainWindow : Window
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "导入 LUT",
+            Title = I18n.T("导入 LUT"),
             FileTypeFilter = [new FilePickerFileType("3D LUT") { Patterns = ["*.cube"] }],
         });
         if (files.FirstOrDefault()?.TryGetLocalPath() is { } path) _model.ImportLook(path);

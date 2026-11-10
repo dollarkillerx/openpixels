@@ -20,15 +20,15 @@ public sealed partial class ExportViewModel : ObservableObject
         Settings = settings.Copy();
         _presets = _presetFile.Load();
         PresetNames = new(_presets.Keys.Order());
-        var scopes = new List<string> { "当前照片" };
+        var scopes = new List<string> { I18n.T("当前照片") };
         if (selected > 1)
         {
-            scopes.Add($"选中的 {selected} 张");
+            scopes.Add(I18n.T("选中的 {selected} 张", ("selected", selected)));
             _scopes.Add(ExportScope.Selected);
         }
         if (visible > 1)
         {
-            scopes.Add($"列表中的全部 {visible} 张");
+            scopes.Add(I18n.T("列表中的全部 {visible} 张", ("visible", visible)));
             _scopes.Add(ExportScope.Visible);
         }
         Scopes = [.. scopes];
@@ -46,10 +46,10 @@ public sealed partial class ExportViewModel : ObservableObject
 
     public string[] Formats { get; } = Output.Formats.Select(format => format.Label).ToArray();
     public string[] ColorSpaces { get; } = Output.ColorSpaces.Select(space => space.Label).ToArray();
-    public string[] BitDepths { get; } = ["8 位", "16 位"];
-    public string[] LongEdges { get; } = Output.LongEdges.Select(edge => edge == 0 ? "原始尺寸" : $"长边 {edge} 像素").ToArray();
+    public string[] BitDepths { get; } = [I18n.T("8 位"), I18n.T("16 位")];
+    public string[] LongEdges { get; } = Output.LongEdges.Select(edge => edge == 0 ? I18n.T("原始尺寸") : I18n.T("长边 {edge} 像素", ("edge", edge))).ToArray();
     public string[] Positions { get; } = Output.Positions.Select(position => position.Label).ToArray();
-    public string TemplateHint => "可用 {name} 原文件名、{n} 序号、{date} 日期";
+    public string TemplateHint => I18n.T("可用 {name} 原文件名、{n} 序号、{date} 日期");
     public ObservableCollection<string> PresetNames { get; }
 
     [ObservableProperty]
@@ -206,15 +206,15 @@ public partial class ExportWindow : Window
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "选择水印图片",
-            FileTypeFilter = [new FilePickerFileType("图片") { Patterns = ["*.png", "*.jpg", "*.jpeg"] }],
+            Title = I18n.T("选择水印图片"),
+            FileTypeFilter = [new FilePickerFileType(I18n.T("图片")) { Patterns = ["*.png", "*.jpg", "*.jpeg"] }],
         });
         if (files.FirstOrDefault()?.TryGetLocalPath() is { } path) _model.SetLogo(path);
     }
 
     private async void OnExport(object? sender, RoutedEventArgs e)
     {
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "导出到文件夹" });
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = I18n.T("导出到文件夹") });
         if (folders.FirstOrDefault()?.TryGetLocalPath() is not { } folder) return;
         Result = (_model.Settings, folder, _model.Scope);
         Close();

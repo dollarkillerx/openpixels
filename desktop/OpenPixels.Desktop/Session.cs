@@ -50,15 +50,15 @@ public static class Messages
     public static string Friendly(Exception exception)
     {
         var message = exception.Message;
-        if (exception is FileNotFoundException or DirectoryNotFoundException) return "文件不存在或已被移动";
-        if (exception is UnauthorizedAccessException) return "没有读取这个文件的权限";
-        if (exception is IOException) return "读取文件失败";
-        if (message.StartsWith("RAW decode failed", StringComparison.Ordinal)) return "无法解码这个 RAW 文件：相机型号可能还不支持，或文件已损坏";
-        if (message.StartsWith("image decode failed", StringComparison.Ordinal) || message.Contains("unexpected pixel layout")) return "无法识别这个文件的格式，或文件已损坏";
-        if (message.Contains("no image loaded")) return "还没有打开照片";
-        // Messages written for the app itself are already in Chinese.
-        if (message.Any(c => c is >= '一' and <= '鿿')) return message;
-        return "处理时出错";
+        if (exception is FileNotFoundException or DirectoryNotFoundException) return I18n.T("文件不存在或已被移动");
+        if (exception is UnauthorizedAccessException) return I18n.T("没有读取这个文件的权限");
+        if (exception is IOException) return I18n.T("读取文件失败");
+        if (message.StartsWith("RAW decode failed", StringComparison.Ordinal)) return I18n.T("无法解码这个 RAW 文件：相机型号可能还不支持，或文件已损坏");
+        if (message.StartsWith("image decode failed", StringComparison.Ordinal) || message.Contains("unexpected pixel layout")) return I18n.T("无法识别这个文件的格式，或文件已损坏");
+        if (message.Contains("no image loaded")) return I18n.T("还没有打开照片");
+        // Messages the app wrote for people are already translated.
+        if (exception is Engine.UserMessageException or FormatException) return message;
+        return I18n.T("处理时出错");
     }
 
     /// <summary>The original text, for a tooltip, when it is not already the friendly one.</summary>
@@ -89,7 +89,7 @@ public sealed class EditHistory
 
     public EditHistory(IReadOnlyDictionary<string, double> opened, IEnumerable<LocalLayer>? locals = null)
     {
-        Entries.Add(new("打开", new(opened), Copy(locals ?? [])));
+        Entries.Add(new(I18n.T("打开"), new(opened), Copy(locals ?? [])));
     }
 
     public List<HistoryEntry> Entries { get; } = [];

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Project } from "./store";
+import { t } from "./i18n";
 
 interface Props {
   projects: Project[];
@@ -29,30 +30,30 @@ export function ProjectLibrary({ projects, activeId, photoCount, onOpen, onCreat
   };
 
   return (
-    <div className="library" role="dialog" aria-label="项目库">
+    <div className="library" role="dialog" aria-label={t("项目库")}>
       <div className="library-head">
-        <h2>项目库</h2>
-        {activeId !== null && <button className="button secondary" onClick={onLeave}>关闭当前项目</button>}
-        <button className="button secondary" onClick={onClose}>返回</button>
+        <h2>{t("项目库")}</h2>
+        {activeId !== null && <button className="button secondary" onClick={onLeave}>{t("关闭当前项目")}</button>}
+        <button className="button secondary" onClick={onClose}>{t("返回")}</button>
       </div>
 
       <form className="library-new" onSubmit={create}>
-        <input aria-label="项目名称" placeholder="项目名称，例如：婚礼 2026-11" value={name} onChange={(event) => setName(event.target.value)} />
+        <input aria-label={t("项目名称")} placeholder={t("项目名称，例如：婚礼 2026-11")} value={name} onChange={(event) => setName(event.target.value)} />
         {photoCount > 0 && activeId === null && (
           <label>
             <input type="checkbox" checked={withCurrent} onChange={(event) => setWithCurrent(event.target.checked)} />
-            放入当前 {photoCount} 张图片
+            {t("放入当前 {count} 张图片", { count: photoCount })}
           </label>
         )}
-        <button className="button" disabled={!name.trim()}>新建项目</button>
+        <button className="button" disabled={!name.trim()}>{t("新建项目")}</button>
       </form>
 
-      {ordered.length === 0 && <p className="library-empty">还没有项目。新建一个，把一组照片和它们的修图放在一起。</p>}
+      {ordered.length === 0 && <p className="library-empty">{t("还没有项目。新建一个，把一组照片和它们的修图放在一起。")}</p>}
       <div className="library-grid">
         {ordered.map((project) => (
           <article key={project.id} className={`project ${project.id === activeId ? "current" : ""}`} data-project={project.name}>
-            <button className="project-cover" onClick={() => onOpen(project)} aria-label={`打开 ${project.name}`}>
-              {project.cover ? <img src={project.cover} alt="" /> : <span>空项目</span>}
+            <button className="project-cover" onClick={() => onOpen(project)} aria-label={t("打开 {name}", { name: project.name })}>
+              {project.cover ? <img src={project.cover} alt="" /> : <span>{t("空项目")}</span>}
             </button>
             {renaming?.id === project.id ? (
               <form
@@ -63,25 +64,25 @@ export function ProjectLibrary({ projects, activeId, photoCount, onOpen, onCreat
                   setRenaming(null);
                 }}
               >
-                <input aria-label="新名称" autoFocus value={renaming.name} onChange={(event) => setRenaming({ id: project.id, name: event.target.value })} />
-                <button className="button secondary">保存</button>
+                <input aria-label={t("新名称")} autoFocus value={renaming.name} onChange={(event) => setRenaming({ id: project.id, name: event.target.value })} />
+                <button className="button secondary">{t("保存")}</button>
               </form>
             ) : (
               <h3>{project.name}</h3>
             )}
-            <p>{project.photoIds.length} 张 · {new Date(project.updatedAt).toLocaleDateString()}</p>
+            <p>{t("{count} 张 · {date}", { count: project.photoIds.length, date: new Date(project.updatedAt).toLocaleDateString() })}</p>
             <div className="project-actions">
-              <button className="button secondary" onClick={() => setRenaming({ id: project.id, name: project.name })}>重命名</button>
+              <button className="button secondary" onClick={() => setRenaming({ id: project.id, name: project.name })}>{t("重命名")}</button>
               {confirming === project.id ? (
-                <button className="button danger" onClick={() => { setConfirming(null); onDelete(project); }}>确认删除</button>
+                <button className="button danger" onClick={() => { setConfirming(null); onDelete(project); }}>{t("确认删除")}</button>
               ) : (
-                <button className="button secondary" onClick={() => setConfirming(project.id)}>删除</button>
+                <button className="button secondary" onClick={() => setConfirming(project.id)}>{t("删除")}</button>
               )}
             </div>
           </article>
         ))}
       </div>
-      <p className="library-note">项目只记录照片和修图参数，删除项目不会动磁盘上的原图。</p>
+      <p className="library-note">{t("项目只记录照片和修图参数，删除项目不会动磁盘上的原图。")}</p>
     </div>
   );
 }

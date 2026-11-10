@@ -17,7 +17,7 @@ public sealed record LookInfo(int Id, string Group, string Name)
 public static class Looks
 {
     private const int BuiltInSize = 25;
-    private const string BasicGroup = "基础";
+    private static readonly string BasicGroup = I18n.T("基础");
     /// <summary>Imported looks are numbered from here, as in the web edition.</summary>
     public const int FirstImportedId = 100;
 
@@ -136,92 +136,92 @@ public static class Looks
 
     private static readonly (int Id, string Group, string Name, Recipe Recipe)[] Recipes =
     [
-        (6, "胶片", "标准正片", new() { Contrast = 0.1, Saturation = 1.08, Bands = [new(120, 60, Shift: -6)] }),
-        (7, "胶片", "鲜艳正片", new()
+        (6, I18n.T("胶片"), I18n.T("标准正片"), new() { Contrast = 0.1, Saturation = 1.08, Bands = [new(120, 60, Shift: -6)] }),
+        (7, I18n.T("胶片"), I18n.T("鲜艳正片"), new()
         {
             Contrast = 0.24, Saturation = 1.32,
             Bands = [new(120, 70, Shift: 10, Value: -0.08), new(220, 60, Saturation: 0.15, Value: -0.08), new(0, 35, Saturation: 0.1)],
         }),
-        (8, "胶片", "经典反转", new()
+        (8, I18n.T("胶片"), I18n.T("经典反转"), new()
         {
             Contrast = 0.16, Saturation = 0.78, Shadows = [-0.015, 0.01, 0.02], Highlights = [0.01, 0.005, -0.015],
             Bands = [new(10, 40, Shift: 8, Saturation: -0.1), new(210, 60, Saturation: -0.2), new(100, 60, Shift: -12, Saturation: -0.15)],
         }),
-        (9, "胶片", "柔和负片", new() { Contrast = -0.06, Fade = 0.015, Saturation = 0.92, Gains = [1.01, 1, 0.99], Bands = [new(25, 35, Value: 0.03)] }),
-        (10, "胶片", "人像暖调负片", new()
+        (9, I18n.T("胶片"), I18n.T("柔和负片"), new() { Contrast = -0.06, Fade = 0.015, Saturation = 0.92, Gains = [1.01, 1, 0.99], Bands = [new(25, 35, Value: 0.03)] }),
+        (10, I18n.T("胶片"), I18n.T("人像暖调负片"), new()
         {
             Contrast = 0.03, Fade = 0.025, Roll = 0.015, Saturation = 0.95, Gains = [1.03, 1, 0.95],
             Bands = [new(25, 35, Shift: -3, Saturation: -0.05, Value: 0.05), new(110, 60, Shift: -15, Saturation: -0.25)],
             Shadows = [0.012, 0, -0.008],
         }),
-        (11, "胶片", "金色负片", new() { Contrast = 0.12, Saturation = 1.14, Gains = [1.05, 1, 0.9], Fade = 0.01, Bands = [new(45, 40, Saturation: 0.15)] }),
-        (12, "胶片", "拍立得", new()
+        (11, I18n.T("胶片"), I18n.T("金色负片"), new() { Contrast = 0.12, Saturation = 1.14, Gains = [1.05, 1, 0.9], Fade = 0.01, Bands = [new(45, 40, Saturation: 0.15)] }),
+        (12, I18n.T("胶片"), I18n.T("拍立得"), new()
         {
             Contrast = -0.08, Fade = 0.07, Roll = 0.05, Saturation = 0.86, Gains = [1.03, 1, 0.94],
             Shadows = [0, 0.015, 0.03], Highlights = [0.015, 0.01, -0.02],
         }),
-        (13, "电影", "低饱和电影", new()
+        (13, I18n.T("电影"), I18n.T("低饱和电影"), new()
         {
             Contrast = -0.1, Fade = 0.025, Roll = 0.02, Saturation = 0.72, Shadows = [-0.01, 0.012, 0.02], Bands = [new(110, 60, Saturation: -0.2)],
         }),
-        (14, "电影", "钨丝灯夜景", new()
+        (14, I18n.T("电影"), I18n.T("钨丝灯夜景"), new()
         {
             Contrast = 0.14, Saturation = 1.05, Gains = [0.92, 0.98, 1.1], Shadows = [-0.02, 0.005, 0.045], Highlights = [0.05, 0.005, -0.02],
             Bands = [new(0, 40, Saturation: 0.2)],
         }),
-        (15, "电影", "褪银", new() { Contrast = 0.32, Saturation = 0.5, Roll = 0.01 }),
-        (16, "电影", "末日橙", new()
+        (15, I18n.T("电影"), I18n.T("褪银"), new() { Contrast = 0.32, Saturation = 0.5, Roll = 0.01 }),
+        (16, I18n.T("电影"), I18n.T("末日橙"), new()
         {
             Contrast = 0.26, Saturation = 1.05, Gains = [1.05, 0.99, 0.88], Shadows = [-0.01, 0.015, 0.03],
             Bands = [new(200, 60, Saturation: -0.35), new(100, 60, Shift: -35, Saturation: -0.4)],
         }),
-        (17, "创意", "赛博朋克", new()
+        (17, I18n.T("创意"), I18n.T("赛博朋克"), new()
         {
             Contrast = 0.2, Saturation = 1.18, Gains = [1, 0.98, 1.02], Shadows = [0.015, -0.02, 0.07],
             Bands = [new(30, 55, Shift: -50, Saturation: 0.1), new(120, 65, Shift: 55), new(215, 55, Shift: -22, Saturation: 0.15), new(340, 35, Shift: -10, Saturation: 0.2)],
         }),
-        (18, "创意", "霓虹夜色", new()
+        (18, I18n.T("创意"), I18n.T("霓虹夜色"), new()
         {
             Contrast = 0.18, Saturation = 1.2, Gains = [0.98, 0.97, 1.05], Shadows = [0.01, -0.02, 0.08],
             Bands = [new(30, 55, Shift: -22), new(210, 65, Shift: 25, Saturation: 0.2)],
         }),
-        (19, "创意", "港风复古", new()
+        (19, I18n.T("创意"), I18n.T("港风复古"), new()
         {
             Contrast = 0.12, Fade = 0.03, Saturation = 0.92, Shadows = [-0.015, 0.04, 0.012], Highlights = [0.04, 0.005, -0.03],
             Bands = [new(0, 35, Saturation: 0.15), new(120, 70, Shift: 18)],
         }),
-        (20, "创意", "日系清新", new()
+        (20, I18n.T("创意"), I18n.T("日系清新"), new()
         {
             Contrast = -0.12, Fade = 0.06, Saturation = 0.86, Gains = [0.99, 1.02, 1.03], Shadows = [0, 0.015, 0.025],
             Bands = [new(110, 60, Shift: 15, Saturation: -0.1, Value: 0.06), new(25, 35, Value: 0.05)],
         }),
-        (21, "创意", "交叉冲洗", new()
+        (21, I18n.T("创意"), I18n.T("交叉冲洗"), new()
         {
             Contrast = 0.26, Saturation = 1.15, Shadows = [-0.02, 0.01, 0.1], Highlights = [0.03, 0.04, -0.07], Bands = [new(120, 70, Shift: -15)],
         }),
-        (22, "黑白", "细腻黑白", new() { Mono = [0.25, 0.65, 0.1], Contrast = 0.1 }),
-        (23, "黑白", "高反差黑白", new() { Mono = [0.4, 0.5, 0.1], Contrast = 0.34 }),
-        (24, "黑白", "复古棕调", new() { Mono = [0.3, 0.6, 0.1], Contrast = 0.08, Fade = 0.04, Shadows = [0.03, 0.01, -0.03], Highlights = [0.03, 0.005, -0.05] }),
+        (22, I18n.T("黑白"), I18n.T("细腻黑白"), new() { Mono = [0.25, 0.65, 0.1], Contrast = 0.1 }),
+        (23, I18n.T("黑白"), I18n.T("高反差黑白"), new() { Mono = [0.4, 0.5, 0.1], Contrast = 0.34 }),
+        (24, I18n.T("黑白"), I18n.T("复古棕调"), new() { Mono = [0.3, 0.6, 0.1], Contrast = 0.08, Fade = 0.04, Shadows = [0.03, 0.01, -0.03], Highlights = [0.03, 0.005, -0.05] }),
     ];
 
     private static readonly (LookInfo Info, Grade Grade)[] BuiltIns =
     [
-        (new(1, BasicGroup, "暖调胶片"), (r, g, b) => (Ceiling(SCurve(r, 0.12) * 1.04 + 0.015, 1.055), Ceiling(SCurve(g, 0.1) + 0.005, 1.005), SCurve(b, 0.08) * 0.92 + 0.03)),
-        (new(2, BasicGroup, "清冷"), (r, g, b) => (SCurve(r, 0.08) * 0.95, SCurve(g, 0.08) * 0.99, Ceiling(SCurve(b, 0.06) * 1.05 + 0.01, 1.06))),
-        (new(3, BasicGroup, "青橙"), (r, g, b) =>
+        (new(1, BasicGroup, I18n.T("暖调胶片")), (r, g, b) => (Ceiling(SCurve(r, 0.12) * 1.04 + 0.015, 1.055), Ceiling(SCurve(g, 0.1) + 0.005, 1.005), SCurve(b, 0.08) * 0.92 + 0.03)),
+        (new(2, BasicGroup, I18n.T("清冷")), (r, g, b) => (SCurve(r, 0.08) * 0.95, SCurve(g, 0.08) * 0.99, Ceiling(SCurve(b, 0.06) * 1.05 + 0.01, 1.06))),
+        (new(3, BasicGroup, I18n.T("青橙")), (r, g, b) =>
         {
             var warm = Luma(r, g, b);
             var cool = 1 - warm;
             return (Ceiling(r + 0.07 * warm - 0.06 * cool, 1.07), Ceiling(g + 0.015 * warm + 0.015 * cool, 1.015), Ceiling(b - 0.08 * warm + 0.07 * cool, 1.07));
         }),
-        (new(4, BasicGroup, "褪色"), (r, g, b) =>
+        (new(4, BasicGroup, I18n.T("褪色")), (r, g, b) =>
         {
             static double Lift(double v) => 0.08 + v * 0.86;
             var y = Luma(r, g, b);
             double Soften(double v) => y + (v - y) * 0.82;
             return (Lift(Soften(r)), Lift(Soften(g)), Lift(Soften(b)));
         }),
-        (new(5, BasicGroup, "黑白"), (r, g, b) =>
+        (new(5, BasicGroup, I18n.T("黑白")), (r, g, b) =>
         {
             var y = SCurve(0.3 * r + 0.6 * g + 0.1 * b, 0.15);
             return (y, y, y);
@@ -254,13 +254,13 @@ public static class Looks
             var line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#') || line.StartsWith("TITLE", StringComparison.Ordinal)) continue;
             var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (line.StartsWith("LUT_1D_SIZE", StringComparison.Ordinal)) throw new FormatException("只支持 3D LUT，这是 1D LUT");
+            if (line.StartsWith("LUT_1D_SIZE", StringComparison.Ordinal)) throw new FormatException(I18n.T("只支持 3D LUT，这是 1D LUT"));
             if (line.StartsWith("DOMAIN_MIN", StringComparison.Ordinal) || line.StartsWith("DOMAIN_MAX", StringComparison.Ordinal))
             {
                 var wanted = line.StartsWith("DOMAIN_MIN", StringComparison.Ordinal) ? 0 : 1;
                 if (parts.Skip(1).Any(value => !double.TryParse(value, CultureInfo.InvariantCulture, out var number) || number != wanted))
                 {
-                    throw new FormatException("只支持定义域为 0–1 的 LUT");
+                    throw new FormatException(I18n.T("只支持定义域为 0–1 的 LUT"));
                 }
                 continue;
             }
@@ -275,8 +275,8 @@ public static class Looks
                 values.AddRange(parts.Select(part => (float)Clamp01(double.Parse(part, CultureInfo.InvariantCulture))));
             }
         }
-        if (size is < 2 or > 129) throw new FormatException("没有找到有效的 LUT_3D_SIZE");
-        if (values.Count != size * size * size * 3) throw new FormatException($"LUT 数据不完整：应有 {size * size * size} 行，实际 {values.Count / 3} 行");
+        if (size is < 2 or > 129) throw new FormatException(I18n.T("没有找到有效的 LUT_3D_SIZE"));
+        if (values.Count != size * size * size * 3) throw new FormatException(I18n.T("LUT 数据不完整：应有 {size} 行，实际 {count} 行", ("size", size * size * size), ("count", values.Count / 3)));
         return new Lut(size, [.. values]);
     }
 }
@@ -307,6 +307,19 @@ public sealed class LookLibrary
         var file = $"{id}.cube";
         File.WriteAllText(Path.Combine(_folder, file), text);
         var look = new ImportedLook(id, Path.GetFileNameWithoutExtension(path), file);
+        _looks.Add(look);
+        _index.Save(_looks);
+        return look;
+    }
+
+    /// <summary>Keeps a look made in the app, such as a colour match, like an imported one.</summary>
+    public ImportedLook Add(string name, Lut lut)
+    {
+        Directory.CreateDirectory(_folder);
+        var id = Math.Max(Looks.FirstImportedId - 1, _looks.Count == 0 ? 0 : _looks.Max(look => look.Id)) + 1;
+        var file = $"{id}.cube";
+        File.WriteAllText(Path.Combine(_folder, file), ColourMatch.ToCube(lut, name));
+        var look = new ImportedLook(id, name, file);
         _looks.Add(look);
         _index.Save(_looks);
         return look;

@@ -3,46 +3,46 @@
         xmlns:local="clr-namespace:OpenPixels.Desktop"
         x:Class="OpenPixels.Desktop.ExportWindow"
         x:DataType="local:ExportViewModel"
-        Title="导出" Width="460" SizeToContent="Height" CanResize="False"
+        Title="{local:Tr '导出'}" Width="460" SizeToContent="Height" CanResize="False"
         WindowStartupLocation="CenterOwner" Background="{StaticResource OpPanelBrush}"
         Icon="avares://OpenPixels/Assets/app-icon.png">
   <StackPanel Margin="18" Spacing="10">
     <Grid ColumnDefinitions="96,*" IsVisible="{Binding HasChoiceOfPhotos}">
-      <TextBlock Text="导出哪些" VerticalAlignment="Center" />
+      <TextBlock Text="{local:Tr '导出哪些'}" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1" ItemsSource="{Binding Scopes}" SelectedIndex="{Binding ScopeIndex}" Width="200" />
     </Grid>
     <Grid ColumnDefinitions="96,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
-      <TextBlock Text="导出预设" VerticalAlignment="Center" />
+      <TextBlock Text="{local:Tr '导出预设'}" VerticalAlignment="Center" />
       <StackPanel Grid.Column="1" Spacing="6">
         <StackPanel Orientation="Horizontal" Spacing="6">
-          <ComboBox ItemsSource="{Binding PresetNames}" SelectedItem="{Binding SelectedPreset}" PlaceholderText="选择预设" Width="170" />
-          <Button Content="删除" Command="{Binding DeletePresetCommand}" />
+          <ComboBox ItemsSource="{Binding PresetNames}" SelectedItem="{Binding SelectedPreset}" PlaceholderText="{local:Tr '选择预设'}" Width="170" />
+          <Button Content="{local:Tr '删除'}" Command="{Binding DeletePresetCommand}" />
         </StackPanel>
         <StackPanel Orientation="Horizontal" Spacing="6">
-          <TextBox Text="{Binding NewPresetName}" Watermark="新预设名称" Width="170" />
-          <Button Content="保存为预设" Command="{Binding SavePresetCommand}" />
+          <TextBox Text="{Binding NewPresetName}" Watermark="{local:Tr '新预设名称'}" Width="170" />
+          <Button Content="{local:Tr '保存为预设'}" Command="{Binding SavePresetCommand}" />
         </StackPanel>
       </StackPanel>
 
-      <TextBlock Grid.Row="1" Text="格式" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="1" Text="{local:Tr '格式'}" VerticalAlignment="Center" />
       <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Formats}" SelectedIndex="{Binding FormatIndex}" Width="170" />
 
-      <TextBlock Grid.Row="2" Text="质量" VerticalAlignment="Center" IsVisible="{Binding IsJpeg}" />
+      <TextBlock Grid.Row="2" Text="{local:Tr '质量'}" VerticalAlignment="Center" IsVisible="{Binding IsJpeg}" />
       <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,40" IsVisible="{Binding IsJpeg}">
         <Slider Minimum="40" Maximum="100" Value="{Binding Quality}" TickFrequency="1" IsSnapToTickEnabled="True" />
         <TextBlock Grid.Column="1" Text="{Binding Quality}" VerticalAlignment="Center" HorizontalAlignment="Right" />
       </Grid>
 
-      <TextBlock Grid.Row="3" Text="位深" VerticalAlignment="Center" IsVisible="{Binding !IsJpeg}" />
+      <TextBlock Grid.Row="3" Text="{local:Tr '位深'}" VerticalAlignment="Center" IsVisible="{Binding !IsJpeg}" />
       <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding BitDepths}" SelectedIndex="{Binding BitDepthIndex}" Width="170" IsVisible="{Binding !IsJpeg}" />
 
-      <TextBlock Grid.Row="4" Text="色彩空间" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="4" Text="{local:Tr '色彩空间'}" VerticalAlignment="Center" />
       <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding ColorSpaces}" SelectedIndex="{Binding ColorSpaceIndex}" Width="170" />
 
-      <TextBlock Grid.Row="5" Text="尺寸" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="5" Text="{local:Tr '尺寸'}" VerticalAlignment="Center" />
       <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{Binding LongEdges}" SelectedIndex="{Binding LongEdgeIndex}" Width="170" />
 
-      <TextBlock Grid.Row="6" Text="文件名" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="6" Text="{local:Tr '文件名'}" VerticalAlignment="Center" />
       <StackPanel Grid.Row="6" Grid.Column="1" Spacing="2">
         <TextBox Text="{Binding Template}" />
         <TextBlock Text="{Binding TemplateHint}" FontSize="11" Foreground="#8a8a92" TextWrapping="Wrap" />
@@ -51,29 +51,29 @@
 
     <Border Background="#232327" CornerRadius="4" Padding="10">
       <StackPanel Spacing="8">
-        <CheckBox Content="添加水印" IsChecked="{Binding WatermarkEnabled}" />
+        <CheckBox Content="{local:Tr '添加水印'}" IsChecked="{Binding WatermarkEnabled}" />
         <Grid ColumnDefinitions="86,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" IsEnabled="{Binding WatermarkEnabled}">
-          <TextBlock Text="文字" VerticalAlignment="Center" />
-          <TextBox Grid.Column="1" Text="{Binding WatermarkText}" Watermark="例如 © 你的名字" />
-          <TextBlock Grid.Row="1" Text="图片" VerticalAlignment="Center" />
+          <TextBlock Text="{local:Tr '文字'}" VerticalAlignment="Center" />
+          <TextBox Grid.Column="1" Text="{Binding WatermarkText}" Watermark="{local:Tr '例如 © 你的名字'}" />
+          <TextBlock Grid.Row="1" Text="{local:Tr '图片'}" VerticalAlignment="Center" />
           <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6">
-            <Button Content="选择图片…" Click="OnPickLogo" />
-            <Button Content="移除" Command="{Binding ClearLogoCommand}" IsVisible="{Binding HasLogo}" />
+            <Button Content="{local:Tr '选择图片…'}" Click="OnPickLogo" />
+            <Button Content="{local:Tr '移除'}" Command="{Binding ClearLogoCommand}" IsVisible="{Binding HasLogo}" />
             <TextBlock Text="{Binding LogoName}" VerticalAlignment="Center" FontSize="11" Foreground="#a0a0a8" TextTrimming="CharacterEllipsis" MaxWidth="160" />
           </StackPanel>
-          <TextBlock Grid.Row="2" Text="大小" VerticalAlignment="Center" />
+          <TextBlock Grid.Row="2" Text="{local:Tr '大小'}" VerticalAlignment="Center" />
           <Slider Grid.Row="2" Grid.Column="1" Minimum="0.01" Maximum="0.1" Value="{Binding WatermarkSize}" />
-          <TextBlock Grid.Row="3" Text="不透明度" VerticalAlignment="Center" />
+          <TextBlock Grid.Row="3" Text="{local:Tr '不透明度'}" VerticalAlignment="Center" />
           <Slider Grid.Row="3" Grid.Column="1" Minimum="0.1" Maximum="1" Value="{Binding WatermarkOpacity}" />
-          <TextBlock Grid.Row="4" Text="位置" VerticalAlignment="Center" />
+          <TextBlock Grid.Row="4" Text="{local:Tr '位置'}" VerticalAlignment="Center" />
           <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding Positions}" SelectedIndex="{Binding PositionIndex}" Width="170" />
         </Grid>
       </StackPanel>
     </Border>
 
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
-      <Button Content="取消" Click="OnCancel" />
-      <Button Content="导出到文件夹…" Classes="accent" Click="OnExport" />
+      <Button Content="{local:Tr '取消'}" Click="OnCancel" />
+      <Button Content="{local:Tr '导出到文件夹…'}" Classes="accent" Click="OnExport" />
     </StackPanel>
   </StackPanel>
 </Window>

@@ -14,63 +14,78 @@ public sealed record HslBand(string Name, string Colour);
 /// <summary>The edit model. Keys and ranges match the web edition, so edits mean the same in both.</summary>
 public static partial class Edits
 {
-    public static readonly SliderGroupSpec WhiteBalance = new("白平衡", [new("temperature", "色温", -2, 2), new("tint", "色调", -2, 2)]);
+    public static readonly SliderGroupSpec WhiteBalance = new(I18n.T("白平衡"), [new("temperature", I18n.T("色温"), -2, 2), new("tint", I18n.T("色调"), -2, 2)]);
 
-    public static readonly SliderGroupSpec Tone = new("影调",
+    public static readonly SliderGroupSpec Tone = new(I18n.T("影调"),
     [
-        new("exposure", "曝光", -4, 4), new("contrast", "对比度", -1, 1), new("highlights", "高光", -1, 1),
-        new("shadows", "阴影", -1, 1), new("whites", "白色", -1, 1), new("blacks", "黑色", -1, 1),
+        new("exposure", I18n.T("曝光"), -4, 4), new("contrast", I18n.T("对比度"), -1, 1), new("highlights", I18n.T("高光"), -1, 1),
+        new("shadows", I18n.T("阴影"), -1, 1), new("whites", I18n.T("白色"), -1, 1), new("blacks", I18n.T("黑色"), -1, 1),
     ]);
 
-    public static readonly SliderGroupSpec Parametric = new("参数曲线",
+    public static readonly SliderGroupSpec Parametric = new(I18n.T("参数曲线"),
     [
-        new("curveHighlights", "曲线高光", -1, 1), new("curveLights", "曲线亮调", -1, 1),
-        new("curveDarks", "曲线暗调", -1, 1), new("curveShadows", "曲线阴影", -1, 1),
+        new("curveHighlights", I18n.T("曲线高光"), -1, 1), new("curveLights", I18n.T("曲线亮调"), -1, 1),
+        new("curveDarks", I18n.T("曲线暗调"), -1, 1), new("curveShadows", I18n.T("曲线阴影"), -1, 1),
     ]);
 
-    public static readonly SliderGroupSpec Effects = new("色彩与效果",
+    public static readonly SliderGroupSpec Effects = new(I18n.T("色彩与效果"),
     [
-        new("vibrance", "自然饱和度", -1, 1), new("saturation", "饱和度", -1, 1), new("dehaze", "去雾", -1, 1),
-        new("clarity", "清晰度", -1, 1), new("texture", "纹理", -1, 1),
-        new("sharpen", "锐化", 0, 1), new("sharpenRadius", "锐化半径", 1, 3, 1), new("sharpenDetail", "锐化细节", 0, 1),
-        new("sharpenMasking", "锐化蒙版", 0, 1), new("denoiseLuma", "明度降噪", 0, 1), new("denoiseChroma", "色彩降噪", 0, 1),
-        new("vignette", "暗角", -1, 1), new("postCropVignette", "裁剪后暗角", -1, 1),
-        new("grain", "颗粒", 0, 1), new("grainSize", "颗粒大小", 0, 1),
+        new("vibrance", I18n.T("自然饱和度"), -1, 1), new("saturation", I18n.T("饱和度"), -1, 1), new("dehaze", I18n.T("去雾"), -1, 1),
+        new("clarity", I18n.T("清晰度"), -1, 1), new("texture", I18n.T("纹理"), -1, 1),
+        new("sharpen", I18n.T("锐化"), 0, 1), new("sharpenRadius", I18n.T("锐化半径"), 1, 3, 1), new("sharpenDetail", I18n.T("锐化细节"), 0, 1),
+        new("sharpenMasking", I18n.T("锐化蒙版"), 0, 1), new("denoiseLuma", I18n.T("明度降噪"), 0, 1), new("denoiseChroma", I18n.T("色彩降噪"), 0, 1),
+        new("vignette", I18n.T("暗角"), -1, 1), new("postCropVignette", I18n.T("裁剪后暗角"), -1, 1),
+        new("grain", I18n.T("颗粒"), 0, 1), new("grainSize", I18n.T("颗粒大小"), 0, 1),
     ]);
 
-    public static readonly SliderGroupSpec Calibration = new("校准",
+    public static readonly SliderGroupSpec Calibration = new(I18n.T("校准"),
     [
-        new("calibrationRedHue", "红原色色相", -1, 1), new("calibrationRedSat", "红原色饱和度", -1, 1),
-        new("calibrationGreenHue", "绿原色色相", -1, 1), new("calibrationGreenSat", "绿原色饱和度", -1, 1),
-        new("calibrationBlueHue", "蓝原色色相", -1, 1), new("calibrationBlueSat", "蓝原色饱和度", -1, 1),
+        new("calibrationRedHue", I18n.T("红原色色相"), -1, 1), new("calibrationRedSat", I18n.T("红原色饱和度"), -1, 1),
+        new("calibrationGreenHue", I18n.T("绿原色色相"), -1, 1), new("calibrationGreenSat", I18n.T("绿原色饱和度"), -1, 1),
+        new("calibrationBlueHue", I18n.T("蓝原色色相"), -1, 1), new("calibrationBlueSat", I18n.T("蓝原色饱和度"), -1, 1),
     ]);
 
-    public static readonly SliderGroupSpec Lens = new("镜头校正",
+    public static readonly SliderGroupSpec Lens = new(I18n.T("镜头校正"),
     [
-        new("lensDistortion", "畸变", -1, 1), new("lensVignette", "暗角补偿", -1, 1),
-        new("lensCaRed", "红/青边", -1, 1), new("lensCaBlue", "蓝/黄边", -1, 1),
+        new("lensDistortion", I18n.T("畸变"), -1, 1), new("lensVignette", I18n.T("暗角补偿"), -1, 1),
+        new("lensCaRed", I18n.T("红/青边"), -1, 1), new("lensCaBlue", I18n.T("蓝/黄边"), -1, 1),
     ]);
 
-    public static readonly SliderGroupSpec Perspective = new("透视矫正", [new("perspectiveV", "垂直透视", -1, 1), new("perspectiveH", "水平透视", -1, 1)]);
+    public static readonly SliderGroupSpec Perspective = new(I18n.T("透视矫正"), [new("perspectiveV", I18n.T("垂直透视"), -1, 1), new("perspectiveH", I18n.T("水平透视"), -1, 1)]);
 
-    public static readonly SliderGroupSpec Point = new("颜色混合点",
+    public static readonly SliderGroupSpec Point = new(I18n.T("颜色混合点"),
     [
-        new("pointWidth", "混合点范围", 10, 90, 30), new("pointHueShift", "混合点色相", -1, 1),
-        new("pointSatShift", "混合点饱和度", -1, 1), new("pointLumShift", "混合点明度", -1, 1),
+        new("pointWidth", I18n.T("混合点范围"), 10, 90, 30), new("pointHueShift", I18n.T("混合点色相"), -1, 1),
+        new("pointSatShift", I18n.T("混合点饱和度"), -1, 1), new("pointLumShift", I18n.T("混合点明度"), -1, 1),
     ]);
 
-    public static readonly SliderSpec LookAmount = new("lutAmount", "滤镜强度", 0, 1);
-    public static readonly SliderSpec Rotate = new("rotate", "旋转", -45, 45);
+    public static readonly SliderGroupSpec BackgroundReplace = new(I18n.T("换背景"),
+    [
+        new("backgroundAmount", I18n.T("融合强度"), 0, 1, 1), new("backgroundFillExposure", I18n.T("亮度"), -3, 3),
+        new("backgroundShift", I18n.T("上下位置"), -0.5, 0.5), new("backgroundExposure", I18n.T("背景曝光"), -4, 4),
+    ]);
+
+    public static readonly SliderGroupSpec SkyReplace = new(I18n.T("换天"),
+    [
+        new("skyAmount", I18n.T("融合强度"), 0, 1, 1), new("skyFillExposure", I18n.T("亮度"), -3, 3),
+        new("skyShift", I18n.T("上下位置"), -0.5, 0.5), new("skyRelight", I18n.T("前景融合"), 0, 1),
+    ]);
+
+    /// <summary>Settings whose untouched value is not 0, so a 0 must be stored. As in the web edition.</summary>
+    public static readonly HashSet<string> ZeroIsAChoice = ["backgroundAmount", "skyAmount"];
+
+    public static readonly SliderSpec LookAmount = new("lutAmount", I18n.T("滤镜强度"), 0, 1);
+    public static readonly SliderSpec Rotate = new("rotate", I18n.T("旋转"), -45, 45);
 
     public static readonly HslBand[] HslBands =
     [
-        new("红", "#e0483e"), new("橙", "#e88a2e"), new("黄", "#e5cb3a"), new("绿", "#55b04a"),
-        new("青", "#3fbcc0"), new("蓝", "#3f73d8"), new("紫", "#7e52c8"), new("品红", "#cc4aa8"),
+        new(I18n.T("红"), "#e0483e"), new(I18n.T("橙"), "#e88a2e"), new(I18n.T("黄"), "#e5cb3a"), new(I18n.T("绿"), "#55b04a"),
+        new(I18n.T("青"), "#3fbcc0"), new(I18n.T("蓝"), "#3f73d8"), new(I18n.T("紫"), "#7e52c8"), new(I18n.T("品红"), "#cc4aa8"),
     ];
 
-    public static readonly (string Prefix, string Label)[] HslChannels = [("hslHue", "色相"), ("hslSat", "饱和度"), ("hslLum", "明度")];
+    public static readonly (string Prefix, string Label)[] HslChannels = [("hslHue", I18n.T("色相")), ("hslSat", I18n.T("饱和度")), ("hslLum", I18n.T("明度"))];
 
-    public static readonly (string Key, string Label)[] GradeRanges = [("Shadow", "阴影"), ("Mid", "中间调"), ("High", "高光")];
+    public static readonly (string Key, string Label)[] GradeRanges = [("Shadow", I18n.T("阴影")), ("Mid", I18n.T("中间调")), ("High", I18n.T("高光"))];
 
     /// <summary>All HSL sliders, band by band.</summary>
     public static IEnumerable<SliderSpec> HslSliders() =>
@@ -100,6 +115,13 @@ public static partial class Edits
         json["curve"] = new JsonArray(Curves.Channels.Select(channel =>
             (JsonNode)new JsonArray(Curves.PointsOf(edit, channel).Select(point => (JsonNode)Numbers([point.X, point.Y])).ToArray())).ToArray());
         json["parametric"] = Numbers(Curves.ParametricAmounts(edit));
+        json["replaceBackground"] = Get(edit, "backgroundAsset") > 0 ? Get(edit, "backgroundAmount", 1) : 0;
+        json["replaceBackgroundExposure"] = Get(edit, "backgroundFillExposure");
+        json["replaceBackgroundShift"] = Get(edit, "backgroundShift");
+        json["replaceSky"] = Get(edit, "skyAsset") > 0 ? Get(edit, "skyAmount", 1) : 0;
+        json["replaceSkyExposure"] = Get(edit, "skyFillExposure");
+        json["replaceSkyShift"] = Get(edit, "skyShift");
+        json["replaceSkyRelight"] = Get(edit, "skyRelight");
         json["lensManual"] = Numbers([Get(edit, "lensDistortion"), Get(edit, "lensVignette"), Get(edit, "lensCaRed"), Get(edit, "lensCaBlue")]);
         json["perspective"] = Numbers([Get(edit, "perspectiveV"), Get(edit, "perspectiveH")]);
         json["grade"] = new JsonArray(GradeRanges.Select(range => (JsonNode)Numbers([Get(edit, $"grade{range.Key}Hue"), Get(edit, $"grade{range.Key}Amount"), 0, 0])).ToArray());
@@ -139,14 +161,14 @@ public static partial class Edits
     // History names, as in the web edition's describeChange.
 
     private static readonly Dictionary<string, string> SliderLabels =
-        new[] { WhiteBalance, Tone, Parametric, Effects, Calibration, Lens, Perspective, Point }
+        new[] { WhiteBalance, Tone, Parametric, Effects, Calibration, Lens, Perspective, Point, BackgroundReplace, SkyReplace }
             .SelectMany(group => group.Sliders).Concat(HslSliders()).Concat([LookAmount, Rotate])
             .ToDictionary(slider => slider.Key, slider => slider.Label);
 
-    private static readonly Dictionary<string, string> CurveNames = new() { ["M"] = "RGB 曲线", ["R"] = "红色曲线", ["G"] = "绿色曲线", ["B"] = "蓝色曲线" };
+    private static readonly Dictionary<string, string> CurveNames = new() { ["M"] = I18n.T("RGB 曲线"), ["R"] = I18n.T("红色曲线"), ["G"] = I18n.T("绿色曲线"), ["B"] = I18n.T("蓝色曲线") };
 
-    private const string CropGroup = "裁剪与旋转";
-    private const string PointGroup = "颜色混合点";
+    private static readonly string CropGroup = I18n.T("裁剪与旋转");
+    private static readonly string PointGroup = I18n.T("颜色混合点");
 
     private sealed record SettingName(string Label, string? Group = null, bool Numeric = false);
 
@@ -159,17 +181,19 @@ public static partial class Edits
     private static SettingName? NameOf(string key)
     {
         SliderLabels.TryGetValue(key, out var slider);
-        if (key is "temperature" or "tint") return new(slider!, "白平衡", true);
-        if (key == "pointHue") return new("混合点取色", PointGroup);
+        if (key is "temperature" or "tint") return new(slider!, I18n.T("白平衡"), true);
+        if (key == "pointHue") return new(I18n.T("混合点取色"), PointGroup);
         if (key.StartsWith("point", StringComparison.Ordinal) && slider is not null) return new(slider, PointGroup, true);
-        if (key == "rotate") return new("旋转", CropGroup, true);
-        if (key == "lutAmount") return new("滤镜强度", "滤镜", true);
+        if (key == "rotate") return new(I18n.T("旋转"), CropGroup, true);
+        if (key == "lutAmount") return new(I18n.T("滤镜强度"), I18n.T("滤镜"), true);
         if (slider is not null) return new(slider, null, true);
         if (key == "quarter" || (key.Length == 5 && key.StartsWith("crop", StringComparison.Ordinal))) return new(CropGroup, CropGroup);
-        if (key == "lutId") return new("滤镜", "滤镜");
-        if (key == "cameraProfile") return new("色彩配置");
-        if (key == "lensAuto") return new("自动镜头校正");
-        if (key == "perspectiveKeep") return new("保留全图");
+        if (key == "lutId") return new(I18n.T("滤镜"), I18n.T("滤镜"));
+        if (key == "cameraProfile") return new(I18n.T("色彩配置"));
+        if (key == "backgroundAsset") return new(I18n.T("换背景"));
+        if (key == "skyAsset") return new(I18n.T("换天"));
+        if (key == "lensAuto") return new(I18n.T("自动镜头校正"));
+        if (key == "perspectiveKeep") return new(I18n.T("保留全图"));
         if (CurveKey().Match(key) is { Success: true } curve)
         {
             var name = CurveNames[curve.Groups[1].Value];
@@ -178,12 +202,12 @@ public static partial class Edits
         if (key.StartsWith("local", StringComparison.Ordinal) && key.Length > 6 && char.IsDigit(key[5]))
         {
             var suffix = key[6..];
-            if (LocalMasks.Sliders.FirstOrDefault(slider => slider.Suffix == suffix) is { Label: { } local }) return new($"局部{local}", null, true);
-            if (LocalMasks.RangeSuffixes.Contains(suffix)) return new("局部范围", "局部范围");
+            if (LocalMasks.Sliders.FirstOrDefault(slider => slider.Suffix == suffix) is { Label: { } local }) return new(I18n.T("局部{local}", ("local", local)), null, true);
+            if (LocalMasks.RangeSuffixes.Contains(suffix)) return new(I18n.T("局部范围"), I18n.T("局部范围"));
         }
         if (GradeKey().Match(key) is { Success: true } grade)
         {
-            var label = GradeRanges.First(range => range.Key == grade.Groups[1].Value).Label + "色轮";
+            var label = I18n.T("{range}色轮", ("range", GradeRanges.First(range => range.Key == grade.Groups[1].Value).Label));
             return new(label, label);
         }
         return null;
@@ -193,12 +217,12 @@ public static partial class Edits
     public static string DescribeChange(IReadOnlyDictionary<string, double> before, IReadOnlyDictionary<string, double> after)
     {
         var changed = before.Keys.Union(after.Keys).Where(key => Get(before, key) != Get(after, key)).Order(StringComparer.Ordinal).ToList();
-        if (changed.Count == 0) return "无变化";
+        if (changed.Count == 0) return I18n.T("无变化");
         var names = changed.Select(NameOf).ToList();
         if (changed.Count > 1 && names[0]?.Group is { } group && names.All(name => name?.Group == group)) return group;
-        if (changed.Count > 3) return $"多项调整（{changed.Count}）";
+        if (changed.Count > 3) return I18n.T("多项调整（{count}）", ("count", changed.Count));
         var position = names.FindIndex(name => name is not null);
-        if (position < 0) return "调整";
+        if (position < 0) return I18n.T("调整");
         var (label, _, numeric) = names[position]!;
         if (!numeric) return label;
         var delta = Get(after, changed[position]) - Get(before, changed[position]);
@@ -278,7 +302,7 @@ public sealed class EditStore
     public Dictionary<string, double> Load(string id) => _edits.TryGetValue(id, out var edit) ? new(edit) : [];
 
     public static Dictionary<string, double> Kept(IReadOnlyDictionary<string, double> edit) =>
-        edit.Where(pair => pair.Value != 0 && double.IsFinite(pair.Value)).ToDictionary();
+        edit.Where(pair => (pair.Value != 0 || Edits.ZeroIsAChoice.Contains(pair.Key)) && double.IsFinite(pair.Value)).ToDictionary();
 
     public void Save(string id, IReadOnlyDictionary<string, double> edit)
     {

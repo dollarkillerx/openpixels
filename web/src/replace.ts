@@ -1,4 +1,5 @@
 /** Images that can replace a photo's background or sky. */
+import { t } from "./i18n";
 
 export interface ReplaceImage {
   width: number;
@@ -87,13 +88,13 @@ interface BuiltIn {
 
 /** Drawn here, so the project ships no third-party imagery. */
 export const BUILT_IN_REPLACEMENTS: BuiltIn[] = [
-  { id: 1, name: "纯白", mode: REPLACE_BACKGROUND, paint: flat("#f4f4f4") },
-  { id: 2, name: "中灰", mode: REPLACE_BACKGROUND, paint: flat("#808082") },
-  { id: 3, name: "纯黑", mode: REPLACE_BACKGROUND, paint: flat("#101012") },
-  { id: 4, name: "影棚灰", mode: REPLACE_BACKGROUND, paint: studio },
-  { id: 11, name: "晴空", mode: REPLACE_SKY, paint: both(vertical([[0, "#2f6fc0"], [0.75, "#8db8e4"], [1, "#d4e4f2"]]), clouds([250, 250, 252], 0.56)) },
-  { id: 12, name: "晚霞", mode: REPLACE_SKY, paint: both(vertical([[0, "#2c3c74"], [0.5, "#c06a78"], [0.85, "#f4a65e"], [1, "#fbd59a"]]), clouds([255, 196, 150], 0.6)) },
-  { id: 13, name: "阴天", mode: REPLACE_SKY, paint: both(vertical([[0, "#7f8791"], [1, "#c3c8ce"]]), clouds([214, 217, 222], 0.42)) },
+  { id: 1, name: t("纯白"), mode: REPLACE_BACKGROUND, paint: flat("#f4f4f4") },
+  { id: 2, name: t("中灰"), mode: REPLACE_BACKGROUND, paint: flat("#808082") },
+  { id: 3, name: t("纯黑"), mode: REPLACE_BACKGROUND, paint: flat("#101012") },
+  { id: 4, name: t("影棚灰"), mode: REPLACE_BACKGROUND, paint: studio },
+  { id: 11, name: t("晴空"), mode: REPLACE_SKY, paint: both(vertical([[0, "#2f6fc0"], [0.75, "#8db8e4"], [1, "#d4e4f2"]]), clouds([250, 250, 252], 0.56)) },
+  { id: 12, name: t("晚霞"), mode: REPLACE_SKY, paint: both(vertical([[0, "#2c3c74"], [0.5, "#c06a78"], [0.85, "#f4a65e"], [1, "#fbd59a"]]), clouds([255, 196, 150], 0.6)) },
+  { id: 13, name: t("阴天"), mode: REPLACE_SKY, paint: both(vertical([[0, "#7f8791"], [1, "#c3c8ce"]]), clouds([214, 217, 222], 0.42)) },
 ];
 
 const painted = new Map<number, ReplaceImage>();

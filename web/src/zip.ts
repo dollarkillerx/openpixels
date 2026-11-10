@@ -1,4 +1,5 @@
 /** Minimal store-only ZIP writer. JPEGs do not compress further, so no deflate. */
+import { t } from "./i18n";
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -34,7 +35,7 @@ function dosStamp(date: Date): [number, number] {
 export function createZip(files: { name: string; bytes: Uint8Array<ArrayBuffer> }[], now = new Date()): Blob {
   const total = files.reduce((sum, file) => sum + file.bytes.length + 100 + file.name.length * 6, 0);
   if (files.length > MAX_ZIP_FILES || total > MAX_ZIP_BYTES) {
-    throw new Error("超过 ZIP 的上限（4 GB 或 65535 个文件），请分批导出，或用支持写入文件夹的浏览器");
+    throw new Error(t("超过 ZIP 的上限（4 GB 或 65535 个文件），请分批导出，或用支持写入文件夹的浏览器"));
   }
   const [time, day] = dosStamp(now);
   const parts: Uint8Array<ArrayBuffer>[] = [];

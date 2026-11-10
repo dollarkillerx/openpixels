@@ -43,6 +43,11 @@
     <AvaloniaResource Include="Assets/app-icon.png" />
   </ItemGroup>
 
+  <!-- Interface translations, shared with the web edition. -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(RepoRoot)web/src/i18n/*.json" LogicalName="OpenPixels.i18n.%(Filename).json" />
+  </ItemGroup>
+
   <!-- The AI models, if scripts/fetch-model.sh has fetched them. Checked licences are in the README. -->
   <ItemGroup>
     <None Include="$(RepoRoot)web/public/models/modnet.onnx;$(RepoRoot)web/public/models/skywater.onnx;$(RepoRoot)web/public/models/lama.onnx"

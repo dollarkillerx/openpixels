@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { decodeHeic, isHeic } from "./heic";
+import { initI18n } from "./i18n";
 import { renderWatermark } from "./output";
 import init, { Engine, describe_profile } from "./wasm-pkg/op_wasm";
 import { engineJson } from "./library";
@@ -197,6 +198,8 @@ function pushErases(erases: ErasePatch[]) {
 async function handle(request: EngineRequest): Promise<[unknown, Transferable[]]> {
   switch (request.type) {
     case "init": {
+      // Its own copy of the interface language, for the errors it reports.
+      await initI18n(request.language);
       const exports = await init();
       memory = exports.memory;
       engine = await Engine.create(request.canvas);

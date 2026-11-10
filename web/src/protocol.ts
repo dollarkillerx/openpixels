@@ -1,3 +1,4 @@
+import type { Language } from "./i18n";
 import type { LensProfile } from "./lens";
 import type { OutputSettings } from "./output";
 
@@ -109,7 +110,7 @@ export type DevelopTileReply = { index: number; rgb: ArrayBuffer } | { index: nu
 
 /** Messages the engine worker answers, each paired by id with one reply. */
 export type EngineRequest =
-  | { type: "init"; canvas: OffscreenCanvas }
+  | { type: "init"; canvas: OffscreenCanvas; language: Language }
   | { type: "open"; buffer: ArrayBuffer; adjustments: Adjustments; heals: HealSpot[]; warps: WarpStroke[]; erases: ErasePatch[] }
   | { type: "export"; settings: OutputSettings }
   | { type: "thumbnail"; maxLongEdge: number; framed: boolean }

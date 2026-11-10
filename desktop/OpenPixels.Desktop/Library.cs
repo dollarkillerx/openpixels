@@ -40,7 +40,7 @@ public sealed class CullStore
 public static class ColourLabels
 {
     public static readonly (string Name, string Colour)[] All =
-        [("红", "#e0483e"), ("黄", "#e5cb3a"), ("绿", "#55b04a"), ("蓝", "#3f73d8"), ("紫", "#7e52c8")];
+        [(I18n.T("红"), "#e0483e"), (I18n.T("黄"), "#e5cb3a"), (I18n.T("绿"), "#55b04a"), (I18n.T("蓝"), "#3f73d8"), (I18n.T("紫"), "#7e52c8")];
 }
 
 /// <summary>Named edits that can be applied to any photo.</summary>
@@ -68,7 +68,11 @@ public sealed class PresetStore
     }
 }
 
-public sealed record Project(string Name, List<string> Paths, DateTime Saved);
+public sealed record Project(string Name, List<string> Paths, DateTime Saved)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string CountLabel => I18n.T("{count} 张", ("count", Paths.Count));
+}
 
 /// <summary>Named sets of photos, and the set open when the app last closed.</summary>
 public sealed class ProjectStore
@@ -90,7 +94,7 @@ public sealed class ProjectStore
 
     public void Save(string name, IEnumerable<string> paths)
     {
-        _projects[name] = new Project(name == LastSession ? "上次的照片" : name, paths.ToList(), DateTime.Now);
+        _projects[name] = new Project(name == LastSession ? I18n.T("上次的照片") : name, paths.ToList(), DateTime.Now);
         _file.Save(_projects);
     }
 

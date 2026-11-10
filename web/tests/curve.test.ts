@@ -2,7 +2,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { IDENTITY_POINTS, curvePoints, parametricOffset, splineThrough, withCurvePoints } from "../src/curve.ts";
-import { BUILT_IN_LOOKS, gained } from "../src/lut.ts";
+import { registerHooks } from "node:module";
+
+// Vite resolves "./i18n" to i18n.ts; Node needs the extension written out.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (/^\.\.?\//.test(specifier) && !/\.\w+$/.test(specifier)) {
+      try {
+        return nextResolve(`${specifier}.ts`, context);
+      } catch {
+        // Not a TypeScript module; resolve it as written.
+      }
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const { BUILT_IN_LOOKS, gained } = await import("../src/lut.ts");
 
 const PARAMETRIC_KEYS = ["curveHighlights", "curveLights", "curveDarks", "curveShadows"];
 

@@ -38,13 +38,13 @@ public sealed record LocalLayer
 
     public string Title => Kind switch
     {
-        LocalKind.Linear => "线性渐变",
-        LocalKind.Radial => "径向渐变",
-        LocalKind.Brush => "画笔",
-        LocalKind.Full => "全图",
-        LocalKind.Subject => "主体",
-        LocalKind.Background => "背景",
-        _ => "天空",
+        LocalKind.Linear => I18n.T("线性渐变"),
+        LocalKind.Radial => I18n.T("径向渐变"),
+        LocalKind.Brush => I18n.T("画笔"),
+        LocalKind.Full => I18n.T("全图"),
+        LocalKind.Subject => I18n.T("主体"),
+        LocalKind.Background => I18n.T("背景"),
+        _ => I18n.T("天空"),
     };
 }
 
@@ -55,7 +55,7 @@ public static class LocalMasks
 {
     public const int MaxLayers = 4;
     public static readonly (string Suffix, string Label, double Min, double Max)[] Sliders =
-        [("Exposure", "曝光", -3, 3), ("Contrast", "对比度", -1, 1), ("Saturation", "饱和度", -1, 1), ("Temperature", "色温", -1, 1)];
+        [("Exposure", I18n.T("曝光"), -3, 3), ("Contrast", I18n.T("对比度"), -1, 1), ("Saturation", I18n.T("饱和度"), -1, 1), ("Temperature", I18n.T("色温"), -1, 1)];
     public static readonly string[] RangeSuffixes = ["RangeMode", "RangeLow", "RangeHigh", "RangeHue", "RangeWidth"];
 
     private const double RadialSoftStart = 0.55;
@@ -298,6 +298,8 @@ public sealed class RetouchStore
 
     private readonly JsonFile<Dictionary<string, JsonArray>> _healFile = new("heals.json");
     private readonly JsonFile<Dictionary<string, List<LocalLayer>>> _localFile = new("locals.json");
+    private readonly JsonFile<Dictionary<string, List<JsonArray>>> _warpFile = new("warps.json");
+    private readonly Dictionary<string, List<JsonArray>> _warps;
     private readonly Dictionary<string, JsonArray> _heals;
     private readonly Dictionary<string, List<LocalLayer>> _locals;
     private readonly string _eraseFolder = Path.Combine(DataFolder.Path, "erases");
@@ -306,6 +308,7 @@ public sealed class RetouchStore
     {
         _heals = _healFile.Load();
         _locals = _localFile.Load();
+        _warps = _warpFile.Load();
     }
 
     /// <summary>Spots as the engine's HealSpot JSON objects, plus an optional "group" for one stamp drag.</summary>
@@ -316,6 +319,16 @@ public sealed class RetouchStore
         if (spots.Count > 0) _heals[id] = (JsonArray)spots.DeepClone();
         else _heals.Remove(id);
         _healFile.Save(_heals);
+    }
+
+    /// <summary>Liquify strokes, grouped by the drag that made them so undo removes a whole drag.</summary>
+    public List<JsonArray> Warps(string id) => _warps.TryGetValue(id, out var groups) ? groups.Select(group => (JsonArray)group.DeepClone()).ToList() : [];
+
+    public void SaveWarps(string id, IReadOnlyList<JsonArray> groups)
+    {
+        if (groups.Count > 0) _warps[id] = groups.Select(group => (JsonArray)group.DeepClone()).ToList();
+        else _warps.Remove(id);
+        _warpFile.Save(_warps);
     }
 
     public List<LocalLayer> Locals(string id) => _locals.TryGetValue(id, out var layers) ? layers.Select(layer => layer.Copy()).ToList() : [];

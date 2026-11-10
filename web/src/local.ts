@@ -1,11 +1,12 @@
 import type { Adjustments } from "./protocol";
+import { t } from "./i18n";
 
 export const MAX_LOCAL_LAYERS = 4;
 export const LOCAL_SLIDERS = [
-  { suffix: "Exposure", label: "曝光", min: -3, max: 3 },
-  { suffix: "Contrast", label: "对比度", min: -1, max: 1 },
-  { suffix: "Saturation", label: "饱和度", min: -1, max: 1 },
-  { suffix: "Temperature", label: "色温", min: -1, max: 1 },
+  { suffix: "Exposure", label: t("曝光"), min: -3, max: 3 },
+  { suffix: "Contrast", label: t("对比度"), min: -1, max: 1 },
+  { suffix: "Saturation", label: t("饱和度"), min: -1, max: 1 },
+  { suffix: "Temperature", label: t("色温"), min: -1, max: 1 },
 ];
 
 /** Per-layer tone and colour limits, stored beside the sliders in the edit. */
