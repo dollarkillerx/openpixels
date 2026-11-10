@@ -135,6 +135,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Grades = Edits.GradeRanges.Select(range => new GradeItem(range.Key, range.Label)).ToList();
         RefreshLookChoices();
         Output = _outputFile.Load();
+        Photos.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasPhotos));
+            OnPropertyChanged(nameof(PhotoCount));
+        };
 
         _settleTimer.Tick += (_, _) =>
         {
@@ -188,6 +193,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private PhotoItem? _selectedPhoto;
+
+    /// <summary>Size and type of the open photo, for the panel header.</summary>
+    [ObservableProperty]
+    private string _photoInfo = "";
+
+    public bool HasPhotos => Photos.Count > 0;
+    public string PhotoCount => Photos.Count == 0 ? "" : $"{Photos.Count} 张";
 
     [ObservableProperty]
     private Bitmap? _preview;
@@ -405,6 +417,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Preview = null;
         _spareFrame = null;
         Histogram = null;
+        PhotoInfo = "";
         Picker = Picker.None;
         CropEditing = false;
         StatusDetail = null;
@@ -435,6 +448,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _imageOpen = true;
             CanEdit = true;
             UpdateZoomLabel();
+            var kind = info["isRaw"]?.GetValue<bool>() == true ? "RAW" : System.IO.Path.GetExtension(photo.Name).TrimStart('.').ToUpperInvariant();
+            PhotoInfo = $"{(int)info["width"]!} × {(int)info["height"]!} · {kind}";
             Status = $"{photo.Name}，{(int)info["width"]!} × {(int)info["height"]!}，{Environment.TickCount64 - started} ms";
             RequestRender();
             _ = RefreshHistogramAsync();

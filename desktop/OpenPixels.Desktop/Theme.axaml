@@ -1,0 +1,250 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    OpenPixels dark theme. Neutral greys so they do not bias colour judgement, with one
+    coral accent for state (selection, active tools, primary actions).
+  -->
+  <Styles.Resources>
+    <Color x:Key="OpBackground">#111113</Color>
+    <Color x:Key="OpStage">#0F0F12</Color>
+    <Color x:Key="OpPanel">#18181B</Color>
+    <Color x:Key="OpRaised">#222226</Color>
+    <Color x:Key="OpHover">#2B2B30</Color>
+    <Color x:Key="OpLine">#26262B</Color>
+    <Color x:Key="OpText">#ECECEF</Color>
+    <Color x:Key="OpMuted">#8B8B95</Color>
+    <Color x:Key="OpFaint">#5C5C66</Color>
+    <Color x:Key="OpAccent">#FF7A45</Color>
+    <Color x:Key="OpAccentSoft">#33FF7A45</Color>
+
+    <SolidColorBrush x:Key="OpBackgroundBrush" Color="{StaticResource OpBackground}" />
+    <SolidColorBrush x:Key="OpStageBrush" Color="{StaticResource OpStage}" />
+    <SolidColorBrush x:Key="OpPanelBrush" Color="{StaticResource OpPanel}" />
+    <SolidColorBrush x:Key="OpRaisedBrush" Color="{StaticResource OpRaised}" />
+    <SolidColorBrush x:Key="OpHoverBrush" Color="{StaticResource OpHover}" />
+    <SolidColorBrush x:Key="OpLineBrush" Color="{StaticResource OpLine}" />
+    <SolidColorBrush x:Key="OpTextBrush" Color="{StaticResource OpText}" />
+    <SolidColorBrush x:Key="OpMutedBrush" Color="{StaticResource OpMuted}" />
+    <SolidColorBrush x:Key="OpFaintBrush" Color="{StaticResource OpFaint}" />
+    <SolidColorBrush x:Key="OpAccentBrush" Color="{StaticResource OpAccent}" />
+    <SolidColorBrush x:Key="OpAccentSoftBrush" Color="{StaticResource OpAccentSoft}" />
+
+    <!-- Fluent resources, re-tinted. -->
+    <CornerRadius x:Key="ControlCornerRadius">5</CornerRadius>
+    <CornerRadius x:Key="OverlayCornerRadius">8</CornerRadius>
+
+    <x:Double x:Key="SliderHorizontalThumbWidth">12</x:Double>
+    <x:Double x:Key="SliderHorizontalThumbHeight">12</x:Double>
+    <CornerRadius x:Key="SliderThumbCornerRadius">6</CornerRadius>
+    <x:Double x:Key="SliderTrackThemeHeight">2</x:Double>
+    <SolidColorBrush x:Key="SliderTrackFill" Color="#3A3A41" />
+    <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="#46464E" />
+    <SolidColorBrush x:Key="SliderTrackFillPressed" Color="#46464E" />
+    <!-- Most sliders run either way from zero, so filling from the left would mislead. -->
+    <SolidColorBrush x:Key="SliderTrackValueFill" Color="#3A3A41" />
+    <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#46464E" />
+    <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#46464E" />
+    <SolidColorBrush x:Key="SliderThumbBackground" Color="#D4D4DA" />
+    <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="{StaticResource OpAccent}" />
+
+    <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderHeaderBackgroundPointerOver" Color="#1F1F23" />
+    <SolidColorBrush x:Key="ExpanderHeaderBackgroundPressed" Color="#1F1F23" />
+    <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderHeaderBorderBrushPointerOver" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderHeaderBorderBrushPressed" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderContentBackground" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderContentBorderBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderChevronBackground" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderChevronBackgroundPointerOver" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderChevronBackgroundPressed" Color="Transparent" />
+    <SolidColorBrush x:Key="ExpanderChevronForeground" Color="{StaticResource OpFaint}" />
+    <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
+    <Thickness x:Key="ExpanderContentDownBorderThickness">0</Thickness>
+    <Thickness x:Key="ExpanderHeaderPadding">14,0,10,0</Thickness>
+    <Thickness x:Key="ExpanderContentPadding">14,2,14,14</Thickness>
+    <x:Double x:Key="ExpanderMinHeight">38</x:Double>
+
+    <x:Double x:Key="TabItemHeaderFontSize">13</x:Double>
+    <x:Double x:Key="TabItemMinHeight">34</x:Double>
+    <Thickness x:Key="TabItemHeaderMargin">12,0</Thickness>
+    <SolidColorBrush x:Key="TabItemHeaderSelectedPipeFill" Color="{StaticResource OpAccent}" />
+    <SolidColorBrush x:Key="TabItemHeaderForegroundUnselected" Color="{StaticResource OpMuted}" />
+    <SolidColorBrush x:Key="TabItemHeaderForegroundSelected" Color="{StaticResource OpText}" />
+
+    <SolidColorBrush x:Key="ToolTipBackground" Color="#2A2A2F" />
+    <SolidColorBrush x:Key="ToolTipBorderBrush" Color="#38383F" />
+  </Styles.Resources>
+
+  <Style Selector="Window">
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Foreground" Value="{StaticResource OpTextBrush}" />
+  </Style>
+
+  <!-- Text -->
+  <Style Selector="TextBlock.muted">
+    <Setter Property="Foreground" Value="{StaticResource OpMutedBrush}" />
+  </Style>
+  <Style Selector="TextBlock.hint">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{StaticResource OpMutedBrush}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+    <Setter Property="LineHeight" Value="16" />
+  </Style>
+  <Style Selector="TextBlock.label">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource OpMutedBrush}" />
+  </Style>
+
+  <!-- Buttons: quiet by default, filled for the main action, accent-tinted when on.
+       Plain ToggleButtons (the expander headers, the clip toggles) keep their own look. -->
+  <Style Selector="Button, ToggleButton.ghost, ToggleButton.tool">
+    <Setter Property="Background" Value="{StaticResource OpRaisedBrush}" />
+    <Setter Property="Foreground" Value="#D6D6DC" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Padding" Value="10,5" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource OpHoverBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OpTextBrush}" />
+  </Style>
+  <Style Selector="Button.ghost, ToggleButton.ghost">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ToggleButton.ghost:checked /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.ghost:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.tool:checked /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource OpAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OpAccentBrush}" />
+  </Style>
+  <Style Selector="Button.accent">
+    <Setter Property="Background" Value="{StaticResource OpAccentBrush}" />
+    <Setter Property="Foreground" Value="#1A0E08" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#FF8E5F" />
+    <Setter Property="Foreground" Value="#1A0E08" />
+  </Style>
+  <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.ghost:disabled /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.tool:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource OpFaintBrush}" />
+  </Style>
+  <Style Selector="Button.accent:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#3A2A24" />
+    <Setter Property="Foreground" Value="#7A6258" />
+  </Style>
+
+  <!-- Line icons, coloured to match the button they sit in. -->
+  <Style Selector="Path.icon">
+    <Setter Property="Width" Value="16" />
+    <Setter Property="Height" Value="16" />
+    <Setter Property="Stretch" Value="None" />
+    <Setter Property="StrokeThickness" Value="1.4" />
+    <Setter Property="StrokeLineCap" Value="Round" />
+    <Setter Property="StrokeJoin" Value="Round" />
+    <Setter Property="Stroke" Value="#C9C9D0" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button:pointerover Path.icon, ToggleButton:pointerover Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource OpTextBrush}" />
+  </Style>
+  <Style Selector="ToggleButton:checked Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource OpAccentBrush}" />
+  </Style>
+  <Style Selector="Button.accent Path.icon, Button.accent:pointerover Path.icon">
+    <Setter Property="Stroke" Value="#1A0E08" />
+  </Style>
+  <Style Selector="Button:disabled Path.icon, ToggleButton:disabled Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource OpFaintBrush}" />
+  </Style>
+  <Style Selector="Button.accent:disabled Path.icon">
+    <Setter Property="Stroke" Value="#7A6258" />
+  </Style>
+
+  <!-- Expanders read as titled sections separated by hairlines, not as boxes. -->
+  <Style Selector="Expander">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="BorderBrush" Value="{StaticResource OpLineBrush}" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Padding" Value="14,0,14,14" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+
+  <!-- Segmented pickers (curve channel, HSL band). -->
+  <Style Selector="ListBox.segments">
+    <Setter Property="Background" Value="{StaticResource OpRaisedBrush}" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="2" />
+  </Style>
+  <Style Selector="ListBox.segments ListBoxItem">
+    <Setter Property="Padding" Value="9,3" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Foreground" Value="{StaticResource OpMutedBrush}" />
+  </Style>
+  <Style Selector="ListBox.segments ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.segments ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#3A3A41" />
+    <Setter Property="Foreground" Value="{StaticResource OpTextBrush}" />
+  </Style>
+
+  <!-- Plain lists (history): a soft highlight rather than a solid accent bar. -->
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.list ListBoxItem">
+    <Setter Property="Padding" Value="12,6" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="ListBox.list ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.list ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource OpAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OpTextBrush}" />
+  </Style>
+
+  <!-- Filmstrip: the frame round the thumbnail shows the selection. -->
+  <Style Selector="ListBox.filmstrip ListBoxItem">
+    <Setter Property="Padding" Value="10,5" />
+  </Style>
+  <Style Selector="ListBox.filmstrip ListBoxItem /template/ ContentPresenter#PART_ContentPresenter, ListBox.filmstrip ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.filmstrip ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.filmstrip ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.filmstrip ListBoxItem Border.frame">
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.filmstrip ListBoxItem:pointerover Border.frame">
+    <Setter Property="BorderBrush" Value="#3A3A41" />
+  </Style>
+  <Style Selector="ListBox.filmstrip ListBoxItem:selected Border.frame">
+    <Setter Property="BorderBrush" Value="{StaticResource OpAccentBrush}" />
+  </Style>
+  <Style Selector="ListBox.filmstrip ListBoxItem:selected TextBlock.name">
+    <Setter Property="Foreground" Value="{StaticResource OpTextBrush}" />
+  </Style>
+
+  <Style Selector="ComboBox">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Padding" Value="10,4,8,4" />
+    <Setter Property="Background" Value="{StaticResource OpRaisedBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+  <Style Selector="CheckBox">
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="TextBox">
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <!-- Thin scrollbars that stay out of the way. -->
+  <Style Selector="ScrollBar:vertical">
+    <Setter Property="Width" Value="8" />
+  </Style>
+</Styles>

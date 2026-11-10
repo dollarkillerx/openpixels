@@ -1,8 +1,14 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="OpenPixels.Desktop.App"
+             Name="OpenPixels"
              RequestedThemeVariant="Dark">
   <Application.Styles>
-    <FluentTheme />
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Dark" Accent="#FF7A45" RegionColor="#18181B" AltHigh="#111113" BaseHigh="#ECECEF" ChromeMediumLow="#1C1C20" ChromeMedium="#222226" ChromeLow="#18181B" ChromeHigh="#3A3A41" ListLow="#222226" ListMedium="#2B2B30" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
+    <StyleInclude Source="avares://OpenPixels/Theme.axaml" />
   </Application.Styles>
 </Application>

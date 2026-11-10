@@ -5,6 +5,29 @@ using Avalonia.Media;
 
 namespace OpenPixels.Desktop;
 
+/// <summary>
+/// The OpenPixels symbol, drawn from the same shapes as Assets/logo.svg so it is sharp at
+/// any size: an open aperture and a detached pixel.
+/// </summary>
+public sealed class LogoMark : Control
+{
+    private static readonly Geometry Aperture = Geometry.Parse("M80 32H164V76H108L64 120L128 184L176 136V92H224V176A48 48 0 0 1 176 224H80A48 48 0 0 1 32 176V80A48 48 0 0 1 80 32Z");
+    private static readonly IBrush Coral = new SolidColorBrush(Color.Parse("#FF7A45"));
+    private static readonly IBrush Amber = new SolidColorBrush(Color.Parse("#FFB547"));
+    /// <summary>The symbol spans 32..224 of the SVG's 256-unit canvas.</summary>
+    private const double Start = 32, Span = 192;
+
+    public override void Render(DrawingContext context)
+    {
+        var scale = Math.Min(Bounds.Width, Bounds.Height) / Span;
+        var left = (Bounds.Width - Span * scale) / 2;
+        var top = (Bounds.Height - Span * scale) / 2;
+        using var _ = context.PushTransform(Matrix.CreateTranslation(-Start, -Start) * Matrix.CreateScale(scale, scale) * Matrix.CreateTranslation(left, top));
+        context.DrawGeometry(Coral, null, Aperture);
+        context.FillRectangle(Amber, new Rect(180, 32, 44, 44));
+    }
+}
+
 /// <summary>256-bin counts per channel of the developed image.</summary>
 public sealed record HistogramData(uint[][] Channels, int Total)
 {

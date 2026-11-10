@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="OpenPixels app icon">
+  <rect width="256" height="256" rx="56.32" fill="#1E1E22"/>
+  <path fill="#FF7A45" d="M80 32H164V76H108L64 120L128 184L176 136V92H224V176A48 48 0 0 1 176 224H80A48 48 0 0 1 32 176V80A48 48 0 0 1 80 32Z"/>
+  <rect x="180" y="32" width="44" height="44" fill="#FFB547"/>
+</svg>

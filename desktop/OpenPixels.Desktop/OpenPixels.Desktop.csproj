@@ -37,6 +37,10 @@
     <Copy SourceFiles="$(NativeLibPath)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/app-icon.png" />
+  </ItemGroup>
+
   <!-- The Lensfun database (CC BY-SA 3.0), if scripts/fetch-lensfun.sh has fetched it. -->
   <ItemGroup>
     <None Include="$(RepoRoot)web/public/lensfun/lensfun.json;$(RepoRoot)web/public/lensfun/NOTICE.txt"
