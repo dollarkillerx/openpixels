@@ -26,8 +26,13 @@ public sealed class OutputSettings
     public string Format { get; set; } = "jpeg";
     public string ColorSpace { get; set; } = "srgb";
     public int Quality { get; set; } = 92;
-    /// <summary>Bits per channel for PNG and TIFF; JPEG is always 8.</summary>
+    /// <summary>Bits per channel for PNG and TIFF (8 or 16) and EXR (16 half or 32 float floats); JPEG is always 8.</summary>
     public int BitDepth { get; set; } = 8;
+    /// <summary>
+    /// For JPEG and EXR: how far above SDR white highlights may reach, as a linear ratio (4 is
+    /// two stops). A JPEG then carries a gain map (Ultra HDR); 0 is SDR only.
+    /// </summary>
+    public double HdrHeadroom { get; set; }
     /// <summary>Longest side in pixels; 0 keeps the full size.</summary>
     public int LongEdge { get; set; }
     public string Template { get; set; } = "{name}";
@@ -40,17 +45,24 @@ public sealed class OutputSettings
         return copy;
     }
 
-    public string Extension => Format switch { "png" => "png", "tiff" => "tif", _ => "jpg" };
+    public string Extension => Format switch { "png" => "png", "tiff" => "tif", "exr" => "exr", _ => "jpg" };
+
+    public bool SupportsHdr => Format is "jpeg" or "exr";
+
+    /// <summary>EXR is written in half or full floats, never in 8 bits.</summary>
+    public int EngineBitDepth => Format switch { "jpeg" => 8, "exr" => BitDepth == 32 ? 32 : 16, _ => BitDepth == 16 ? 16 : 8 };
 
     /// <summary>What the engine's exportImage takes as settings.</summary>
-    public object EngineSettings => new { format = Format, quality = Quality, longEdge = LongEdge, bitDepth = Format == "jpeg" ? 8 : BitDepth, colorSpace = ColorSpace };
+    public object EngineSettings => new { format = Format, quality = Quality, longEdge = LongEdge, bitDepth = EngineBitDepth, colorSpace = ColorSpace, hdrHeadroom = SupportsHdr ? HdrHeadroom : 0 };
 }
 
 public sealed record OverlayRaster(byte[] Rgba, int X, int Y, int Width, int Height);
 
 public static partial class Output
 {
-    public static readonly (string Value, string Label)[] Formats = [("jpeg", "JPEG"), ("png", "PNG"), ("tiff", "TIFF")];
+    public static readonly (string Value, string Label)[] Formats = [("jpeg", "JPEG"), ("png", "PNG"), ("tiff", "TIFF"), ("exr", "OpenEXR")];
+    /// <summary>HDR headroom choices as linear ratios, 0 being off.</summary>
+    public static readonly (double Value, string Label)[] HdrHeadrooms = [(0, I18n.T("关闭")), (2, I18n.T("高光 +1 档")), (4, I18n.T("高光 +2 档")), (8, I18n.T("高光 +3 档"))];
     public static readonly (string Value, string Label)[] ColorSpaces = [("srgb", "sRGB"), ("p3", "Display P3"), ("adobe", "Adobe RGB"), ("prophoto", "ProPhoto RGB")];
     public static readonly int[] LongEdges = [0, 6000, 4096, 3000, 2048, 1600, 1080];
     public static readonly (string Value, string Label)[] Positions =

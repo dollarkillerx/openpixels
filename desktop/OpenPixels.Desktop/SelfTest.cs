@@ -64,6 +64,14 @@ public static class SelfTest
             var logits = models.SegmentLogits(features, [(0.5, 0.5, true)], null);
             return $"encoded and decoded one click, {(logits is null ? "no object" : $"{logits.Length} values")}";
         });
+        Check("siglip", () =>
+        {
+            if (!ImageSearch.Available) throw new FileNotFoundException("not bundled");
+            using var search = new ImageSearch();
+            var image = search.EmbedImage(new byte[64 * 48 * 3], 64, 48);
+            var text = search.EmbedText("花");
+            return $"embedded a picture and a query, similarity {ImageSearch.Similarity(image, text):0.000}";
+        });
         Check("faces", () =>
         {
             if (!FaceFinder.Available) throw new FileNotFoundException("not bundled");

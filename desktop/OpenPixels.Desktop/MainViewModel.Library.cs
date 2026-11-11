@@ -28,7 +28,9 @@ public sealed partial class MainViewModel
                 OnPropertyChanged();
                 return;
             }
-            if (SetProperty(ref _selectedPhoto, value) && value is not null) _ = OpenAsync(value);
+            if (!SetProperty(ref _selectedPhoto, value)) return;
+            OnPropertyChanged(nameof(CanDeleteVersion));
+            if (value is not null) _ = OpenAsync(value);
         }
     }
 
@@ -83,6 +85,7 @@ public sealed partial class MainViewModel
         };
         if (!flagOk) return false;
         if (LabelFilterIndex > 0 && photo.Label != LabelFilterIndex) return false;
+        if (!PassesSearch(photo)) return false;
         return GroupFilterIndex switch
         {
             <= 0 => true,
@@ -98,7 +101,7 @@ public sealed partial class MainViewModel
         _filtering = true;
         try
         {
-            var wanted = Photos.Where(Passes).ToList();
+            var wanted = SearchOrder(Photos.Where(Passes)).ToList();
             for (var i = VisiblePhotos.Count - 1; i >= 0; i--)
             {
                 if (!wanted.Contains(VisiblePhotos[i])) VisiblePhotos.RemoveAt(i);
@@ -214,10 +217,11 @@ public sealed partial class MainViewModel
     [RelayCommand]
     public async Task Analyze()
     {
-        var pending = Photos.Where(photo => !Analyses.ContainsKey(photo.Id)).ToList();
+        var pending = Photos.Where(photo => !Analyses.ContainsKey(photo.Id) || NeedsEmbedding(photo)).ToList();
         if (pending.Count == 0)
         {
             ApplyGroups();
+            await RefreshTagsAsync();
             LibraryStatus = Photos.Count == 0 ? "" : I18n.T("{count} 张都已分析过，共 {groups} 组。", ("count", Photos.Count), ("groups", GroupFilters.Count - 2));
             return;
         }
@@ -231,7 +235,7 @@ public sealed partial class MainViewModel
                 LibraryStatus = I18n.T("正在分析 {index} / {total}…", ("index", index + 1), ("total", pending.Count));
                 try
                 {
-                    Analyses[photo.Id] = await WithBackgroundEngine(async engine =>
+                    var (analysis, embedding) = await WithBackgroundEngine(async engine =>
                     {
                         var info = await LoadForBackgroundAsync(engine, photo, AnalysisLongEdge);
                         var size = (await engine.CallAsync("thumbnailSize", new { maxLongEdge = AnalysisLongEdge })).Json!;
@@ -239,8 +243,13 @@ public sealed partial class MainViewModel
                         var captured = Analysis.CaptureMillis(info["captureTime"]?.GetValue<string>());
                         var fileTime = (File.GetLastWriteTimeUtc(photo.Path) - DateTime.UnixEpoch).TotalMilliseconds;
                         var (width, height) = ((int)size["width"]!, (int)size["height"]!);
-                        return await Task.Run(() => Analysis.Analyze(rgb, width, height, captured ?? fileTime, captured is not null, FindFaces(rgb, width, height)));
+                        var analysis = await Task.Run(() => Analysis.Analyze(rgb, width, height, captured ?? fileTime, captured is not null, FindFaces(rgb, width, height)));
+                        // The same thumbnail places the photo in the search space.
+                        var embedding = SearchAvailable ? await Task.Run(() => _search.Value.EmbedImage(rgb, width, height)) : null;
+                        return (analysis, embedding);
                     });
+                    Analyses[photo.Id] = analysis;
+                    if (embedding is not null) Embeddings[photo.Id] = embedding;
                 }
                 catch (Exception)
                 {
@@ -248,12 +257,14 @@ public sealed partial class MainViewModel
                 }
             }
             _analysisFile.Save(Analyses);
+            if (SearchAvailable) SaveEmbeddings();
         }
         finally
         {
             IsBusy = false;
         }
         ApplyGroups();
+        await RefreshTagsAsync();
         LibraryStatus = I18n.T("已分析 {count} 张，共 {groups} 组。", ("count", pending.Count - failed), ("groups", GroupFilters.Count - 2)) + (failed > 0 ? I18n.T("{failed} 张无法读取。", ("failed", failed)) : "");
     }
 
@@ -456,7 +467,7 @@ public sealed partial class MainViewModel
                         };
                         return (await engine.CallAsync("exportImage", args, overlay?.Rgba)).Data;
                     });
-                    var name = global::OpenPixels.Desktop.Output.ExportName(photo.Name, used, settings.Template, index + 1, settings.Extension);
+                    var name = global::OpenPixels.Desktop.Output.ExportName(photo.ExportSource, used, settings.Template, index + 1, settings.Extension);
                     await File.WriteAllBytesAsync(Path.Combine(folder, name), bytes);
                     done++;
                 }
@@ -632,7 +643,7 @@ public sealed partial class MainViewModel
     /// <summary>Remembers the photos open now, to offer them again next time.</summary>
     private void SaveSession()
     {
-        if (Photos.Count > 0) _projects.Save(ProjectStore.LastSession, Photos.Select(photo => photo.Path));
+        if (Photos.Count > 0) _projects.Save(ProjectStore.LastSession, Photos.Select(photo => photo.Path).Distinct());
     }
 
     [RelayCommand]
@@ -640,7 +651,7 @@ public sealed partial class MainViewModel
     {
         var name = NewProjectName.Trim();
         if (name.Length == 0 || Photos.Count == 0) return;
-        _projects.Save(name, Photos.Select(photo => photo.Path));
+        _projects.Save(name, Photos.Select(photo => photo.Path).Distinct());
         NewProjectName = "";
         RefreshProjects();
         Status = I18n.T("已保存项目 {name}（{count} 张）", ("name", name), ("count", Photos.Count));

@@ -122,6 +122,19 @@ impl OutputSpace {
             .collect()
     }
 
+    /// Red, green, blue and white as xy chromaticities, in OpenEXR's order.
+    pub fn chromaticities(self) -> [f32; 8] {
+        let d = self.definition();
+        let [r, g, b] = d.primaries;
+        [r[0], r[1], g[0], g[1], b[0], b[1], d.white[0], d.white[1]].map(|v| v as f32)
+    }
+
+    /// Linear light for every 16-bit code value encoded in this space.
+    pub fn linear_table(self) -> Vec<f32> {
+        let transfer = self.definition().transfer;
+        (0..=u16::MAX).map(|code| transfer.decode(f64::from(code) / 65535.0) as f32).collect()
+    }
+
     /// How the develop shader is told to encode into this space.
     pub fn shader_code(self) -> f32 {
         match self {

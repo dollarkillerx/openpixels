@@ -42,6 +42,10 @@ fn srgb_to_linear(c: f32) -> f32 {
 /// Finds the exposure offset, in EV, that makes `linear` match `display`, an sRGB
 /// image of the same size in tightly packed RGB8. `None` if too little of the image
 /// is usable, as in a nearly black or blown-out frame.
+/// Sensor values above this are near clipping, where highlight reconstruction estimates
+/// the colour; the camera's JPEG made its own guess there, so neither says much.
+const NEAR_CLIP: f32 = 0.9;
+
 pub fn estimate_base_exposure(linear: &LinearImage, display: &[u8]) -> Option<f32> {
     let mut samples: Vec<(f32, f32)> = linear
         .pixels
@@ -53,7 +57,7 @@ pub fn estimate_base_exposure(linear: &LinearImage, display: &[u8]) -> Option<f3
             let [sr, sg, sb] = [shown[0], shown[1], shown[2]].map(|v| srgb_to_linear(f32::from(v) / 255.0));
             let target = 0.2126 * sr + 0.7152 * sg + 0.0722 * sb;
             // Deep shadows and clipped highlights say little about exposure.
-            (luma > 1e-4 && (0.03..0.85).contains(&target)).then_some((luma, target))
+            (luma > 1e-4 && r.max(g).max(b) < NEAR_CLIP && (0.03..0.85).contains(&target)).then_some((luma, target))
         })
         .collect();
     if samples.len() < MIN_SAMPLES {
@@ -223,7 +227,7 @@ fn colour_samples(linear: &LinearImage, display: &[u8]) -> Vec<([f32; 3], [f32; 
             let rgb = [0, 1, 2].map(|c| f16::from_bits(linear.pixels[at + c]).to_f32());
             let shown = [0, 1, 2].map(|c| srgb_to_linear(f32::from(display[at + c]) / 255.0));
             let brightest = shown[0].max(shown[1]).max(shown[2]);
-            if rgb.iter().all(|v| *v > 0.0) && (0.02..0.95).contains(&brightest) {
+            if rgb.iter().all(|v| *v > 0.0 && *v < NEAR_CLIP) && (0.02..0.95).contains(&brightest) {
                 samples.push((rgb, lab(shown)));
             }
         }

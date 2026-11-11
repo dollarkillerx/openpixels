@@ -46,7 +46,8 @@ public sealed partial class ExportViewModel : ObservableObject
 
     public string[] Formats { get; } = Output.Formats.Select(format => format.Label).ToArray();
     public string[] ColorSpaces { get; } = Output.ColorSpaces.Select(space => space.Label).ToArray();
-    public string[] BitDepths { get; } = [I18n.T("8 位"), I18n.T("16 位")];
+    public string[] BitDepths => IsExr ? [I18n.T("16 位半浮点"), I18n.T("32 位浮点")] : [I18n.T("8 位"), I18n.T("16 位")];
+    public string[] HdrHeadrooms { get; } = Output.HdrHeadrooms.Select(choice => choice.Label).ToArray();
     public string[] LongEdges { get; } = Output.LongEdges.Select(edge => edge == 0 ? I18n.T("原始尺寸") : I18n.T("长边 {edge} 像素", ("edge", edge))).ToArray();
     public string[] Positions { get; } = Output.Positions.Select(position => position.Label).ToArray();
     public string TemplateHint => I18n.T("可用 {name} 原文件名、{n} 序号、{date} 日期");
@@ -101,10 +102,31 @@ public sealed partial class ExportViewModel : ObservableObject
             Settings.Format = Output.Formats[Math.Clamp(value, 0, Output.Formats.Length - 1)].Value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsJpeg));
+            OnPropertyChanged(nameof(IsExr));
+            OnPropertyChanged(nameof(SupportsHdr));
+            OnPropertyChanged(nameof(BitDepths));
+            OnPropertyChanged(nameof(BitDepthIndex));
+            OnPropertyChanged(nameof(HdrHint));
         }
     }
 
     public bool IsJpeg => Settings.Format == "jpeg";
+    public bool IsExr => Settings.Format == "exr";
+    public bool SupportsHdr => Settings.SupportsHdr;
+
+    public int HdrIndex
+    {
+        get => Math.Max(0, Array.FindIndex(Output.HdrHeadrooms, choice => Math.Abs(choice.Value - Settings.HdrHeadroom) < 1e-6));
+        set
+        {
+            if (!SetProperty(HdrIndex, value, Settings, (s, v) => s.HdrHeadroom = Output.HdrHeadrooms[Math.Clamp(v, 0, Output.HdrHeadrooms.Length - 1)].Value)) return;
+            OnPropertyChanged(nameof(HdrHint));
+        }
+    }
+
+    public string HdrHint => !SupportsHdr || Settings.HdrHeadroom <= 1 ? ""
+        : IsJpeg ? I18n.T("Ultra HDR JPEG：普通屏幕显示 SDR，HDR 屏幕上高光更亮。RAW 的高光来自原始数据，其他照片只提亮接近白色的部分。")
+        : I18n.T("线性 EXR，高光保留到 SDR 白的 {ratio} 倍。", ("ratio", Settings.HdrHeadroom));
 
     public int Quality
     {
@@ -114,8 +136,8 @@ public sealed partial class ExportViewModel : ObservableObject
 
     public int BitDepthIndex
     {
-        get => Settings.BitDepth == 16 ? 1 : 0;
-        set => SetProperty(BitDepthIndex, value, Settings, (s, v) => s.BitDepth = v == 1 ? 16 : 8);
+        get => IsExr ? (Settings.BitDepth == 32 ? 1 : 0) : (Settings.BitDepth == 16 ? 1 : 0);
+        set => SetProperty(BitDepthIndex, value, Settings, (s, v) => s.BitDepth = IsExr ? (v == 1 ? 32 : 16) : (v == 1 ? 16 : 8));
     }
 
     public int ColorSpaceIndex

@@ -160,6 +160,7 @@ struct ExportSettings {
     long_edge: u32,
     bit_depth: u32,
     color_space: String,
+    hdr_headroom: f64,
     overwrite: bool,
 }
 
@@ -171,14 +172,25 @@ impl ExportSettings {
             Some("jpg" | "jpeg") | None | Some("") => "jpeg",
             Some("png") => "png",
             Some("tif" | "tiff") => "tiff",
-            Some(other) => return Err(format!("format {other} is not supported; use jpeg, png or tiff")),
+            Some("exr") => "exr",
+            Some(other) => return Err(format!("format {other} is not supported; use jpeg, png, tiff or exr")),
         };
-        let bit_depth = number(args, "bit_depth").map_or(8, |v| v as u32);
-        if bit_depth != 8 && bit_depth != 16 {
+        let bit_depth = number(args, "bit_depth").map_or(if format == "exr" { 16 } else { 8 }, |v| v as u32);
+        if format == "exr" && bit_depth != 16 && bit_depth != 32 {
+            return Err("EXR is written in 16-bit half or 32-bit floats".into());
+        }
+        if format != "exr" && bit_depth != 8 && bit_depth != 16 {
             return Err("bit_depth is 8 or 16".into());
         }
         if bit_depth == 16 && format == "jpeg" {
             return Err("JPEG is always 8-bit; use png or tiff for 16-bit".into());
+        }
+        let hdr_headroom = number(args, "hdr_headroom").unwrap_or(0.0);
+        if !(0.0..=16.0).contains(&hdr_headroom) {
+            return Err("hdr_headroom is 0 (off) up to 16".into());
+        }
+        if hdr_headroom > 1.0 && !matches!(format, "jpeg" | "exr") {
+            return Err("HDR needs jpeg (Ultra HDR) or exr".into());
         }
         let color_space = string(args, "color_space").unwrap_or("srgb").to_ascii_lowercase();
         if !["srgb", "p3", "adobe", "prophoto"].contains(&color_space.as_str()) {
@@ -190,6 +202,7 @@ impl ExportSettings {
             long_edge: number(args, "long_edge").map_or(0, |v| v.max(0.0) as u32),
             bit_depth,
             color_space,
+            hdr_headroom,
             overwrite: flag(args, "overwrite", false),
         })
     }
@@ -198,6 +211,7 @@ impl ExportSettings {
         match self.format {
             "jpeg" => "jpg",
             "png" => "png",
+            "exr" => "exr",
             _ => "tif",
         }
     }
@@ -463,7 +477,7 @@ impl Studio {
             self.call("developFull", Value::Null, &[])?;
         }
         let (size, _) = self.call("exportSize", json!({ "longEdge": settings.long_edge }), &[])?;
-        let request = json!({ "settings": { "format": settings.format, "quality": settings.quality, "longEdge": settings.long_edge, "bitDepth": settings.bit_depth, "colorSpace": settings.color_space } });
+        let request = json!({ "settings": { "format": settings.format, "quality": settings.quality, "longEdge": settings.long_edge, "bitDepth": settings.bit_depth, "colorSpace": settings.color_space, "hdrHeadroom": settings.hdr_headroom } });
         let (_, bytes) = self.call("exportImage", request, &[])?;
         write_file(path, &bytes)?;
         Ok(json!({ "path": path, "width": size["width"], "height": size["height"], "bytes": bytes.len(), "format": settings.format, "bitDepth": settings.bit_depth, "colorSpace": settings.color_space }))
@@ -569,10 +583,11 @@ pub fn tool_list() -> Value {
     let edit_object = json!({ "type": "object", "description": "Settings to change, as {key: number}; null resets a key. Keys and ranges come from list_settings.", "additionalProperties": { "type": ["number", "boolean", "null"] } });
     let curves_object = json!({ "type": "object", "description": "Tone curves to replace: {\"master\"|\"red\"|\"green\"|\"blue\": [[input, output], ...]} with values in 0..1; null or [] makes a channel straight.", "additionalProperties": { "type": ["array", "null"] } });
     let export_properties = json!({
-        "format": { "type": "string", "enum": ["jpeg", "png", "tiff"], "description": "Defaults to the file extension, else jpeg." },
+        "format": { "type": "string", "enum": ["jpeg", "png", "tiff", "exr"], "description": "Defaults to the file extension, else jpeg. exr writes linear light in floats." },
         "quality": { "type": "number", "minimum": 1, "maximum": 100, "description": "JPEG quality, default 92." },
         "long_edge": { "type": "number", "minimum": 0, "description": "Resize so the long edge is at most this many pixels; 0 (default) keeps the full size." },
-        "bit_depth": { "type": "number", "enum": [8, 16], "description": "16 needs png or tiff. Default 8." },
+        "bit_depth": { "type": "number", "enum": [8, 16, 32], "description": "16 needs png or tiff; exr is 16 (half, the default) or 32 (float). Default 8." },
+        "hdr_headroom": { "type": "number", "minimum": 0, "maximum": 16, "description": "HDR: how far above SDR white highlights may reach, as a ratio (4 is two stops). A jpeg becomes an Ultra HDR JPEG with a gain map; an exr keeps the highlights. 0 (default) is SDR only." },
         "color_space": { "type": "string", "enum": ["srgb", "p3", "adobe", "prophoto"], "description": "Default srgb, right for the web. Wide spaces keep colours outside sRGB." },
         "overwrite": { "type": "boolean", "description": "Replace existing files. Default false." }
     });

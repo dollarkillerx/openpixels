@@ -817,13 +817,39 @@ impl Renderer {
         adjustments: &Adjustments,
         tile_size: u32,
     ) -> Result<Vec<u16>, GpuError> {
+        Ok(self.export_deep(image, adjustments, tile_size, false).await?.0)
+    }
+
+    /// Like [`Self::export_rgb16`], with each pixel's HDR gain beside it as
+    /// `round(255 * log2(gain) / log2(headroom))`, repeated over three channels so it can
+    /// be framed and resized like the picture. `adjustments.hdr_headroom` sets the headroom.
+    pub async fn export_rgb16_with_gain(
+        &self,
+        image: &LinearImage,
+        adjustments: &Adjustments,
+        tile_size: u32,
+    ) -> Result<(Vec<u16>, Vec<u8>), GpuError> {
+        self.export_deep(image, adjustments, tile_size, true).await
+    }
+
+    async fn export_deep(
+        &self,
+        image: &LinearImage,
+        adjustments: &Adjustments,
+        tile_size: u32,
+        with_gain: bool,
+    ) -> Result<(Vec<u16>, Vec<u8>), GpuError> {
         let pass = self.deep_develop.get_or_init(|| {
             develop_pass(&self.device, DEEP_OUTPUT_FORMAT, &DEVELOP_SHADER.replace("rgba8unorm", "rgba32float"))
         });
-        let mut out = vec![0u16; image.width as usize * image.height as usize * 3];
+        let pixels = image.width as usize * image.height as usize;
+        let mut out = vec![0u16; pixels * 3];
+        let mut gain = if with_gain { vec![0u8; pixels * 3] } else { Vec::new() };
         let stride = image.width as usize * 3;
         self.export_tiles(image, adjustments, tile_size, pass, DEEP_OUTPUT_FORMAT, DEEP_OUTPUT_BYTES_PER_PIXEL, |row, x, y| {
-            let dst = &mut out[y * stride + x * 3..][..row.len() / 16 * 3];
+            let start = y * stride + x * 3;
+            let count = row.len() / 16 * 3;
+            let dst = &mut out[start..][..count];
             for (rgba, rgb) in row.chunks_exact(16).zip(dst.chunks_exact_mut(3)) {
                 for (bytes, value) in rgba.chunks_exact(4).zip(rgb.iter_mut()) {
                     let sample = f32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
@@ -831,9 +857,15 @@ impl Renderer {
                     *value = (sample.clamp(0.0, 1.0) * 65535.0).round() as u16;
                 }
             }
+            if with_gain {
+                for (rgba, code) in row.chunks_exact(16).zip(gain[start..][..count].chunks_exact_mut(3)) {
+                    let alpha = f32::from_ne_bytes([rgba[12], rgba[13], rgba[14], rgba[15]]);
+                    code.fill((alpha.clamp(0.0, 1.0) * 255.0).round() as u8);
+                }
+            }
         })
         .await?;
-        Ok(out)
+        Ok((out, gain))
     }
 
     /// Runs `pass` over the image tile by tile, calling `store` for each row of output
@@ -1844,6 +1876,44 @@ mod tests {
         let [r, g, _] = export_colour16(&renderer, p3_red, &edited);
         let srgb_red_in_p3 = export_colour16(&renderer, [1.0, 0.0, 0.0], &edited);
         assert!(r > srgb_red_in_p3[0] && g < srgb_red_in_p3[1], "{r} {g} vs {srgb_red_in_p3:?}");
+    }
+
+    #[test]
+    fn display_transforms_keep_mid_grey_and_white_and_agx_bleaches_bright_colour() {
+        let mut renderer = renderer();
+        renderer.set_base_exposure(Some(1.2));
+        // The sensor value that is scene mid grey once the base exposure lifts it.
+        let grey = 0.18 / 1.2f32.exp2();
+        let transforms: Vec<Adjustments> = (0..3).map(|t| Adjustments { display_transform: t as f32, ..Default::default() }).collect();
+        let standard_grey = export_colour16(&renderer, [grey; 3], &transforms[0])[0];
+        for adj in &transforms {
+            let mid = export_colour16(&renderer, [grey; 3], adj)[0];
+            assert!(mid.abs_diff(standard_grey) < 2600, "transform {}: mid grey {mid} vs {standard_grey}", adj.display_transform);
+            assert!(export_colour16(&renderer, [1.0; 3], adj)[0] > 64000, "transform {} reaches white", adj.display_transform);
+            let ramp: Vec<u16> = [0.002, 0.01, 0.05, 0.1, 0.3, 0.6, 1.0].map(|v| export_colour16(&renderer, [v; 3], adj)[0]).to_vec();
+            assert!(ramp.windows(2).all(|pair| pair[0] < pair[1]), "transform {}: {ramp:?}", adj.display_transform);
+        }
+        let red = [0.9, 0.08, 0.08];
+        let standard = export_colour16(&renderer, red, &transforms[0]);
+        let agx = export_colour16(&renderer, red, &transforms[1]);
+        assert!(agx[1] > standard[1], "AgX moves a bright red towards white: {agx:?} vs {standard:?}");
+    }
+
+    #[test]
+    fn an_hdr_export_lifts_only_the_highlights() {
+        let mut renderer = renderer();
+        renderer.set_base_exposure(Some(1.2));
+        let grey = f16::from_f32(0.18 / 1.2f32.exp2()).to_bits();
+        let clipped = f16::from_f32(1.0).to_bits();
+        let image = LinearImage::new(2, 1, vec![grey, grey, grey, clipped, clipped, clipped]);
+        let adj = Adjustments { hdr_headroom: 4.0, ..Default::default() };
+        let (rgb, gain) = pollster::block_on(renderer.export_rgb16_with_gain(&image, &adj, 64)).unwrap();
+        assert_eq!(gain.len(), rgb.len());
+        assert_eq!(gain[0], 0, "mid grey keeps its brightness");
+        assert_eq!(gain[3], 255, "a clipped highlight gets the full headroom");
+        // Without a headroom there is no gain to speak of, and the picture is the same.
+        let (sdr, _) = pollster::block_on(renderer.export_rgb16_with_gain(&image, &Adjustments::default(), 64)).unwrap();
+        assert_eq!(sdr, rgb);
     }
 
     #[test]

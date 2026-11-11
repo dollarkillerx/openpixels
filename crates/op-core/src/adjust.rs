@@ -125,6 +125,16 @@ pub struct Adjustments {
     pub film: [f32; 4],
     /// Printer lights in stops for red, green and blue; the fourth is unused.
     pub film_lights: [f32; 4],
+    /// How a RAW's scene light becomes a picture: 0 the standard curve, 1 AgX, 2 neutral
+    /// (after Khronos PBR Neutral). Other photos arrive as pictures and are not affected.
+    pub display_transform: f32,
+    /// Set only for an HDR export: how far above SDR white highlights may reach, as a
+    /// linear ratio (4 is two stops). The develop pass then writes each pixel's gain to
+    /// that rendition, as a fraction of `log2` of it, in alpha. 0 is off.
+    #[serde(skip)]
+    pub hdr_headroom: f32,
+    #[serde(skip)]
+    pub _display_padding: [f32; 2],
 }
 
 /// The white balance sliders' travel either way.
@@ -200,7 +210,7 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32 + 80 + 32);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32 + 80 + 32 + 16);
     }
 
     #[test]

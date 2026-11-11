@@ -7,6 +7,7 @@ pub mod demosaic;
 pub mod exif;
 pub mod film;
 pub mod geometry;
+pub mod hdr;
 pub mod heal;
 pub mod icc;
 pub mod input_profile;

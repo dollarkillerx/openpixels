@@ -187,17 +187,27 @@
                   </ToggleButton>
                   <TextBlock Text="{Binding VisibleCount}" Classes="label" VerticalAlignment="Center" />
                 </DockPanel>
+                <TextBox Text="{Binding SearchText}" IsVisible="{Binding SearchAvailable}" FontSize="12" Padding="8,5"
+                         PlaceholderText="{local:Tr '按内容搜索，如：海边日落、花、夜晚的街道'}" ToolTip.Tip="{local:Tr '用 SigLIP 2 按画面内容搜索，中文、英文、日文、韩文都可以'}" />
                 <UniformGrid Columns="2" ColumnSpacing="6" RowSpacing="6">
                   <ComboBox ItemsSource="{Binding RatingFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding RatingFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '按星级筛选'}" />
                   <ComboBox ItemsSource="{Binding FlagFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding FlagFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '按旗标筛选'}" />
                   <ComboBox ItemsSource="{Binding LabelFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding LabelFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '按色标筛选'}" />
                   <ComboBox ItemsSource="{Binding GroupFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding GroupFilterIndex}" HorizontalAlignment="Stretch" ToolTip.Tip="{local:Tr '先点“智能分组”'}" />
+                  <ComboBox ItemsSource="{Binding TagFilters}" FontSize="11" Padding="8,4,4,4" SelectedIndex="{Binding TagFilterIndex}" HorizontalAlignment="Stretch" IsVisible="{Binding SearchAvailable}"
+                            ToolTip.Tip="{local:Tr '自动标签，点“智能分组”后生成'}" />
                 </UniformGrid>
                 <UniformGrid Columns="2" ColumnSpacing="6">
                   <Button Content="{local:Tr '智能分组'}" Command="{Binding AnalyzeCommand}" IsEnabled="{Binding !IsBusy}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                           ToolTip.Tip="{local:Tr '按拍摄时间和画面相似度把同一时刻的照片分成组，并给每张评分'}" />
                   <Button Content="{local:Tr '自动选片'}" Command="{Binding AutoPickCommand}" IsEnabled="{Binding !IsBusy}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                           ToolTip.Tip="{local:Tr '每组选中最好的一张，淘汰明显失败的；已手动标记的不改'}" />
+                </UniformGrid>
+                <UniformGrid Columns="2" ColumnSpacing="6">
+                  <Button Content="{local:Tr '新建版本'}" Command="{Binding CreateVersionCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          ToolTip.Tip="{local:Tr '用同一张照片另做一个版本，各自保存调整，可分别导出'}" />
+                  <Button Content="{local:Tr '删除版本'}" Command="{Binding DeleteVersionCommand}" IsEnabled="{Binding CanDeleteVersion}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          ToolTip.Tip="{local:Tr '删除这个版本和它的调整，原照片不受影响'}" />
                 </UniformGrid>
                 <DockPanel IsVisible="{Binding LibraryStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                   <Button DockPanel.Dock="Right" Classes="ghost" Content="{local:Tr '取消'}" Command="{Binding CancelBatchCommand}" IsVisible="{Binding IsBusy}" MinHeight="22" Padding="6,1" FontSize="11" />
@@ -229,6 +239,8 @@
                         <TextBlock DockPanel.Dock="Right" Text="{Binding Stars}" FontSize="10" Foreground="#E5CB3A" Margin="4,0,0,0" />
                         <TextBlock Classes="name" Text="{Binding Name}" FontSize="11" Foreground="{StaticResource OpMutedBrush}" TextTrimming="CharacterEllipsis" />
                       </DockPanel>
+                      <TextBlock Text="{Binding TagText}" FontSize="10" Foreground="{StaticResource OpMutedBrush}" Opacity="0.75" Margin="2,-2,2,0" TextTrimming="CharacterEllipsis"
+                                 IsVisible="{Binding TagText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                   </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -236,13 +248,19 @@
             </DockPanel>
           </TabItem>
           <TabItem Header="{local:Tr '历史'}">
-            <ListBox Classes="list" ItemsSource="{Binding HistoryRows}" SelectedIndex="{Binding HistoryIndex}" Margin="0,4,0,0">
-              <ListBox.ItemTemplate>
-                <DataTemplate x:DataType="local:HistoryRow">
-                  <TextBlock Text="{Binding Label}" FontSize="12" />
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="12,8" IsVisible="{Binding HistoryHasBranches}"
+                         Text="{local:Tr '撤销后再修改会另开一个分支，原来的步骤保留在缩进的分支里，点击任意一步即可回到那里。'}" />
+              <ListBox Classes="list" ItemsSource="{Binding HistoryRows}" SelectedItem="{Binding SelectedHistoryRow}" Margin="0,4,0,0">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="local:HistoryRow">
+                    <TextBlock Margin="{Binding Indent}" Opacity="{Binding Opacity}" FontSize="12">
+                      <Run Text="{Binding BranchMark}" Foreground="{StaticResource OpMutedBrush}" /><Run Text="{Binding Label}" />
+                    </TextBlock>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
           </TabItem>
           <TabItem Header="{local:Tr '快照'}">
             <DockPanel Margin="12,8">
@@ -582,6 +600,10 @@
                   <DockPanel>
                     <TextBlock Text="{local:Tr '色彩配置'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
                     <ComboBox ItemsSource="{Binding CameraProfiles}" SelectedIndex="{Binding CameraProfileIndex}" IsEnabled="{Binding CameraProfileAvailable}" HorizontalAlignment="Stretch" />
+                  </DockPanel>
+                  <DockPanel ToolTip.Tip="{local:Tr 'RAW 的高光如何压进画面：标准保留色相，AgX 让亮的饱和色自然褪向白色，中性只压缩高光、不动中间调。'}">
+                    <TextBlock Text="{local:Tr '显示变换'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                    <ComboBox ItemsSource="{Binding DisplayTransforms}" SelectedIndex="{Binding DisplayTransformIndex}" IsEnabled="{Binding DisplayTransformAvailable}" HorizontalAlignment="Stretch" />
                   </DockPanel>
                   <CheckBox Content="{local:Tr '使用自动镜头校正'}" IsChecked="{Binding LensAuto}" IsEnabled="{Binding LensAutoAvailable}" />
                   <TextBlock Classes="hint" Text="{Binding LensStatus}" />

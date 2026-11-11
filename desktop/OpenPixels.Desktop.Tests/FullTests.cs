@@ -263,4 +263,109 @@ public sealed class FullTests : IDisposable
         await WaitFor(() => PixelAt(model, 0.25, 0.85).G > jacket.G + 5, "the clicked jacket brighter", model);
         Assert.True(Math.Abs(PixelAt(model, 0.9, 0.55).G - field.G) < 3, "the field stays");
     }
+
+    /// <summary>Uses a git-ignored RAW fixture when it is present.</summary>
+    [AvaloniaFact]
+    public async Task Display_transforms_keep_the_exposure_and_change_the_highlights()
+    {
+        var raw = Path.Combine(Root, "web/public/fixtures/real/DSC00395.ARW");
+        if (!File.Exists(raw)) return;
+        var (_, model) = await Open(raw);
+        Assert.True(model.DisplayTransformAvailable);
+        var frames = new List<byte[]>();
+        for (var index = 0; index < model.DisplayTransforms.Length; index++)
+        {
+            var before = frames.Count == 0 ? null : frames[^1];
+            model.DisplayTransformIndex = index;
+            Assert.Equal(index, (int)model.CurrentEdit.GetValueOrDefault("displayTransform"));
+            if (before is not null) await WaitFor(() => !Pixels(model).SequenceEqual(before), $"transform {index} drawn", model);
+            await Task.Delay(500);
+            frames.Add(Pixels(model));
+        }
+        // The overall brightness stays close; the renderings differ.
+        static double Luma(byte[] bgra) => Enumerable.Range(0, bgra.Length / 4).Average(i => 0.2126 * bgra[i * 4 + 2] + 0.7152 * bgra[i * 4 + 1] + 0.0722 * bgra[i * 4]);
+        var lumas = frames.Select(Luma).ToList();
+        Assert.True(lumas.Max() - lumas.Min() < 20, string.Join(", ", lumas));
+    }
+
+    private static byte[] Pixels(MainViewModel model)
+    {
+        var frame = (WriteableBitmap)model.Preview!;
+        using var locked = frame.Lock();
+        var bytes = new byte[locked.RowBytes * locked.Size.Height];
+        System.Runtime.InteropServices.Marshal.Copy(locked.Address, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    /// <summary>Uses a git-ignored RAW fixture when it is present.</summary>
+    [AvaloniaFact]
+    public async Task HDR_exports_write_an_ultra_hdr_jpeg_and_a_linear_exr()
+    {
+        var raw = Path.Combine(Root, "web/public/fixtures/real/DSC00395.ARW");
+        if (!File.Exists(raw)) return;
+        var (_, model) = await Open(raw);
+        var settings = new OutputSettings { Format = "jpeg", Quality = 90, LongEdge = 1600, HdrHeadroom = 4 };
+        var jpeg = await model.ExportToFolderAsync(settings, _folder);
+        Assert.NotNull(jpeg);
+        var bytes = await File.ReadAllBytesAsync(jpeg!);
+        var text = System.Text.Encoding.Latin1.GetString(bytes);
+        Assert.Contains("hdrgm:GainMapMax=\"2\"", text);
+        Assert.Contains("Item:Semantic=\"GainMap\"", text);
+        Assert.Contains("MPF\0", text);
+        // Two pictures: the SDR one and, after it, the gain map.
+        Assert.True(text.IndexOf("\xFF\xD8\xFF", 3, StringComparison.Ordinal) > 0);
+        using (var decoded = new Avalonia.Media.Imaging.Bitmap(jpeg!)) Assert.Equal(1600, Math.Max(decoded.PixelSize.Width, decoded.PixelSize.Height));
+
+        settings = new OutputSettings { Format = "exr", BitDepth = 16, LongEdge = 1600, HdrHeadroom = 4, ColorSpace = "p3" };
+        var exr = await model.ExportToFolderAsync(settings, _folder);
+        Assert.EndsWith(".exr", exr);
+        var header = await File.ReadAllBytesAsync(exr!);
+        Assert.Equal(new byte[] { 0x76, 0x2F, 0x31, 0x01 }, header[..4]);
+        Assert.Contains("chromaticities", System.Text.Encoding.Latin1.GetString(header, 0, 600));
+        if (Environment.GetEnvironmentVariable("OPENPIXELS_HDR_SAMPLES") is { Length: > 0 } samples)
+        {
+            Directory.CreateDirectory(samples);
+            File.Copy(jpeg!, Path.Combine(samples, "ultra-hdr.jpg"), true);
+            File.Copy(exr!, Path.Combine(samples, "linear.exr"), true);
+        }
+    }
+
+    /// <summary>Uses git-ignored sample photos and SigLIP 2 when they are present.</summary>
+    [AvaloniaFact]
+    public async Task The_library_finds_photos_by_description_in_any_language_and_tags_them()
+    {
+        var names = new[] { "lite/lake.jpg", "lite/flowers.jpg", "lite/building.jpg", "lite/night-noise.jpg", "people/06-outdoor.jpg" };
+        var paths = names.Select(name => Path.Combine(Root, "web/public/fixtures", name)).ToArray();
+        if (!paths.All(File.Exists) || !ImageSearch.Available) return;
+        var (_, model) = await Open(paths);
+        await model.Analyze();
+        PhotoItem Named(string name) => model.Photos.Single(photo => photo.Name == name);
+        Assert.Contains("花", Named("flowers.jpg").TagText);
+        Assert.Contains("湖泊", Named("lake.jpg").TagText);
+        Assert.Contains("建筑", Named("building.jpg").TagText);
+        Assert.Contains("夜景", Named("night-noise.jpg").TagText);
+
+        async Task<string> Top(string query)
+        {
+            model.SearchText = query;
+            await model.ApplySearchAsync();
+            return model.VisiblePhotos[0].Name;
+        }
+        Assert.Equal("flowers.jpg", await Top("花"));
+        Assert.Equal("flowers.jpg", await Top("flowers"));
+        Assert.Equal("night-noise.jpg", await Top("夜晚的城市"));
+        Assert.Equal("lake.jpg", await Top("湖と山"));
+        Assert.Equal("06-outdoor.jpg", await Top("웃는 여자"));
+        Assert.True(model.VisiblePhotos.Count < paths.Length, "a search hides what does not match");
+        await Top("");
+        Assert.Equal(paths.Length, model.VisiblePhotos.Count);
+
+        // The tag filter lists the tags in use; choosing one shows only its photos.
+        var flowers = model.TagFilters.ToList().FindIndex(name => name.StartsWith("花（", StringComparison.Ordinal));
+        Assert.True(flowers > 0, string.Join(", ", model.TagFilters));
+        model.TagFilterIndex = flowers;
+        Assert.Equal(["flowers.jpg"], model.VisiblePhotos.Select(photo => photo.Name));
+        model.TagFilterIndex = 0;
+        Assert.Equal(paths.Length, model.VisiblePhotos.Count);
+    }
 }

@@ -156,6 +156,33 @@ public sealed class UiTour
         await Shot(window, "16-snapshots");
         ShowTab(window, 0);
 
+        // History that branches: an edit after an undo keeps the undone step.
+        model.Slider("exposure").Value = 0.4;
+        await Task.Delay(1500);
+        model.Undo();
+        model.Slider("contrast").Value = 0.3;
+        await Task.Delay(300);
+        ShowTab(window, 1);
+        await Shot(window, "16b-history-branch");
+        ShowTab(window, 0);
+
+        // A version of the open photo, then search and tags.
+        model.CreateVersion();
+        await WaitFor(() => model.CanEdit && model.SelectedPhoto?.IsVersion == true);
+        model.Slider("saturation").Value = -1;
+        await Shot(window, "16c-version");
+        model.DeleteVersion();
+        await WaitFor(() => model.CanEdit && model.SelectedPhoto?.IsVersion == false);
+        if (ImageSearch.Available)
+        {
+            await model.Analyze();
+            model.SearchText = I18n.T("湖");
+            await model.ApplySearchAsync();
+            await Shot(window, "16d-search");
+            model.SearchText = "";
+            await model.ApplySearchAsync();
+        }
+
         // Batch 3: AI masks, local adjustments and retouching on real photos.
         model.SelectedPhoto = model.Photos[1];
         await WaitFor(() => model.CanEdit && model.Preview is not null);
@@ -268,6 +295,12 @@ public sealed class UiTour
         var export = new ExportWindow(model.Output, 2, model.Photos.Count);
         export.Show();
         await Shot(export, "17-export-dialog");
+        var settings = (ExportViewModel)export.DataContext!;
+        settings.HdrIndex = 2;
+        await Shot(export, "17b-export-hdr");
+        settings.FormatIndex = 3;
+        settings.BitDepthIndex = 1;
+        await Shot(export, "17c-export-exr");
         export.Close();
 
         // How fast the preview follows a slider on the RAW: each change waits for the next frame.
@@ -291,5 +324,56 @@ public sealed class UiTour
         await Task.Delay(800);
         await Shot(window, "18-small-window");
         File.WriteAllText(Path.Combine(Folder, "status.txt"), model.Status);
+    }
+
+    /// <summary>
+    /// The screenshots in the README, on CC0 photos so they can be published. Runs only when
+    /// OPENPIXELS_README_SHOTS names a folder; scripts/readme-screenshots.sh sets it.
+    /// </summary>
+    [AvaloniaFact]
+    public async Task Readme_screenshots()
+    {
+        if (Environment.GetEnvironmentVariable("OPENPIXELS_README_SHOTS") is not { Length: > 0 } folder) return;
+        Directory.CreateDirectory(folder);
+        Environment.SetEnvironmentVariable("OPENPIXELS_DATA_DIR", Path.Combine(Path.GetTempPath(), "openpixels-readme-" + Guid.NewGuid()));
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+        var photos = new[] { "web/public/fixtures/people/06-outdoor.jpg", "web/public/fixtures/lite/night-noise.jpg" }
+            .Select(path => Path.Combine(root, path)).ToArray();
+        if (!photos.All(File.Exists)) return;
+        async Task Save(Window window, string name)
+        {
+            await Task.Delay(1200);
+            Dispatcher.UIThread.RunJobs();
+            window.CaptureRenderedFrame()?.Save(Path.Combine(folder, name + ".png"));
+        }
+
+        var window = new MainWindow { Width = 1440, Height = 900 };
+        window.Show();
+        var model = (MainViewModel)window.DataContext!;
+        model.AddPhotos(photos);
+        await WaitFor(() => model.CanEdit && model.Preview is not null && model.Histogram is not null);
+        await WaitFor(() => model.Photos.All(photo => photo.Thumbnail is not null), 300);
+
+        // Kodak Portra 400 on its own paper, with 35mm grain.
+        Expand(window, I18n.T("风格滤镜"));
+        model.SelectedLook = model.LookChoices.Single(look => look.Id == 31);
+        model.Slider("filmGrain").Value = 0.6;
+        model.Slider("filmHalation").Value = 0.5;
+        await Save(window, "desktop-film");
+
+        if (AiModels.Segment.Available)
+        {
+            Expand(window, I18n.T("局部调整"));
+            await model.AddObjectLayerCommand.ExecuteAsync(null);
+            var from = model.StageOf(new UvPoint(0.25, 0.1));
+            var to = model.StageOf(new UvPoint(0.75, 0.98));
+            await model.ToolPressAsync(from.X, from.Y, false);
+            await model.ToolMoveAsync((from.X + to.X) / 2, (from.Y + to.Y) / 2);
+            await model.ToolMoveAsync(to.X, to.Y);
+            model.ToolRelease();
+            model.ShowMask = true;
+            await Task.Delay(1500);
+            await Save(window, "desktop-object-mask");
+        }
     }
 }

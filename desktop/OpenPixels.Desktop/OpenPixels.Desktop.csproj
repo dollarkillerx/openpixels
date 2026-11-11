@@ -24,6 +24,8 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <!-- Runs MODNet, SkyWater-Seg and LaMa for AI masks and AI erase. -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
+    <!-- SentencePiece, for the text SigLIP 2 reads when searching the library. -->
+    <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.1" />
   </ItemGroup>
 
   <!-- The engine is the Rust crate op-native, built by cargo and copied next to the app, with
@@ -79,6 +81,9 @@
     <!-- SAM 2.1: each graph and the weights file it names. -->
     <None Include="$(RepoRoot)web/public/models/sam/*.onnx;$(RepoRoot)web/public/models/sam/*.onnx_data"
           Link="models/sam/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- SigLIP 2, for searching the library and tagging photos. -->
+    <None Include="$(RepoRoot)web/public/models/siglip/*.onnx;$(RepoRoot)web/public/models/siglip/tokenizer.model"
+          Link="models/siglip/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- The Lensfun database (CC BY-SA 3.0), if scripts/fetch-lensfun.sh has fetched it. -->

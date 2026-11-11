@@ -18,6 +18,9 @@ const PROOF_LUT_SIZE: u32 = 33;
 /// Long edge of the renders that automatic tone measures.
 const AUTO_TONE_LONG_EDGE: u32 = 512;
 const EXPORT_TILE_SIZE: u32 = 2048;
+/// The most an HDR export lifts highlights above SDR white: four stops, as far as any
+/// display shows today.
+const MAX_HDR_HEADROOM: f32 = 16.0;
 /// The largest side of the full-resolution layer. Beyond this the proxy is detailed enough.
 const MAX_DETAIL_SIDE: f32 = 4096.0;
 /// Extra area developed around the view, so short pans do not need a new region.
@@ -86,6 +89,10 @@ struct OutputSettings {
     bit_depth: u32,
     #[serde(default)]
     color_space: OutputSpace,
+    /// How far above SDR white an HDR rendition may reach, as a linear ratio; 0 or 1 is SDR
+    /// only. A JPEG then becomes an Ultra HDR JPEG and an EXR keeps the highlights.
+    #[serde(default)]
+    hdr_headroom: f32,
 }
 
 /// A watermark raster and where it goes on the finished image.
@@ -737,7 +744,6 @@ impl Engine {
         let overlay = Overlay { rgba: &overlay, x: overlay_x, y: overlay_y, width: overlay_width, height: overlay_height };
 
         let space = settings.color_space;
-        let wide = settings.bit_depth == 16 && settings.format != OutputFormat::Jpeg;
         let icc = space.icc_profile();
         let mut exif = self.source_exif.clone();
         if space != OutputSpace::Srgb
@@ -746,6 +752,41 @@ impl Engine {
             mark_uncalibrated(exif);
         }
         let exif = exif.as_deref();
+        let hdr = settings.hdr_headroom > 1.0 && matches!(settings.format, OutputFormat::Jpeg | OutputFormat::Exr);
+        if hdr || settings.format == OutputFormat::Exr {
+            let headroom = if hdr { settings.hdr_headroom.min(MAX_HDR_HEADROOM) } else { 0.0 };
+            let adjustments = Adjustments { output_space: space.shader_code(), hdr_headroom: headroom, ..self.adjustments };
+            let (rgb, gain) = self.renderer.export_rgb16_with_gain(image, &adjustments, EXPORT_TILE_SIZE).await.map_err(to_error)?;
+            drop(developed);
+            let (finished, width, height) = self.finish(rgb, image_width, image_height, settings.long_edge, &overlay);
+            // The gain follows the picture through lens correction, framing and resizing, but
+            // takes no vignette, and is 1 under the watermark so it is not lit up.
+            let shadow: Vec<u8> = overlay.rgba.chunks_exact(4).flat_map(|p| [0, 0, 0, p[3]]).collect();
+            let shadow = Overlay { rgba: &shadow, ..overlay };
+            let gain = if hdr { Some(self.finish_plain(gain, image_width, image_height, settings.long_edge, &shadow).0) } else { None };
+            if settings.format == OutputFormat::Exr {
+                let table = space.linear_table();
+                let stops = headroom.max(1.0).log2() / 255.0;
+                let linear: Vec<f32> = finished
+                    .chunks_exact(3)
+                    .enumerate()
+                    .flat_map(|(index, pixel)| {
+                        let gain = gain.as_ref().map_or(1.0, |codes| (f32::from(codes[index * 3]) * stops).exp2());
+                        pixel.iter().map(|&code| table[usize::from(code)] * gain).collect::<Vec<_>>()
+                    })
+                    .collect();
+                drop(finished);
+                return Ok(op_core::hdr::encode_exr(&linear, width, height, settings.bit_depth == 32, space.chromaticities()));
+            }
+            let sdr: Vec<u8> = finished.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect();
+            drop(finished);
+            let primary = encode_jpeg(&sdr, width, height, settings.quality.clamp(1, 100), &icc, exif.map(<[u8]>::to_vec)).map_err(to_error)?;
+            let codes = gain.expect("an HDR export has a gain");
+            let (plane, map_width, map_height) = op_core::hdr::gain_map_plane(&codes, width, height, op_core::hdr::GAIN_MAP_REDUCTION);
+            let map = op_core::hdr::encode_gain_map(&plane, map_width, map_height).map_err(to_error)?;
+            return Ok(op_core::hdr::ultra_hdr_jpeg(&primary, &map, headroom));
+        }
+        let wide = settings.bit_depth == 16 && settings.format != OutputFormat::Jpeg;
 
         if wide || space != OutputSpace::Srgb {
             // The develop pass encodes into the space itself, so colours outside sRGB that
@@ -875,7 +916,17 @@ impl Engine {
 
     /// Applies, in the order the blit undoes them, the lens correction, liquify and
     /// framing, then the delivery size and the watermark.
+    /// Frames and resizes a buffer that is not a picture, such as an HDR gain, as
+    /// [`Self::finish`] does the picture, but without the vignette.
+    fn finish_plain<S: Sample>(&self, values: Vec<S>, width: u32, height: u32, long_edge: u32, overlay: &Overlay) -> (Vec<S>, u32, u32) {
+        self.finish_with(values, width, height, long_edge, overlay, false)
+    }
+
     fn finish<S: Sample>(&self, rgb: Vec<S>, width: u32, height: u32, long_edge: u32, overlay: &Overlay) -> (Vec<S>, u32, u32) {
+        self.finish_with(rgb, width, height, long_edge, overlay, true)
+    }
+
+    fn finish_with<S: Sample>(&self, rgb: Vec<S>, width: u32, height: u32, long_edge: u32, overlay: &Overlay, vignette: bool) -> (Vec<S>, u32, u32) {
         // Each stage drops its input, so a large export holds two copies at most.
         let lens = self.renderer.lens_map(&self.adjustments, width, height);
         let corrected = if lens.is_identity() {
@@ -895,7 +946,9 @@ impl Engine {
         };
         let (out_width, out_height) = fit_long_edge(frame_width, frame_height, long_edge);
         let mut finished = resize_rgb(framed, frame_width, frame_height, out_width, out_height);
-        post_crop_vignette(&mut finished, out_width, out_height, self.adjustments.post_crop_vignette);
+        if vignette {
+            post_crop_vignette(&mut finished, out_width, out_height, self.adjustments.post_crop_vignette);
+        }
         composite_overlay(&mut finished, out_width, out_height, overlay.rgba, overlay.x, overlay.y, overlay.width, overlay.height);
         (finished, out_width, out_height)
     }
@@ -971,6 +1024,7 @@ pub fn describe_profile(icc: &[u8]) -> Result<String> {
 
 fn encode_lossless<S: Sample>(format: OutputFormat, rgb: &[S], width: u32, height: u32, icc: &[u8], exif: Option<&[u8]>) -> Result<Vec<u8>> {
     match format {
+        OutputFormat::Exr => Err(EngineError::new("EXR is written from linear light")),
         OutputFormat::Png => encode_png(rgb, width, height, icc, exif).map_err(to_error),
         _ => Ok(encode_tiff(rgb, width, height, icc, exif)),
     }

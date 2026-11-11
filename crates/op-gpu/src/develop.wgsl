@@ -80,6 +80,12 @@ struct Adjustments {
     film: vec4<f32>,
     // Printer lights in stops.
     film_lights: vec4<f32>,
+    // 0 standard, 1 AgX, 2 neutral; see apply_base_look.
+    display_transform: f32,
+    // Export only: the HDR rendition's headroom, linear; 0 is SDR only.
+    hdr_headroom: f32,
+    display_padding_1: f32,
+    display_padding_2: f32,
 }
 
 struct Region {
@@ -201,6 +207,70 @@ fn apply_camera_matrix(rgb: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(region.camera_red.xyz, rgb), dot(region.camera_green.xyz, rgb), dot(region.camera_blue.xyz, rgb));
 }
 
+// Where scene mid grey lands in the standard transform, which the others keep, so
+// switching between them changes the rendering and not the exposure.
+fn standard_mid_grey(boost: f32) -> f32 {
+    return look_curve(0.18) / look_curve(boost);
+}
+
+// AgX-style: each channel through a sigmoid in log2 space, after the primaries are pulled
+// in towards grey and before they are pushed back out a little less, so bright saturated
+// colours bleach towards white the way film and the eye do instead of clipping to neon.
+const AGX_RANGE_BELOW_GREY = 10.0;
+const AGX_CONTRAST = 1.7;
+const AGX_INSET = 0.22;
+const AGX_OUTSET = 0.16;
+
+fn agx_sigmoid(t: vec3<f32>, k: f32) -> vec3<f32> {
+    let clamped = clamp(t, vec3<f32>(1e-5), vec3<f32>(1.0 - 1e-5));
+    return 1.0 / (1.0 + k * pow((1.0 - clamped) / clamped, vec3<f32>(AGX_CONTRAST)));
+}
+
+fn apply_agx(scaled: vec3<f32>, boost: f32) -> vec3<f32> {
+    let inset = mix(scaled, vec3<f32>(dot(scaled, LUMA)), AGX_INSET);
+    let low = log2(0.18) - AGX_RANGE_BELOW_GREY;
+    // White sits half a stop above a clipped photosite, so clipping rolls off instead of hitting a wall.
+    let high = log2(max(boost, 0.36)) + 0.5;
+    let position = (log2(max(inset, vec3<f32>(1e-10))) - low) / (high - low);
+    let grey_at = (log2(0.18) - low) / (high - low);
+    // The sigmoid works on display-encoded values, which are then made linear again.
+    let grey_encoded = pow(standard_mid_grey(boost), 1.0 / TONE_GAMMA);
+    let k = (1.0 / grey_encoded - 1.0) / pow((1.0 - grey_at) / grey_at, AGX_CONTRAST);
+    let white_at = (log2(boost) - low) / (high - low);
+    let white = agx_sigmoid(vec3<f32>(white_at), k).x;
+    let display = pow(agx_sigmoid(position, k) / white, vec3<f32>(TONE_GAMMA));
+    let luma = dot(display, LUMA);
+    return (display - AGX_OUTSET * luma) / (1.0 - AGX_OUTSET);
+}
+
+// After Khronos PBR Neutral (Apache-2.0): colours below the shoulder are left exactly as
+// they are, and only highlights are compressed and desaturated. Suits products and skin.
+const NEUTRAL_SHOULDER = 0.76;
+const NEUTRAL_DESATURATION = 0.15;
+
+fn neutral_curve(input: vec3<f32>) -> vec3<f32> {
+    let lowest = min(min(input.r, input.g), input.b);
+    let offset = select(0.04, lowest - 6.25 * lowest * lowest, lowest < 0.08);
+    var c = input - offset;
+    let peak = max(max(c.r, c.g), c.b);
+    if peak < NEUTRAL_SHOULDER {
+        return c;
+    }
+    let d = 1.0 - NEUTRAL_SHOULDER;
+    let new_peak = 1.0 - d * d / (peak + d - NEUTRAL_SHOULDER);
+    c *= new_peak / peak;
+    let g = 1.0 - 1.0 / (NEUTRAL_DESATURATION * (peak - new_peak) + 1.0);
+    return mix(c, vec3<f32>(new_peak), g);
+}
+
+fn apply_neutral(scaled: vec3<f32>, boost: f32) -> vec3<f32> {
+    // Scaled so mid grey lands where the standard transform puts it, then so a clipped
+    // photosite still reaches white.
+    let gain = (standard_mid_grey(boost) + 0.04) / 0.18;
+    let white = neutral_curve(vec3<f32>(boost * gain)).x;
+    return neutral_curve(scaled * gain) / white;
+}
+
 // Turns sensor-referred RAW data into a display-referred image.
 fn apply_base_look(rgb: vec3<f32>) -> vec3<f32> {
     if region.has_base_look == 0.0 {
@@ -208,6 +278,12 @@ fn apply_base_look(rgb: vec3<f32>) -> vec3<f32> {
     }
     let boost = pow(2.0, region.base_exposure);
     let scaled = rgb * boost;
+    if adj.display_transform == 1.0 {
+        return apply_agx(scaled, boost);
+    }
+    if adj.display_transform == 2.0 {
+        return apply_neutral(scaled, boost);
+    }
     let peak = max(max(max(scaled.r, scaled.g), scaled.b), 1e-5);
     // Curving the peak keeps hue; curving each channel desaturates bright colours as
     // film does. A blend of the two avoids both neon highlights and hue shifts.
@@ -706,6 +782,28 @@ fn encode_output(display: vec3<f32>) -> vec3<f32> {
     return select(pow(c, vec3<f32>(1.0 / 1.8)), c * 16.0, c < vec3<f32>(1.0 / 512.0));
 }
 
+// For an HDR export: how much brighter than the SDR picture this pixel is in the HDR
+// rendition, as log2 of the gain over log2 of the headroom (so 0..1, kept in alpha).
+// The HDR picture is the SDR one times this gain, so every edit carries over, and only
+// the highlights rise: mid grey and below keep a gain of 1.
+fn hdr_gain_code(scene_peak: f32, display: vec3<f32>) -> f32 {
+    if adj.hdr_headroom <= 1.0 {
+        return 1.0;
+    }
+    var position: f32;
+    if region.has_base_look != 0.0 {
+        // From 1.5 stops above mid grey up to a clipped photosite, measured in the scene.
+        let start = log2(0.18) + 1.5;
+        let end = max(region.base_exposure, start + 1.0);
+        position = clamp((log2(max(scene_peak, 1e-6)) - start) / (end - start), 0.0, 1.0);
+    } else {
+        // A finished picture only says how bright it looks; lift what is near white.
+        let luma = dot(srgb_to_linear(clamp(display, vec3<f32>(0.0), vec3<f32>(1.0))), LUMA);
+        position = clamp((luma - 0.45) / 0.55, 0.0, 1.0);
+    }
+    return position * position;
+}
+
 // 16 * 16 = 256 invocations, the WebGPU default limit per workgroup.
 // A replacement image at a whole-image position, filling the frame without stretching
 // and showing the centre of what does not fit.
@@ -791,6 +889,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb = white_balance(rgb);
     let scene_gain = pow(2.0, adj.exposure + adj.background_exposure * background + local_values.x);
     rgb *= scene_gain;
+    // A RAW knows how far past SDR white its highlights went; read it before the look compresses them.
+    let scene_peak = max(max(rgb.r, rgb.g), rgb.b) * pow(2.0, region.base_exposure);
     rgb = apply_base_look(rgb);
     // The surround maps are made from the uncorrected proxy, so they get the lens light
     // correction here to stay comparable with the pixel.
@@ -817,5 +917,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let layer = min(u32(max(adj.local_overlay, 1.0)) - 1u, 3u);
         display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);
     }
-    textureStore(target_image, id.xy, vec4<f32>(encode_output(display), 1.0));
+    textureStore(target_image, id.xy, vec4<f32>(encode_output(display), hdr_gain_code(scene_peak, display)));
 }

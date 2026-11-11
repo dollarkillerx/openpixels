@@ -83,6 +83,7 @@ pub fn catalogue() -> Vec<Setting> {
         setting("calibrationBlueHue", "calibration", -1.0, 1.0, ""),
         setting("calibrationBlueSat", "calibration", -1.0, 1.0, ""),
         Setting { whole: true, ..setting("cameraProfile", "profile", 0.0, 1.0, "1 uses the colour fitted to the camera's own JPEG (RAW files the engine knows).") },
+        Setting { whole: true, ..setting("displayTransform", "profile", 0.0, 2.0, "How a RAW's highlights are rendered: 0 standard, 1 AgX (bright saturated colours fade to white), 2 neutral (midtones untouched, only highlights compressed). No effect on JPEG, PNG or TIFF.") },
         Setting { whole: true, ..setting("lensAuto", "lens", 0.0, 1.0, "1 applies the lens corrections stored in the file.") },
         setting("lensDistortion", "lens", -1.0, 1.0, "Manual distortion correction."),
         setting("lensVignette", "lens", -1.0, 1.0, "Manual lens vignetting correction."),

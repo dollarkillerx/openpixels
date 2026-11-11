@@ -2,6 +2,8 @@
 
 开源、Web 优先的修图工具，对标 Lightroom Classic 和像素蛋糕。核心用 Rust 编写，同时编译到 WASM（浏览器）和原生（桌面）；浏览器版用 WebGPU 实时渲染。照片只在本机处理，不上传，也不修改原图。
 
+![网页 Lite 版：Kodak Portra 400 胶卷滤镜](docs/screenshots/web-lite.jpg)
+
 ## 两个版本
 
 | 版本 | 形态 | 功能 |
@@ -122,6 +124,10 @@ pnpm --dir web dev
 
 ## 桌面版
 
+![桌面版：胶片模拟，Kodak Portra 400 配 Endura 相纸](docs/screenshots/desktop-film.jpg)
+
+![桌面版：用 SAM 2.1 框选对象，显示蒙版](docs/screenshots/desktop-object-mask.jpg)
+
 桌面版用 Avalonia 12 和 .NET 10，引擎是同一套 Rust 代码：`op-native` 编成动态库，C# 通过 P/Invoke 调用一个入口 `op_engine_call`（方法名、JSON 参数、字节数据）。构建 C# 工程时会自动调用 `scripts/build-native.sh` 编译 Rust 部分。
 
 ```bash
@@ -139,10 +145,14 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - **调色**：白平衡和吸管，影调、可自由加点的曲线（背后显示直方图）和参数曲线，HSL，颜色混合点，色调分离色轮，色彩与效果，校准，智能调色。
 - **滤镜**：28 种经典胶卷滤镜和 24 种内置风格滤镜，与网页版效果一致；可导入 `.cube` LUT。
 - **胶片模拟**：选中胶卷滤镜后，负片可以配任意相纸或电影拷贝片（Endura、Crystal Archive、Vision 2383/2393、Eterna-CP、Polymax 黑白相纸等 14 种），并调胶片曝光和印片机的红、绿、蓝光；颗粒按每种胶卷的 RMS 颗粒度加在负片密度上，光晕（halation）让高光周围泛红；两者都随 16mm、35mm、70mm 画幅变化。反转片直接放映，没有印放。负片和相纸各是一张 LUT，在着色器里实时组合；默认设置下与网页版的同名滤镜一致。
+- **高光重建**：RAW 中一两个通道过曝时，按未过曝的通道补回，天空和皮肤的高光保留层次和颜色；全部过曝的地方显示为中性白，不再偏粉。预览和导出用同一套冲洗方法，结果一致。
 - **相机与镜头**：相机匹配色彩配置，文件内的镜头数据或 Lensfun 镜头库自动校正，手动镜头校正和透视矫正。
+- **显示变换**：RAW 的场景光怎样变成画面，可选标准、AgX（亮的饱和色自然褪向白色，不会变成荧光色）和中性（参照 Khronos PBR Neutral，中间调不变，只压缩高光）。三者中灰亮度一致，切换时只改变高光的处理方式，不改变曝光。
 - **构图**：裁剪（固定比例或自由）、旋转、90° 转向。
-- **历史**：撤销、重做、历史记录和快照。
+- **历史**：撤销、重做、历史记录和快照。撤销后再修改会另开分支，原来的步骤保留在历史里，可以随时回去。
 - **选片**：星标、旗标、色标及筛选，网格视图，多选；智能分组（按拍摄时间和画面相似度）和自动选片；有人脸时按最大的人脸判断清晰度，并识别闭眼。
+- **按内容搜索和自动标签**：用 SigLIP 2 按画面内容找照片，中文、英文、日文、韩文都可以（如“海边的日落”“花”“夜晚的城市”），结果按相关度排序；同时给照片打上风景、人像、夜景、建筑、花等标签，可按标签筛选。索引在“智能分组”时一并建立，每张约 0.1 秒，之后搜索不必再读照片。
+- **版本**：同一张照片可另建版本（类似 Lightroom 的虚拟副本，`⌘'` / `Ctrl+'`），各自保存调整、局部图层和修饰，导出时文件名加 `-v2` 等。
 - **预设与同步**：预设、复制粘贴设置、同步到选中或全部，裁剪等只属于一张照片的设置不会带过去。
 - **批量导出**：导出选中的或列表里的全部照片，在后台进行，不影响继续修图。
 - **软打样**：直接列出系统里的 ICC 配置（macOS 的 ColorSync 目录、Windows 和 Linux 的系统目录），也可导入；可选渲染方式、纸张和油墨模拟、色域警告。
@@ -153,6 +163,7 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - **人像**：自动识别人脸（MediaPipe 的 BlazeFace 和 Face Mesh，ONNX 版），只对皮肤磨皮、祛斑，避开眼睛、眉毛和嘴唇；找不到完整人脸时按画面中的肤色处理。
 - **完整版功能**：液化（推动、膨胀、收缩）、换背景和换天（内置或导入图片，可调融合、亮度、位置和前景融合）、追色（用照片库里的照片或任意图片作参考，RAW 也可以）。
 - **导出**：JPEG、8/16 位 PNG 和 TIFF，四种色彩空间，尺寸、质量、文件名规则、文字或图片水印，导出预设。
+- **HDR 导出**：JPEG 可存为 Ultra HDR，即 SDR 画面加一张增益图，高光可比 SDR 白亮 1–3 档。普通屏幕显示 SDR，支持 HDR 的屏幕和浏览器会把高光提亮；macOS 的 ImageIO 能识别其中的增益图。RAW 的高光按原始数据提亮，其他照片只提亮接近白色的部分。另可导出 OpenEXR（16 位半浮点或 32 位浮点，ZIP 压缩），内容是所选色彩空间的线性光并标注原色，开启 HDR 时保留超过 1 的高光。
 
 修图参数、快照、导入的 LUT 和导出设置保存在用户数据目录，可用 `OPENPIXELS_DATA_DIR` 指定。编辑参数的键与网页版相同。Lensfun 镜头库需要先运行 `scripts/fetch-lensfun.sh`，构建时会一起复制。
 
@@ -174,7 +185,7 @@ GitHub Actions 的“Desktop packages”工作流会在四个系统上打包并�
 
 快捷键：`⌘Z` / `⇧⌘Z` 撤销和重做（Windows 用 `Ctrl+Z` / `Ctrl+Y`），`⌘O` 打开，`⌘E` 导出，`⇧⌘C` / `⇧⌘V` 复制和粘贴设置，`0`–`5` 星标，`6`–`9` 色标，`P` / `X` / `U` 旗标，`G` / `E` 网格和单张，`Z` 缩放，`J` 溢出警告，`R` 裁剪，`W` 白平衡吸管，`S` 软打样，按住 `\` 看修图前，`←` / `→` 切换照片，`Esc` 退出当前工具。
 
-AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同（对象蒙版的 SAM 2.1 只用于桌面版），需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
+AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同（对象蒙版的 SAM 2.1 和搜索用的 SigLIP 2 只用于桌面版），需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
 
 ## AI 代理（MCP）
 
@@ -219,7 +230,7 @@ Claude Desktop 在 `claude_desktop_config.json` 里加 `{"mcpServers": {"openpix
 | `heal_spot` / `clear_heals` | 污点修复 |
 | `preview` | 返回 JPEG 预览图；`show: compare` 前后对比，`region` 看局部 |
 | `analyze` | 亮度分位数、高光溢出和暗部死黑比例、色偏、饱和度、直方图 |
-| `export_photo` | 全分辨率导出 JPEG、8/16 位 PNG 和 TIFF，四种色彩空间 |
+| `export_photo` | 全分辨率导出 JPEG（可为 Ultra HDR）、8/16 位 PNG 和 TIFF、16/32 位浮点 OpenEXR，四种色彩空间 |
 | `save_edit` | 把参数存为照片旁的 `<照片名>.openpixels.json`，下次打开自动读入 |
 | `batch_export` | 给一组照片或整个文件夹套用同一组参数（可加智能调色）并导出 |
 
@@ -270,7 +281,11 @@ pnpm --dir web test
 dotnet test desktop/OpenPixels.Desktop.Tests
 ```
 
-`op-gpu` 的测试需要本机有可用的 GPU。曲线在 Rust 和 TypeScript 中各有一份实现，两边的测试都对照 `crates/op-core/src/curve_cases.json`，保证画出来的曲线和实际效果一致。
+`op-gpu` 的测试需要本机有可用的 GPU。
+
+`docs/screenshots` 里的截图用 `scripts/readme-screenshots.sh` 重新生成：桌面版的由无窗口运行的程序截取，Lite 版的需要先启动 `pnpm --dir web dev:lite --port 5174`，并装有 Chrome。截图里的照片是 Priscilla Du Preez 发布的 CC0 作品，在 `web/public/fixtures` 中（不进版本库）。
+
+曲线在 Rust 和 TypeScript 中各有一份实现，两边的测试都对照 `crates/op-core/src/curve_cases.json`，保证画出来的曲线和实际效果一致。
 
 ## 已知限制
 
@@ -280,6 +295,7 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - 网页无法读取系统的 ICC 文件，软打样需要手动导入配置。
 - 桌面版目前只在 macOS 上测试过；Windows 和 Linux 的 HEIC 走 libheif，还没有在这两个系统上实测。
 - AI 消除单线程运行，一次约 10–20 秒。
+- 桌面版还不能在屏幕上直接预览 HDR：Avalonia 的画布只输出 SDR。HDR 效果要导出 Ultra HDR JPEG 后，在支持 HDR 的屏幕上查看。
 
 ## 贡献约定：第三方代码
 
@@ -290,11 +306,13 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - 24 种内置风格滤镜按公开的影调特征自行调制，不是任何厂商的官方配方，名称不使用胶片厂商的商标。
 - 经典胶卷滤镜用 `scripts/generate-film-looks.py` 生成，数据和光谱模拟来自 [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut)（MIT），许可证和来源版本见 `web/public/film-looks/NOTICE.txt`。滤镜名直接用胶卷型号，只说明模拟的是哪种胶卷；Kodak、Fujifilm、Agfa 等是各自的商标，本项目与它们无关。生成好的 LUT 已提交，构建时不需要 Python。
 - [AlcedoStudio](https://github.com/zidage/AlcedoStudio) 和 [spektrafilm](https://github.com/andreavolpato/spektrafilm) 是 GPL-3.0，只参考功能思路，不复制代码和素材。
+- AgX 和中性显示变换按公开描述的方法自行实现：中性参照 Khronos PBR Neutral 规范（Apache-2.0），AgX 没有复制 Blender（GPL）的代码或矩阵常量。Ultra HDR 按 Google 公开的格式说明和 Adobe 的 `hdrgm` 元数据命名空间编写，没有使用 libultrahdr 的代码。
 - 引入模型前要分别核对代码和权重的许可证，两者经常不同。
 - LaMa 的代码和 ONNX 导出都标注 Apache-2.0，但没有单独说明权重。商业发布前要核实其训练数据（Places2）的使用条款。
 - Canon、Nikon、Fuji 等 RAW 的自动镜头校正用 [Lensfun](https://github.com/lensfun/lensfun) 数据库（CC BY-SA 3.0）。只用数据，不用其 LGPL 代码；转换后的 `web/public/lensfun/lensfun.json` 要按同样的许可证分发并署名，说明在同目录的 `NOTICE.txt`。
 - 换天用 [SkyWater-Seg](https://huggingface.co/Realcat/skywater_seg)，仓库标注 MIT，但它用 ADE20K 训练，商业发布前要核实该数据集的使用条款。
 - HEIC 解码：网页版使用 [libheif-js](https://github.com/catdad-experiments/libheif-js)（LGPL-3.0），作为独立文件按需加载；桌面版在 Windows 上随包附带 [libheif](https://github.com/strukturag/libheif) 和 [libde265](https://github.com/strukturag/libde265)（均为 LGPL-3.0，动态加载，许可证放在 `licenses/`），只装解码所需部分，不含 GPL 的 x265 编码器。HEVC 涉及专利授权，商业发布前要单独评估。
+- 按内容搜索用 Google 的 [SigLIP 2](https://huggingface.co/google/siglip2-base-patch16-224)（base，patch16-224），代码和权重都是 Apache-2.0；ONNX 版（int8）来自 [onnx-community/siglip2-base-patch16-224-ONNX](https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX)，该仓库没有另写许可证，按原权重的 Apache-2.0 分发。分词用 [Microsoft.ML.Tokenizers](https://github.com/dotnet/machinelearning)（MIT）。
 - 对象蒙版用 Meta 的 [SAM 2.1](https://github.com/facebookresearch/sam2) Hiera Small，代码和权重都是 Apache-2.0；ONNX 版来自 [onnx-community/sam2.1-hiera-small-ONNX](https://huggingface.co/onnx-community/sam2.1-hiera-small-ONNX)，该仓库没有另写许可证，按原权重的 Apache-2.0 分发。
 - 人脸模型是 MediaPipe 的 BlazeFace（短距离）和 Face Mesh V2，使用 [fernandotonon](https://huggingface.co/fernandotonon) 转换的 ONNX 版（Apache-2.0）。
 - 测试素材放在不进版本库的 `web/public/fixtures/`，其中的系统 ICC 配置和网上下载的照片不随项目分发。

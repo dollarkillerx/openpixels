@@ -11,7 +11,7 @@
       <TextBlock Text="{local:Tr '导出哪些'}" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1" ItemsSource="{Binding Scopes}" SelectedIndex="{Binding ScopeIndex}" Width="200" />
     </Grid>
-    <Grid ColumnDefinitions="96,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
+    <Grid ColumnDefinitions="96,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
       <TextBlock Text="{local:Tr '导出预设'}" VerticalAlignment="Center" />
       <StackPanel Grid.Column="1" Spacing="6">
         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -39,11 +39,16 @@
       <TextBlock Grid.Row="4" Text="{local:Tr '色彩空间'}" VerticalAlignment="Center" />
       <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding ColorSpaces}" SelectedIndex="{Binding ColorSpaceIndex}" Width="170" />
 
-      <TextBlock Grid.Row="5" Text="{local:Tr '尺寸'}" VerticalAlignment="Center" />
-      <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{Binding LongEdges}" SelectedIndex="{Binding LongEdgeIndex}" Width="170" />
+      <TextBlock Grid.Row="5" Text="HDR" VerticalAlignment="Center" IsVisible="{Binding SupportsHdr}" />
+      <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{Binding HdrHeadrooms}" SelectedIndex="{Binding HdrIndex}" Width="170" IsVisible="{Binding SupportsHdr}" />
+      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding HdrHint}" FontSize="11" Foreground="#8a8a92" TextWrapping="Wrap"
+                 IsVisible="{Binding HdrHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-      <TextBlock Grid.Row="6" Text="{local:Tr '文件名'}" VerticalAlignment="Center" />
-      <StackPanel Grid.Row="6" Grid.Column="1" Spacing="2">
+      <TextBlock Grid.Row="7" Text="{local:Tr '尺寸'}" VerticalAlignment="Center" />
+      <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{Binding LongEdges}" SelectedIndex="{Binding LongEdgeIndex}" Width="170" />
+
+      <TextBlock Grid.Row="8" Text="{local:Tr '文件名'}" VerticalAlignment="Center" />
+      <StackPanel Grid.Row="8" Grid.Column="1" Spacing="2">
         <TextBox Text="{Binding Template}" />
         <TextBlock Text="{Binding TemplateHint}" FontSize="11" Foreground="#8a8a92" TextWrapping="Wrap" />
       </StackPanel>

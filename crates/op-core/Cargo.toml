@@ -8,6 +8,8 @@ rust-version.workspace = true
 [dependencies]
 bytemuck.workspace = true
 flashraw.workspace = true
+# OpenEXR's ZIP compression; pure Rust, so it builds for the browser too.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 half.workspace = true
 image.workspace = true
 serde.workspace = true

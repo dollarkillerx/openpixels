@@ -134,9 +134,17 @@ fn linearise_rgb16(rgb: &[u16], profile: Option<&InputProfile>) -> Vec<u16> {
 fn open_raw(bytes: &[u8]) -> Result<Opened, DecodeError> {
     let raw = FlashRaw::open(bytes)?;
     let camera = raw.metadata().camera().to_string();
-    let working = decode_linear(&raw, Demosaic::HalfSize)?;
-    // Half-size output rounds down, so this can be one pixel short of the final size.
-    let (width, height) = (working.width * 2, working.height * 2);
+    // Developed the way export develops, highlight reconstruction included, so the preview
+    // matches the file; layouts without their own demosaicing use the decoder's half size.
+    let (working, (width, height)) = match DevelopJob::start(bytes)? {
+        Some(job) => (job.binned(), job.size()),
+        None => {
+            let working = decode_linear(&raw, Demosaic::HalfSize)?;
+            // Half-size output rounds down, so this can be one pixel short of the final size.
+            let size = (working.width * 2, working.height * 2);
+            (working, size)
+        }
+    };
     let lens = LensProfile::from_file(bytes);
     let lens_query = lens.is_none().then(|| lens_query(&raw, bytes, &camera)).flatten();
     let pair = embedded_comparison(&raw, &working);
@@ -219,6 +227,51 @@ pub fn develop_raw_full(bytes: &[u8]) -> Result<LinearImage, DecodeError> {
 pub struct TileRecipe {
     pub cfa: Cfa,
     pub matrix: [[f32; 3]; 3],
+    /// Where each white-balanced camera channel clips: its white balance gain.
+    #[serde(default = "unit_clip")]
+    pub clip: [f32; 3],
+}
+
+fn unit_clip() -> [f32; 3] {
+    [1.0; 3]
+}
+
+/// How far below its clip level a channel starts being treated as clipped, so the
+/// reconstruction fades in instead of leaving an edge.
+const RECONSTRUCT_FROM: f32 = 0.9;
+
+/// Highlight reconstruction for white-balanced camera RGB. Where one or two channels hit
+/// the sensor's limit, the true value was at least that much; each clipped channel is
+/// raised towards what the unclipped ones suggest for a near-neutral highlight, which keeps
+/// detail and colour in skies and skin that would otherwise go flat or tinted. Where all
+/// three clipped nothing is known, and the pixel becomes a neutral as bright as its
+/// brightest channel, rather than the pink that unequal clip levels would give.
+pub fn reconstruct_highlights(rgb: [f32; 3], clip: [f32; 3]) -> [f32; 3] {
+    let v: [f32; 3] = std::array::from_fn(|c| rgb[c].clamp(0.0, clip[c]));
+    let weight: [f32; 3] = std::array::from_fn(|c| {
+        let t = ((v[c] / clip[c] - RECONSTRUCT_FROM) / (1.0 - RECONSTRUCT_FROM)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    });
+    let peak = v[0].max(v[1]).max(v[2]);
+    let mut out = v;
+    for c in 0..3 {
+        if weight[c] == 0.0 {
+            continue;
+        }
+        // The other channels, each counting as much as it is unclipped.
+        let (mut total, mut trust) = (0.0, 0.0);
+        for other in (0..3).filter(|&other| other != c) {
+            let unclipped = 1.0 - weight[other];
+            total += v[other] * unclipped;
+            trust += unclipped;
+        }
+        let estimate = if trust > 1e-3 { total / trust } else { peak };
+        // Blends from what was measured to the estimate, and never lowers the measurement.
+        let all_clipped = 1.0 - trust / 2.0;
+        let target = estimate * (1.0 - all_clipped) + peak * all_clipped;
+        out[c] = v[c] + weight[c] * (target - v[c]).max(0.0);
+    }
+    out
 }
 
 /// One piece of a job, with the larger block of sensor data it needs as context.
@@ -276,9 +329,10 @@ impl DevelopJob {
             }
         }
 
-        let output = vec![0u16; crop.width as usize * crop.height as usize * 3];
+        // Made when the first tile is stored, so a job used only for the preview never holds it.
+        let output = Vec::new();
         Ok(Some(Self {
-            recipe: TileRecipe { cfa, matrix },
+            recipe: TileRecipe { cfa, matrix, clip: [gains[0], gains[1], gains[2]] },
             mosaic,
             sensor_width: width,
             sensor_height: height,
@@ -318,11 +372,63 @@ impl DevelopJob {
     /// Stores a finished tile: interleaved RGB half-float bits, `width * height * 3` long.
     pub fn store_tile(&mut self, tile: &DevelopTile, rgb: &[u16]) {
         let crop_width = self.crop.width as usize;
+        if self.output.is_empty() {
+            self.output = vec![0u16; crop_width * self.crop.height as usize * 3];
+        }
         for row in 0..tile.height {
             let source = row * tile.width * 3;
             let target = ((tile.y - self.crop.y as usize + row) * crop_width + tile.x - self.crop.x as usize) * 3;
             self.output[target..target + tile.width * 3].copy_from_slice(&rgb[source..source + tile.width * 3]);
         }
+    }
+
+    /// The finished image's size, after orientation.
+    pub fn size(&self) -> (u32, u32) {
+        let (width, height) = (self.crop.width, self.crop.height);
+        if matches!(self.orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Transpose | Orientation::Transverse) {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+
+    /// A quick, smaller development for the editor's preview: each block of photosites (2 x 2
+    /// for Bayer, 3 x 3 for X-Trans) becomes one pixel of their average per colour, with the
+    /// same highlight reconstruction and colour matrix as the full development.
+    pub fn binned(&self) -> LinearImage {
+        let factor = match self.recipe.cfa {
+            Cfa::Bayer(_) => 2,
+            Cfa::XTrans(_) => 3,
+        };
+        let channel = |x: usize, y: usize| match &self.recipe.cfa {
+            Cfa::Bayer(pattern) => pattern.0[y & 1][x & 1] as usize,
+            Cfa::XTrans(pattern) => pattern[y % 6][x % 6] as usize,
+        };
+        // Blocks line up with the pattern, so every one holds each colour.
+        let (x0, y0) = ((self.crop.x as usize).div_ceil(factor) * factor, (self.crop.y as usize).div_ceil(factor) * factor);
+        let (x1, y1) = ((self.crop.x + self.crop.width) as usize / factor * factor, (self.crop.y + self.crop.height) as usize / factor * factor);
+        let (width, height) = ((x1.saturating_sub(x0)) / factor, (y1.saturating_sub(y0)) / factor);
+        let mut pixels = Vec::with_capacity(width * height * 3);
+        for by in 0..height {
+            for bx in 0..width {
+                let (mut sums, mut counts) = ([0.0f32; 3], [0u32; 3]);
+                for y in y0 + by * factor..y0 + (by + 1) * factor {
+                    let start = x0 + bx * factor;
+                    let row = &self.mosaic[y * self.sensor_width + start..][..factor];
+                    for (x, &value) in (start..).zip(row) {
+                        let c = channel(x, y).min(2);
+                        sums[c] += value;
+                        counts[c] += 1;
+                    }
+                }
+                let rgb: [f32; 3] = std::array::from_fn(|c| sums[c] / counts[c].max(1) as f32);
+                let [r, g, b] = reconstruct_highlights(rgb, self.recipe.clip);
+                for matrix_row in self.recipe.matrix {
+                    pixels.push(f16::from_f32(matrix_row[0] * r + matrix_row[1] * g + matrix_row[2] * b).to_bits());
+                }
+            }
+        }
+        orient(LinearImage::new(width as u32, height as u32, pixels), self.orientation)
     }
 
     pub fn finish(self) -> LinearImage {
@@ -339,8 +445,7 @@ pub fn process_tile(input: &[f32], tile: &DevelopTile, recipe: &TileRecipe) -> V
     for y in 0..tile.height {
         let row = (tile.y - tile.block_y + y) * width + tile.x - tile.block_x;
         for x in 0..tile.width {
-            // Clipping here lets saturated photosites render as white, not tinted.
-            let [r, g, b] = [red[row + x], green[row + x], blue[row + x]].map(|v| v.clamp(0.0, 1.0));
+            let [r, g, b] = reconstruct_highlights([red[row + x], green[row + x], blue[row + x]], recipe.clip);
             for matrix_row in recipe.matrix {
                 out.push(f16::from_f32(matrix_row[0] * r + matrix_row[1] * g + matrix_row[2] * b).to_bits());
             }
@@ -586,6 +691,24 @@ mod tests {
     #[test]
     fn unknown_bytes_are_an_error() {
         assert!(open(b"not an image").is_err());
+    }
+
+    #[test]
+    fn highlight_reconstruction_fills_in_clipped_channels_and_leaves_the_rest() {
+        let clip = [2.0, 1.0, 1.6];
+        // Nowhere near clipping: untouched.
+        assert_eq!(reconstruct_highlights([0.4, 0.3, 0.2], clip), [0.4, 0.3, 0.2]);
+        // Green clipped in a bright blue sky: raised towards red and blue, never lowered.
+        let sky = reconstruct_highlights([0.8, 1.0, 1.5], clip);
+        assert!(sky[1] >= 1.0 && sky[0] == 0.8, "{sky:?}");
+        // Green clipped with red and blue above it: the highlight rises towards neutral.
+        let bright = reconstruct_highlights([1.4, 1.0, 1.3], clip);
+        assert!(bright[1] > 1.2, "{bright:?}");
+        // Everything clipped: a neutral, not the pink of unequal clip levels.
+        let white = reconstruct_highlights([2.0, 1.0, 1.6], clip);
+        assert!((white[0] - white[1]).abs() < 1e-4 && (white[1] - white[2]).abs() < 1e-4, "{white:?}");
+        // Values past the clip level are noise from interpolation and are held to it.
+        assert_eq!(reconstruct_highlights([0.1, 0.1, 9.0], clip)[2], 1.6);
     }
 
     #[test]

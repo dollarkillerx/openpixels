@@ -68,3 +68,17 @@ fetch "$SAM/prompt_encoder_mask_decoder.onnx" \
 fetch "$SAM/prompt_encoder_mask_decoder.onnx_data" \
   f9e59a584ab8ced21fa812c211bc01084204db1c9e92a5ef4fb3a49972b4e864 \
   web/public/models/sam/prompt_encoder_mask_decoder.onnx_data
+
+# The desktop library's search and auto-tags: Google's SigLIP 2 base, patch 16 at 224
+# (Apache-2.0), as exported to ONNX for Transformers.js by onnx-community, int8 weights,
+# with the Gemma SentencePiece tokenizer it reads text with.
+SIGLIP=https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/ba1f3b0843f24bc5417d38e19c37b287d719b2f4
+fetch "$SIGLIP/onnx/vision_model_int8.onnx" \
+  0dd31785a2713f1113ef2272472165c69d580473dae38d7b47568ac587795e70 \
+  web/public/models/siglip/vision_model.onnx
+fetch "$SIGLIP/onnx/text_model_int8.onnx" \
+  3a0603d3a00c05a80a6ded4743c16aaac7b1e62cdcc7e362e7ce418659b96400 \
+  web/public/models/siglip/text_model.onnx
+fetch "$SIGLIP/tokenizer.model" \
+  61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2 \
+  web/public/models/siglip/tokenizer.model

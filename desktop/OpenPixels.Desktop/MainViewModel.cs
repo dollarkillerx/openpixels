@@ -10,11 +10,21 @@ using OpenPixels.Desktop.Engine;
 
 namespace OpenPixels.Desktop;
 
-public sealed partial class PhotoItem(string path) : ObservableObject
+public sealed partial class PhotoItem(string path, int version = 1) : ObservableObject
 {
     public string Path { get; } = path;
-    public string Name { get; } = System.IO.Path.GetFileName(path);
-    public string Id { get; } = EditStore.IdOf(path);
+    /// <summary>1 for the photo itself; 2 and up for versions made from it, each with its own edit.</summary>
+    public int Version { get; } = version;
+    public bool IsVersion => Version > 1;
+    /// <summary>The photo's own id, shared by its versions.</summary>
+    public string SourceId { get; } = EditStore.IdOf(path);
+    public string Id => Version > 1 ? $"{SourceId}#v{Version}" : SourceId;
+    public string Name => Version > 1 ? I18n.T("{name} · 版本 {version}", ("name", System.IO.Path.GetFileName(Path)), ("version", Version)) : System.IO.Path.GetFileName(Path);
+
+    /// <summary>The file name an export starts from; a version adds -v2 and so on.</summary>
+    public string ExportSource => Version > 1
+        ? $"{System.IO.Path.GetFileNameWithoutExtension(Path)}-v{Version}{System.IO.Path.GetExtension(Path)}"
+        : System.IO.Path.GetFileName(Path);
 
     /// <summary>Set when the background thumbnailer could not read the file, so it is not retried.</summary>
     internal bool ThumbnailFailed { get; set; }
@@ -55,6 +65,10 @@ public sealed partial class PhotoItem(string path) : ObservableObject
     public Avalonia.Media.IBrush LabelBrush => Label > 0
         ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(ColourLabels.All[Label - 1].Colour))
         : Avalonia.Media.Brushes.Transparent;
+    /// <summary>What the library sees in the photo, as tag names.</summary>
+    [ObservableProperty]
+    private string _tagText = "";
+
     public string GroupText => Group == 0 ? "" : IsBest ? I18n.T("组 {group} · 最佳", ("group", Group)) : I18n.T("组 {group}", ("group", Group));
 }
 
@@ -107,10 +121,34 @@ public sealed partial class GradeItem(string range, string label) : ObservableOb
 
 public sealed partial class HistoryRow(int index, string label) : ObservableObject
 {
-    public int Index { get; } = index;
+    public int Index { get; private set; } = index;
 
     [ObservableProperty]
     private string _label = label;
+
+    /// <summary>Indented once per branch it lies on.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Indent))]
+    private int _depth;
+
+    /// <summary>Whether this step leads to the photo as it is now; others are dimmed.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Opacity))]
+    private bool _onPath = true;
+
+    public Avalonia.Thickness Indent => new(Depth * 14, 0, 0, 0);
+    public double Opacity => OnPath ? 1 : 0.5;
+    public string BranchMark => Depth > 0 ? "↳ " : "";
+
+    public void Show(HistoryLine line)
+    {
+        Index = line.Index;
+        Label = line.Label;
+        Depth = line.Depth;
+        OnPath = line.OnPath;
+        OnPropertyChanged(nameof(Index));
+        OnPropertyChanged(nameof(BranchMark));
+    }
 }
 
 public enum Picker { None, WhiteBalance, Point }
@@ -236,6 +274,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public string[] CurveChannelNames { get; } = ["RGB", I18n.T("红"), I18n.T("绿"), I18n.T("蓝")];
     public string[] CropRatioNames { get; } = CropRatios.Select(ratio => ratio.Label).ToArray();
     public string[] CameraProfiles { get; } = [I18n.T("标准"), I18n.T("相机匹配")];
+    /// <summary>How a RAW's scene light becomes a picture; the engine's displayTransform.</summary>
+    public string[] DisplayTransforms { get; } = [I18n.T("标准"), "AgX", I18n.T("中性")];
     public ObservableCollection<LookInfo> LookChoices { get; } = [];
     public ObservableCollection<HistoryRow> HistoryRows { get; } = [];
     public ObservableCollection<Snapshot> Snapshots { get; } = [];
@@ -282,7 +322,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string? _statusDetail;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AutoToneCommand), nameof(ResetCommand), nameof(UndoCommand), nameof(RedoCommand), nameof(TakeSnapshotCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AutoToneCommand), nameof(ResetCommand), nameof(UndoCommand), nameof(RedoCommand), nameof(TakeSnapshotCommand), nameof(CreateVersionCommand))]
     [NotifyPropertyChangedFor(nameof(HasOthersSelected), nameof(CanAddLayer))]
     private bool _canEdit;
 
@@ -392,9 +432,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var path in paths.Where(path => !known.Contains(path) && File.Exists(path)))
         {
             known.Add(path);
-            var photo = new PhotoItem(path) { Rating = _cull.Rating(EditStore.IdOf(path)), Flag = _cull.Flag(EditStore.IdOf(path)), Label = _cull.Label(EditStore.IdOf(path)) };
+            var photo = Culled(new PhotoItem(path));
             Photos.Add(photo);
             first ??= photo;
+            foreach (var version in _versions.Of(photo.SourceId)) Photos.Add(Culled(new PhotoItem(path, version)));
         }
         ApplyGroups();
         RefreshVisible();
@@ -545,8 +586,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         var isRaw = _info?["isRaw"]?.GetValue<bool>() == true;
         CameraProfileAvailable = _info?["cameraMatch"]?.GetValue<bool>() == true;
+        DisplayTransformAvailable = isRaw;
         LensAutoAvailable = _info?["lens"] is not null;
         OnPropertyChanged(nameof(CameraProfileIndex));
+        OnPropertyChanged(nameof(DisplayTransformIndex));
         OnPropertyChanged(nameof(LensAuto));
         var lensName = _info?["lensQuery"]?["lens"]?.GetValue<string>();
         var camera = !isRaw ? "" : CameraProfileAvailable ? I18n.T("已按机内 JPEG 拟合相机色彩。") : I18n.T("默认色彩已接近机内 JPEG，无需相机匹配。");
@@ -613,6 +656,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ShowFullEdit();
             OnPropertyChanged(nameof(CurrentEdit));
             OnPropertyChanged(nameof(CameraProfileIndex));
+            OnPropertyChanged(nameof(DisplayTransformIndex));
             OnPropertyChanged(nameof(LensAuto));
             OnPropertyChanged(nameof(PerspectiveKeep));
         }
@@ -686,6 +730,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!_imageOpen) return;
         ApplyEdit(With((grade.HueKey, amount == 0 ? 0 : hue, 0), (grade.AmountKey, amount, 0)));
+    }
+
+    [ObservableProperty]
+    private bool _displayTransformAvailable;
+
+    public int DisplayTransformIndex
+    {
+        get => Math.Clamp((int)_edit.GetValueOrDefault("displayTransform"), 0, DisplayTransforms.Length - 1);
+        set
+        {
+            if (!_showingEdit && value >= 0 && value != DisplayTransformIndex) ApplyEdit(With(("displayTransform", value, 0)));
+        }
     }
 
     public int CameraProfileIndex
@@ -819,8 +875,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void MoveInHistory(int step)
     {
         if (_history is null || !_imageOpen) return;
-        var target = _history.Index + step;
-        if (target < 0 || target >= _history.Entries.Count) return;
+        var target = step < 0 ? _history.UndoTarget : _history.RedoTarget;
+        if (target < 0) return;
         JumpTo(target);
     }
 
@@ -833,6 +889,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         EditChanged(before);
     }
 
+    public bool HistoryHasBranches => _history?.HasBranches == true;
+
+    /// <summary>The row of the step the photo is at; choosing another jumps there, on any branch.</summary>
+    [ObservableProperty]
+    private HistoryRow? _selectedHistoryRow;
+
+    partial void OnSelectedHistoryRowChanged(HistoryRow? value)
+    {
+        if (!_showingEdit && value is not null) HistoryIndex = value.Index;
+    }
+
     partial void OnHistoryIndexChanged(int value)
     {
         if (!_showingEdit && _history is not null && value >= 0 && value != _history.Index) JumpTo(value);
@@ -841,16 +908,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void SyncHistory()
     {
         if (_history is null) return;
-        var entries = _history.Entries;
-        while (HistoryRows.Count > entries.Count) HistoryRows.RemoveAt(HistoryRows.Count - 1);
-        for (var i = 0; i < entries.Count; i++)
+        var lines = _history.Lines();
+        while (HistoryRows.Count > lines.Count) HistoryRows.RemoveAt(HistoryRows.Count - 1);
+        for (var i = 0; i < lines.Count; i++)
         {
-            if (i < HistoryRows.Count) HistoryRows[i].Label = entries[i].Label;
-            else HistoryRows.Add(new HistoryRow(i, entries[i].Label));
+            if (i >= HistoryRows.Count) HistoryRows.Add(new HistoryRow(lines[i].Index, lines[i].Label));
+            HistoryRows[i].Show(lines[i]);
         }
         _showingEdit = true;
         HistoryIndex = _history.Index;
+        SelectedHistoryRow = HistoryRows.FirstOrDefault(row => row.Index == _history.Index);
         _showingEdit = false;
+        OnPropertyChanged(nameof(HistoryHasBranches));
     }
 
     private void ShowSnapshots()
@@ -1286,7 +1355,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return ExportWithAsync(settings, extension =>
         {
             var used = Directory.EnumerateFiles(folder).Select(file => System.IO.Path.GetFileName(file).ToLowerInvariant()).ToHashSet();
-            return System.IO.Path.Combine(folder, global::OpenPixels.Desktop.Output.ExportName(SelectedPhoto?.Name ?? "photo", used, settings.Template, 1, extension));
+            return System.IO.Path.Combine(folder, global::OpenPixels.Desktop.Output.ExportName(SelectedPhoto?.ExportSource ?? "photo", used, settings.Template, 1, extension));
         });
     }
 

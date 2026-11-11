@@ -271,4 +271,44 @@ public sealed class LibraryTests : IDisposable
         model.ToggleGrid();
         Assert.True(window.FindControl<Border>("DevelopPanel")!.IsVisible);
     }
+
+    [AvaloniaFact]
+    public async Task A_version_has_its_own_edit_exports_on_its_own_and_is_kept()
+    {
+        var path = MakePhoto(_folder, "scene.png", solid: (120, 120, 120));
+        var (window, model) = await Open(path);
+        model.Slider("exposure").Value = 0.5;
+        model.CreateVersion();
+        var version = model.SelectedPhoto!;
+        Assert.True(version.IsVersion);
+        Assert.Equal(2, model.Photos.Count);
+        await WaitFor(() => model.CanEdit && model.CurrentEdit.GetValueOrDefault("exposure") == 0.5, "the version opened with the edit it came from", model);
+        model.Slider("exposure").Value = -1;
+        model.Slider("saturation").Value = -1;
+        await WaitFor(() => model.CurrentEdit.GetValueOrDefault("saturation") == -1, "the version edited", model);
+
+        // The photo itself kept its own edit.
+        model.SelectedPhoto = model.Photos[0];
+        await WaitFor(() => model.CanEdit && model.SelectedPhoto == model.Photos[0] && model.CurrentEdit.GetValueOrDefault("exposure") == 0.5, "the original edit", model);
+        Assert.False(model.CurrentEdit.ContainsKey("saturation"));
+
+        // Each exports under its own name.
+        var output = Directory.CreateDirectory(Path.Combine(_folder, "out")).FullName;
+        Assert.Equal("scene.jpg", Path.GetFileName(await model.ExportToFolderAsync(new OutputSettings(), output)));
+        model.SelectedPhoto = version;
+        await WaitFor(() => model.CanEdit && model.SelectedPhoto == version && model.CurrentEdit.GetValueOrDefault("exposure") == -1, "the version reopened", model);
+        Assert.Equal("scene-v2.jpg", Path.GetFileName(await model.ExportToFolderAsync(new OutputSettings(), output)));
+        window.Close();
+
+        // A new window finds the version again beside its photo.
+        var (again, reopened) = await Open(path);
+        Assert.Equal(2, reopened.Photos.Count);
+        Assert.True(reopened.Photos[1].IsVersion);
+        reopened.SelectedPhoto = reopened.Photos[1];
+        await WaitFor(() => reopened.CanEdit && reopened.SelectedPhoto == reopened.Photos[1] && reopened.CurrentEdit.GetValueOrDefault("exposure") == -1, "the kept version", reopened);
+        Assert.True(reopened.CanDeleteVersion);
+        reopened.DeleteVersion();
+        Assert.Single(reopened.Photos);
+        again.Close();
+    }
 }

@@ -285,6 +285,9 @@ public partial class MainWindow : Window
             case Key.O when command:
                 OnOpen(this, e);
                 break;
+            case Key.OemQuotes when command:
+                if (_model.CanEdit) _model.CreateVersion();
+                break;
             case Key.E when command:
                 OnExport(this, e);
                 break;

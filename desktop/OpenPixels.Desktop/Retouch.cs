@@ -415,7 +415,8 @@ public sealed class RetouchStore
         var file = EraseFile(id);
         if (patches.Count == 0)
         {
-            File.Delete(file);
+            // Deleting in a folder that was never made would throw.
+            if (File.Exists(file)) File.Delete(file);
             return;
         }
         Directory.CreateDirectory(_eraseFolder);

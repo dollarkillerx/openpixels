@@ -203,6 +203,7 @@ public static partial class Edits
         if (key == "filmPrint") return new(I18n.T("相纸"), I18n.T("胶片模拟"));
         if (key == "filmFormat") return new(I18n.T("画幅"), I18n.T("胶片模拟"));
         if (key == "cameraProfile") return new(I18n.T("色彩配置"));
+        if (key == "displayTransform") return new(I18n.T("显示变换"));
         if (key == "backgroundAsset") return new(I18n.T("换背景"));
         if (key == "skyAsset") return new(I18n.T("换天"));
         if (key == "lensAuto") return new(I18n.T("自动镜头校正"));

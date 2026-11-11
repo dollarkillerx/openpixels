@@ -122,6 +122,38 @@ public sealed class SharedLogicTests
     }
 
     [Fact]
+    public void Editing_after_an_undo_starts_a_branch_and_keeps_the_old_steps()
+    {
+        var history = new EditHistory(new Dictionary<string, double>());
+        Dictionary<string, double> Step(string key, double value, Dictionary<string, double> from)
+        {
+            var next = new Dictionary<string, double>(from) { [key] = value };
+            history.Record(from, next, key);
+            return next;
+        }
+        var exposure = Step("exposure", 0.5, []);
+        Step("contrast", 0.3, exposure);
+        // Back to the exposure step, then a different change: the contrast step stays.
+        history.MoveTo(history.UndoTarget);
+        var branch = Step("saturation", 0.4, exposure);
+        Assert.Equal(4, history.Entries.Count);
+        Assert.True(history.HasBranches);
+        Assert.Equal(["opened", "exposure", "contrast", "saturation"], history.Lines().Select(line => line.Index switch { 0 => "opened", var i => history.Entries[i].Label }));
+        Assert.Equal([0, 0, 0, 1], history.Lines().Select(line => line.Depth));
+        Assert.Equal([true, true, false, true], history.Lines().Select(line => line.OnPath));
+        // Undo follows the branch back; redo returns along it.
+        Assert.Equal(1, history.UndoTarget);
+        history.MoveTo(1);
+        Assert.Equal(3, history.RedoTarget);
+        // The old branch can be visited, and redo then follows it.
+        Assert.Equal(0.3, history.MoveTo(2)["contrast"]);
+        history.MoveTo(1);
+        Assert.Equal(2, history.RedoTarget);
+        Assert.False(history.MoveTo(3).ContainsKey("contrast"));
+        Assert.Equal(0.4, branch["saturation"]);
+    }
+
+    [Fact]
     public void Export_names_follow_the_template_and_never_collide()
     {
         var used = new HashSet<string> { "lake.jpg" };

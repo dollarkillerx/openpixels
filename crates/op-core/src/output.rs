@@ -70,6 +70,8 @@ pub enum OutputFormat {
     Jpeg,
     Png,
     Tiff,
+    /// OpenEXR: linear light in half or full floats, with any HDR highlights kept.
+    Exr,
 }
 
 /// Size after limiting the long edge to `long_edge`, where 0 means no limit. Never enlarges.
