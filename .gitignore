@@ -16,3 +16,6 @@ desktop/**/obj/
 
 # Desktop packages
 artifacts/
+
+# Wrangler (Cloudflare Pages deploys) cache
+.wrangler/
