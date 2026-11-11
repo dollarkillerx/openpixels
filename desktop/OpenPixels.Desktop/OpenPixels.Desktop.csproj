@@ -26,27 +26,30 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
   </ItemGroup>
 
-  <!-- The engine is the Rust crate op-native, built by cargo and copied next to the app. -->
+  <!-- The engine is the Rust crate op-native, built by cargo and copied next to the app, with
+       openpixels-mcp (crate op-mcp), the MCP server that lets AI agents use the same engine. -->
   <PropertyGroup>
     <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../'))</RepoRoot>
     <NativeLibName Condition="$([MSBuild]::IsOSPlatform('OSX'))">libop_native.dylib</NativeLibName>
     <NativeLibName Condition="$([MSBuild]::IsOSPlatform('Linux'))">libop_native.so</NativeLibName>
     <NativeLibName Condition="$([MSBuild]::IsOSPlatform('Windows'))">op_native.dll</NativeLibName>
     <NativeLibPath>$(RepoRoot)target/release/$(NativeLibName)</NativeLibPath>
+    <McpServerPath Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(RepoRoot)target/release/openpixels-mcp.exe</McpServerPath>
+    <McpServerPath Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(RepoRoot)target/release/openpixels-mcp</McpServerPath>
   </PropertyGroup>
 
   <Target Name="BuildNativeEngine" BeforeTargets="BeforeBuild" Condition="'$(SkipNativeBuild)' != 'true'">
     <Exec Command="sh &quot;$(RepoRoot)scripts/build-native.sh&quot;" Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
-    <Exec Command="cargo build -p op-native --release" WorkingDirectory="$(RepoRoot)" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <Exec Command="cargo build -p op-native -p op-mcp --release" WorkingDirectory="$(RepoRoot)" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
   </Target>
 
   <Target Name="CopyNativeEngine" AfterTargets="Build">
-    <Copy SourceFiles="$(NativeLibPath)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(NativeLibPath);$(McpServerPath)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Published builds carry the engine too; it is built for the machine doing the publish. -->
   <Target Name="PublishNativeEngine" AfterTargets="Publish">
-    <Copy SourceFiles="$(NativeLibPath)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(NativeLibPath);$(McpServerPath)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>

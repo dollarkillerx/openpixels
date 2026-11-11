@@ -66,6 +66,15 @@ public static class SelfTest
         Check("heic", () => PlatformDecoder.CanDecodeHeic ? (OperatingSystem.IsMacOS() ? "system decoder" : "libheif")
             : OperatingSystem.IsLinux() ? "needs the system's libheif1" : throw new DllNotFoundException("libheif not bundled"));
         Check("lensfun", () => File.Exists(Lensfun.DatabasePath) ? $"{new FileInfo(Lensfun.DatabasePath).Length / 1024} KB" : throw new FileNotFoundException("not bundled"));
+        Check("mcp", () =>
+        {
+            var server = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "openpixels-mcp.exe" : "openpixels-mcp");
+            if (!File.Exists(server)) throw new FileNotFoundException("not bundled");
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(server, "--tools") { RedirectStandardOutput = true, UseShellExecute = false })!;
+            var tools = System.Text.Json.JsonDocument.Parse(process.StandardOutput.ReadToEnd()).RootElement.GetArrayLength();
+            process.WaitForExit();
+            return $"{tools} tools";
+        });
         Check("languages", () => string.Join(", ", I18n.Languages.Select(language => language.Code)) + $"; using {I18n.Language}");
         Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
         return failed == 0 ? 0 : 1;

@@ -87,6 +87,7 @@ node scripts/i18n.mjs
 | `crates/op-engine` | 编辑引擎：打开、修复、局部、预览、导出等流程，网页和桌面共用 |
 | `crates/op-wasm` | 浏览器绑定（wasm-bindgen，画到 OffscreenCanvas） |
 | `crates/op-native` | 桌面绑定（C ABI，离屏渲染后回传像素） |
+| `crates/op-mcp` | `openpixels-mcp`：给 AI 代理（Claude Code、Codex 等）用的 MCP 服务器 |
 | `desktop` | Avalonia 桌面版（C#/.NET 10）和它的无头界面测试 |
 | `web` | React 界面，引擎运行在 Worker 和 OffscreenCanvas 中 |
 | `scripts` | 构建 WASM、下载模型和镜头库、生成测试用 DNG |
@@ -170,6 +171,55 @@ GitHub Actions 的“Desktop packages”工作流会在四个系统上打包并�
 快捷键：`⌘Z` / `⇧⌘Z` 撤销和重做（Windows 用 `Ctrl+Z` / `Ctrl+Y`），`⌘O` 打开，`⌘E` 导出，`⇧⌘C` / `⇧⌘V` 复制和粘贴设置，`0`–`5` 星标，`6`–`9` 色标，`P` / `X` / `U` 旗标，`G` / `E` 网格和单张，`Z` 缩放，`J` 溢出警告，`R` 裁剪，`W` 白平衡吸管，`S` 软打样，按住 `\` 看修图前，`←` / `→` 切换照片，`Esc` 退出当前工具。
 
 AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同，需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
+
+## AI 代理（MCP）
+
+`openpixels-mcp` 把同一个引擎做成 [MCP](https://modelcontextprotocol.io) 服务器（stdio），Claude Code、Codex、Claude Desktop 等支持 MCP 的代理可以直接打开、调整、查看和导出照片。原图永远不会被改写。
+
+单独构建：
+
+```bash
+cargo build -p op-mcp --release
+```
+
+产物是 `target/release/openpixels-mcp`。桌面版安装包里也带了一份：macOS 在 `OpenPixels.app/Contents/MacOS/openpixels-mcp`，Windows 和 Linux 在主程序旁边。
+
+接入 Claude Code（`--scope user` 让所有项目都能用）：
+
+```bash
+claude mcp add --scope user openpixels -- /path/to/openpixels-mcp
+```
+
+接入 Codex：
+
+```bash
+codex mcp add openpixels -- /path/to/openpixels-mcp
+```
+
+写文件的工具（`export_photo`、`batch_export`、`save_edit`）在 Codex 里默认要用户确认。想让它直接导出，在 `~/.codex/config.toml` 里加：
+
+```toml
+[mcp_servers.openpixels.tools.export_photo]
+approval_mode = "approve"
+```
+
+Claude Desktop 在 `claude_desktop_config.json` 里加 `{"mcpServers": {"openpixels": {"command": "/path/to/openpixels-mcp"}}}`。
+
+| 工具 | 作用 |
+|---|---|
+| `list_settings` | 所有可调参数的键、范围、中性值和含义 |
+| `open_photo` | 打开 JPEG、PNG、TIFF、HEIC/AVIF 或 RAW；同一时间只开一张 |
+| `get_edit` / `set_edit` | 读取或修改调整参数；`curves` 设置 RGB 和单通道曲线 |
+| `auto_tone` | 智能调色（曝光、对比度、高光、阴影、白色、黑色、自然饱和度） |
+| `pick_white_balance` | 白平衡吸管 |
+| `heal_spot` / `clear_heals` | 污点修复 |
+| `preview` | 返回 JPEG 预览图；`show: compare` 前后对比，`region` 看局部 |
+| `analyze` | 亮度分位数、高光溢出和暗部死黑比例、色偏、饱和度、直方图 |
+| `export_photo` | 全分辨率导出 JPEG、8/16 位 PNG 和 TIFF，四种色彩空间 |
+| `save_edit` | 把参数存为照片旁的 `<照片名>.openpixels.json`，下次打开自动读入 |
+| `batch_export` | 给一组照片或整个文件夹套用同一组参数（可加智能调色）并导出 |
+
+参数的键与桌面版、网页版相同。预览、测量和吸管用长边 2048 的工作副本，导出始终用全分辨率。目前不支持滤镜、局部调整和 AI 蒙版、换天换背景、人像磨皮、液化和 AI 消除，这些仍在桌面版里。HEIC 和 AVIF 在 macOS 上用系统的 `sips` 解码，其他系统需要 libheif 的 `heif-dec`（如 `sudo apt install libheif-examples`）。
 
 ## 构建与部署
 

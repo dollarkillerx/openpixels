@@ -1,0 +1,17 @@
+[package]
+name = "op-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "An MCP server that lets AI agents such as Claude Code and Codex edit photos with the OpenPixels engine"
+
+[[bin]]
+name = "openpixels-mcp"
+path = "src/main.rs"
+
+[dependencies]
+op-core = { path = "../op-core" }
+op-gpu = { path = "../op-gpu" }
+op-native = { path = "../op-native" }
+serde_json.workspace = true
