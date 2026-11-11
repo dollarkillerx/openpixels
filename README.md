@@ -30,6 +30,7 @@
 - 锐化（含半径、细节、蒙版）、明度和色彩降噪、暗角、裁剪后暗角、颗粒
 - 曲线：可自由加点，背后显示直方图，另有参数曲线
 - HSL、颜色混合点、色调分离色轮、校准
+- 28 种经典胶卷滤镜：彩色负片（Kodak Portra、Ektar、Gold，Fuji Pro 400H、Superia 等）、电影负片（Kodak Vision3 50D/250D/200T/500T 配 2383 拷贝，Fuji Eterna）、反转片（Velvia、Provia、Ektachrome、Kodachrome、Instax）、黑白（Tri-X、Double-X），按胶片的光谱数据模拟曝光、冲洗和印放生成
 - 24 种内置风格滤镜（胶片、电影、创意、黑白），可导入 `.cube` LUT
 
 **构图与镜头**
@@ -47,7 +48,7 @@
 - 批量导出：支持的浏览器直接写入文件夹，否则打包为 ZIP
 - 软打样：导入打印机或显示器的 ICC 配置，预览打印效果，可选渲染方式、纸张和油墨模拟、色域警告
 
-**仅完整版**：磨皮、祛斑、液化、换背景、换天、追色。
+**仅完整版**：磨皮、祛斑、液化、换背景、换天、追色，以及可换相纸、带颗粒和光晕的胶片模拟。
 
 AI 功能用到的模型：主体和背景蒙版用 MODNet，天空蒙版和换天用 SkyWater-Seg，消除用 LaMa，人脸定位用 MediaPipe。
 
@@ -90,7 +91,8 @@ node scripts/i18n.mjs
 | `crates/op-mcp` | `openpixels-mcp`：给 AI 代理（Claude Code、Codex 等）用的 MCP 服务器 |
 | `desktop` | Avalonia 桌面版（C#/.NET 10）和它的无头界面测试 |
 | `web` | React 界面，引擎运行在 Worker 和 OffscreenCanvas 中 |
-| `scripts` | 构建 WASM、下载模型和镜头库、生成测试用 DNG |
+| `desktop/film-sim` | 桌面版胶片模拟的负片、相纸和反转片 LUT，由 `scripts/generate-film-looks.py` 生成 |
+| `scripts` | 构建 WASM、下载模型和镜头库、生成测试用 DNG、生成胶片 LUT |
 
 ## 运行
 
@@ -135,7 +137,8 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - **导入**：打开照片或整个文件夹，也可以拖进窗口；RAW（全尺寸冲洗多线程）、JPEG、PNG、TIFF；HEIC 在 macOS 上用系统解码器，Windows 上用随包的 libheif，Linux 上用系统的 libheif（`sudo apt install libheif1`）。带色彩配置的照片按其配置读入，广色域照片保留 16 位和超出 sRGB 的颜色。胶片条缩略图在后台生成，调色后自动更新。
 - **查看**：直方图和溢出警告，适合窗口、100% 和滚轮缩放，放大后显示全分辨率细节，前后对比。
 - **调色**：白平衡和吸管，影调、可自由加点的曲线（背后显示直方图）和参数曲线，HSL，颜色混合点，色调分离色轮，色彩与效果，校准，智能调色。
-- **滤镜**：24 种内置风格滤镜，与网页版效果一致；可导入 `.cube` LUT。
+- **滤镜**：28 种经典胶卷滤镜和 24 种内置风格滤镜，与网页版效果一致；可导入 `.cube` LUT。
+- **胶片模拟**：选中胶卷滤镜后，负片可以配任意相纸或电影拷贝片（Endura、Crystal Archive、Vision 2383/2393、Eterna-CP、Polymax 黑白相纸等 14 种），并调胶片曝光和印片机的红、绿、蓝光；颗粒按每种胶卷的 RMS 颗粒度加在负片密度上，光晕（halation）让高光周围泛红；两者都随 16mm、35mm、70mm 画幅变化。反转片直接放映，没有印放。负片和相纸各是一张 LUT，在着色器里实时组合；默认设置下与网页版的同名滤镜一致。
 - **相机与镜头**：相机匹配色彩配置，文件内的镜头数据或 Lensfun 镜头库自动校正，手动镜头校正和透视矫正。
 - **构图**：裁剪（固定比例或自由）、旋转、90° 转向。
 - **历史**：撤销、重做、历史记录和快照。
@@ -146,6 +149,7 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 - **项目**：把一组照片存为项目，下次启动可继续上次的照片。
 - **修饰**：污点修复、仿制图章、红眼去除，以及用 LaMa 模型的 AI 消除（在本机 CPU 上运行，一次约 4 秒）。
 - **局部调整**：线性、径向、画笔、全图，以及 AI 主体、背景、天空蒙版；可加亮度或颜色范围、反相、涂抹加入或去掉，最多 4 个图层，图层形状也能撤销。
+- **对象蒙版**：用 SAM 2.1 点选或框选任意对象，按住 Option（Alt）点击排除不要的部分。每张照片分析一次（本机 CPU 约 1 秒），之后每次点选立即更新；蒙版按照片边缘细化，点和框随图层保存，可撤销。
 - **人像**：自动识别人脸（MediaPipe 的 BlazeFace 和 Face Mesh，ONNX 版），只对皮肤磨皮、祛斑，避开眼睛、眉毛和嘴唇；找不到完整人脸时按画面中的肤色处理。
 - **完整版功能**：液化（推动、膨胀、收缩）、换背景和换天（内置或导入图片，可调融合、亮度、位置和前景融合）、追色（用照片库里的照片或任意图片作参考，RAW 也可以）。
 - **导出**：JPEG、8/16 位 PNG 和 TIFF，四种色彩空间，尺寸、质量、文件名规则、文字或图片水印，导出预设。
@@ -170,7 +174,7 @@ GitHub Actions 的“Desktop packages”工作流会在四个系统上打包并�
 
 快捷键：`⌘Z` / `⇧⌘Z` 撤销和重做（Windows 用 `Ctrl+Z` / `Ctrl+Y`），`⌘O` 打开，`⌘E` 导出，`⇧⌘C` / `⇧⌘V` 复制和粘贴设置，`0`–`5` 星标，`6`–`9` 色标，`P` / `X` / `U` 旗标，`G` / `E` 网格和单张，`Z` 缩放，`J` 溢出警告，`R` 裁剪，`W` 白平衡吸管，`S` 软打样，按住 `\` 看修图前，`←` / `→` 切换照片，`Esc` 退出当前工具。
 
-AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同，需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
+AI 功能通过 [ONNX Runtime](https://github.com/microsoft/onnxruntime)（MIT）运行，模型与网页版相同（对象蒙版的 SAM 2.1 只用于桌面版），需要先运行 `scripts/fetch-model.sh`，构建时会复制到程序目录。
 
 ## AI 代理（MCP）
 
@@ -283,11 +287,14 @@ dotnet test desktop/OpenPixels.Desktop.Tests
 
 - [RapidRAW](https://github.com/CyberTimon/RapidRAW)（AGPL-3.0）只作为架构思路的参考，**不得复制或改写其代码和着色器**。
 - 不得提取或复用像素蛋糕的模型、预设、素材和着色器。
-- 内置风格滤镜按公开的影调特征自行调制，不是任何厂商的官方配方，名称也不使用胶片厂商的商标。
+- 24 种内置风格滤镜按公开的影调特征自行调制，不是任何厂商的官方配方，名称不使用胶片厂商的商标。
+- 经典胶卷滤镜用 `scripts/generate-film-looks.py` 生成，数据和光谱模拟来自 [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut)（MIT），许可证和来源版本见 `web/public/film-looks/NOTICE.txt`。滤镜名直接用胶卷型号，只说明模拟的是哪种胶卷；Kodak、Fujifilm、Agfa 等是各自的商标，本项目与它们无关。生成好的 LUT 已提交，构建时不需要 Python。
+- [AlcedoStudio](https://github.com/zidage/AlcedoStudio) 和 [spektrafilm](https://github.com/andreavolpato/spektrafilm) 是 GPL-3.0，只参考功能思路，不复制代码和素材。
 - 引入模型前要分别核对代码和权重的许可证，两者经常不同。
 - LaMa 的代码和 ONNX 导出都标注 Apache-2.0，但没有单独说明权重。商业发布前要核实其训练数据（Places2）的使用条款。
 - Canon、Nikon、Fuji 等 RAW 的自动镜头校正用 [Lensfun](https://github.com/lensfun/lensfun) 数据库（CC BY-SA 3.0）。只用数据，不用其 LGPL 代码；转换后的 `web/public/lensfun/lensfun.json` 要按同样的许可证分发并署名，说明在同目录的 `NOTICE.txt`。
 - 换天用 [SkyWater-Seg](https://huggingface.co/Realcat/skywater_seg)，仓库标注 MIT，但它用 ADE20K 训练，商业发布前要核实该数据集的使用条款。
 - HEIC 解码：网页版使用 [libheif-js](https://github.com/catdad-experiments/libheif-js)（LGPL-3.0），作为独立文件按需加载；桌面版在 Windows 上随包附带 [libheif](https://github.com/strukturag/libheif) 和 [libde265](https://github.com/strukturag/libde265)（均为 LGPL-3.0，动态加载，许可证放在 `licenses/`），只装解码所需部分，不含 GPL 的 x265 编码器。HEVC 涉及专利授权，商业发布前要单独评估。
+- 对象蒙版用 Meta 的 [SAM 2.1](https://github.com/facebookresearch/sam2) Hiera Small，代码和权重都是 Apache-2.0；ONNX 版来自 [onnx-community/sam2.1-hiera-small-ONNX](https://huggingface.co/onnx-community/sam2.1-hiera-small-ONNX)，该仓库没有另写许可证，按原权重的 Apache-2.0 分发。
 - 人脸模型是 MediaPipe 的 BlazeFace（短距离）和 Face Mesh V2，使用 [fernandotonon](https://huggingface.co/fernandotonon) 转换的 ONNX 版（Apache-2.0）。
 - 测试素材放在不进版本库的 `web/public/fixtures/`，其中的系统 ICC 配置和网上下载的照片不随项目分发。

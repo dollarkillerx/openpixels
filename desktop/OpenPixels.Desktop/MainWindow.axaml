@@ -33,7 +33,7 @@
 
   <Window.DataTemplates>
     <DataTemplate DataType="local:SliderItem">
-      <Grid Classes="sliderRow" Background="Transparent">
+      <Grid Classes="sliderRow" Background="Transparent" IsVisible="{Binding IsVisible}">
 <Grid.ColumnDefinitions><ColumnDefinition Width="{x:Static local:LanguageLayout.LabelColumn}" /><ColumnDefinition Width="*" /><ColumnDefinition Width="40" /></Grid.ColumnDefinitions>
         <TextBlock Text="{Binding Label}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}"
                    Foreground="{Binding Changed, Converter={x:Static local:Converters.ChangedForeground}}" />
@@ -363,6 +363,8 @@
                           HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '主体以外的部分'}" />
                   <Button Content="{local:Tr '天空'}" Command="{Binding AddAiLayerCommand}" CommandParameter="Sky" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding SkyAvailable}"
                           HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr 'AI 识别天空（SkyWater-Seg）'}" />
+                  <Button Content="{local:Tr '对象'}" Command="{Binding AddObjectLayerCommand}" IsEnabled="{Binding CanAddLayer}" IsVisible="{Binding ObjectAvailable}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '点选或框选任意对象（SAM 2.1）'}" />
                 </UniformGrid>
                 <TextBlock Classes="hint" Text="{Binding RetouchStatus}" IsVisible="{Binding AiBusy}" />
                 <ItemsControl ItemsSource="{Binding Layers}">
@@ -389,6 +391,14 @@
                   <StackPanel Orientation="Horizontal" Spacing="12">
                     <CheckBox Content="{local:Tr '反相'}" IsChecked="{Binding ActiveInvert}" />
                     <CheckBox Content="{local:Tr '显示蒙版'}" IsChecked="{Binding ShowMask}" />
+                  </StackPanel>
+                  <StackPanel Spacing="6" IsVisible="{Binding ActiveIsObject}">
+                    <UniformGrid Columns="2" ColumnSpacing="6">
+                      <ToggleButton Classes="tool" Content="{local:Tr '点选'}" IsChecked="{Binding IsObject, Mode=OneWay}" Command="{Binding ChooseToolCommand}" CommandParameter="Object"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="{local:Tr '点击要选的对象，按住 Option（Alt）点击要排除的部分，拖动可框选'}" />
+                      <Button Content="{local:Tr '清除点选'}" Command="{Binding ClearObjectPromptsCommand}" IsEnabled="{Binding ActiveHasPrompts}"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    </UniformGrid>
                   </StackPanel>
                   <StackPanel Spacing="6" IsVisible="{Binding ActiveIsBrushable}">
                     <UniformGrid Columns="2" ColumnSpacing="6">
@@ -538,6 +548,19 @@
                     <ComboBox ItemsSource="{Binding LookChoices}" SelectedItem="{Binding SelectedLook}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" MaxDropDownHeight="420" />
                   </DockPanel>
                   <ContentControl Content="{Binding LookAmount}" />
+                  <StackPanel Spacing="6" IsVisible="{Binding FilmActive}">
+                    <TextBlock Classes="sub" Text="{local:Tr '胶片模拟'}" />
+                    <DockPanel IsVisible="{Binding FilmPrinted}">
+                      <TextBlock Text="{local:Tr '相纸'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                      <ComboBox ItemsSource="{Binding PrintChoices}" SelectedItem="{Binding SelectedPrint}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" MaxDropDownHeight="420" />
+                    </DockPanel>
+                    <DockPanel>
+                      <TextBlock Text="{local:Tr '画幅'}" Width="{x:Static local:LanguageLayout.LabelWidth}" VerticalAlignment="Center" FontSize="12" Classes="muted" />
+                      <ComboBox ItemsSource="{Binding FormatChoices}" SelectedIndex="{Binding SelectedFormat}" IsEnabled="{Binding CanEdit}" HorizontalAlignment="Stretch" />
+                    </DockPanel>
+                    <ItemsControl ItemsSource="{Binding FilmGroup.Sliders}" />
+                    <TextBlock Classes="hint" Text="{local:Tr '按胶片的光谱数据模拟曝光、冲洗和印放；颗粒和光晕随画幅变化，画幅越小越明显。'}" />
+                  </StackPanel>
                 <TextBlock Classes="sub" Text="{local:Tr '追色'}" />
                 <DockPanel>
                   <Button DockPanel.Dock="Right" Content="{local:Tr '用作参考'}" Command="{Binding MatchFromPhotoCommand}" IsEnabled="{Binding CanEdit}" Margin="6,0,0,0" />

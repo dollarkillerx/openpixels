@@ -119,6 +119,12 @@ pub struct Adjustments {
     pub output_space: f32,
     #[serde(skip)]
     pub _point_padding: [f32; 2],
+    /// Film simulation, used with a film look on the desktop: exposure into the film in
+    /// stops, halation 0..=1, grain 0..=2 (1 is the stock's own), and the frame's long
+    /// edge in millimetres, which sets grain and halation size (0 means 35mm).
+    pub film: [f32; 4],
+    /// Printer lights in stops for red, green and blue; the fourth is unused.
+    pub film_lights: [f32; 4],
 }
 
 /// The white balance sliders' travel either way.
@@ -194,7 +200,7 @@ mod tests {
 
     #[test]
     fn gpu_layout_is_tightly_packed() {
-        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32 + 80);
+        assert_eq!(std::mem::size_of::<Adjustments>(), 20 * 4 + 6 * 16 + 4 * 16 + 3 * 16 + 16 + 16 + 16 + 16 + 4 * 16 + 32 + 80 + 32);
     }
 
     #[test]

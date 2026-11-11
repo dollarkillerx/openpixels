@@ -46,6 +46,29 @@ public sealed class AiModels : IDisposable
         public const int Size = Erasing.ModelSize;
     }
 
+    /// <summary>
+    /// SAM 2.1 Hiera Small (Apache-2.0): masks an object from clicked points and a box. The image
+    /// is encoded once (about a second); each prompt then takes a few milliseconds to decode.
+    /// </summary>
+    public static class Segment
+    {
+        public const string EncoderFile = "sam/vision_encoder.onnx";
+        public const string DecoderFile = "sam/prompt_encoder_mask_decoder.onnx";
+        /// <summary>The model sees the whole image stretched to this square.</summary>
+        public const int Size = 1024;
+        /// <summary>Its masks come back at a quarter of that.</summary>
+        public const int MaskSize = 256;
+        public static readonly float[] Mean = [0.485f, 0.456f, 0.406f];
+        public static readonly float[] Std = [0.229f, 0.224f, 0.225f];
+        public const int Include = 1;
+        public const int Exclude = 0;
+
+        public static bool Available => Has(EncoderFile) && Has(DecoderFile);
+    }
+
+    /// <summary>The encoder's features for one image, which every prompt on it reuses.</summary>
+    public sealed record SegmentFeatures(DenseTensor<float>[] Levels);
+
     private readonly Dictionary<string, InferenceSession> _sessions = [];
     private readonly Lock _lock = new();
 
@@ -151,6 +174,50 @@ public sealed class AiModels : IDisposable
             for (var channel = 0; channel < 3; channel++) rgb[i * 3 + channel] = (byte)Math.Clamp(Math.Round(planes[channel * pixels + i]), 0, 255);
         }
         return rgb;
+    }
+
+    /// <summary>Encodes a 1024 x 1024 model input for <see cref="SegmentLogits"/>.</summary>
+    public SegmentFeatures EncodeForSegment(float[] tensor)
+    {
+        const int size = Segment.Size;
+        var session = Session(Segment.EncoderFile);
+        var input = NamedOnnxValue.CreateFromTensor("pixel_values", new DenseTensor<float>(tensor, [1, 3, size, size]));
+        using var results = session.Run([input]);
+        // Copied out, as the results are freed with the session's buffers.
+        var levels = Enumerable.Range(0, 3)
+            .Select(level => results.First(result => result.Name == $"image_embeddings.{level}").AsTensor<float>())
+            .Select(tensor => new DenseTensor<float>(tensor.ToArray(), tensor.Dimensions.ToArray()))
+            .ToArray();
+        return new SegmentFeatures(levels);
+    }
+
+    /// <summary>
+    /// The mask's logits, 256 x 256 over the whole image, for points (x, y as fractions of the
+    /// image, and whether to include them) and an optional box; null if the model sees no object.
+    /// Of the three masks SAM offers, the one it scores best is used.
+    /// </summary>
+    public float[]? SegmentLogits(SegmentFeatures features, IReadOnlyList<(double X, double Y, bool Include)> points, (double X0, double Y0, double X1, double Y1)? box)
+    {
+        const int size = Segment.Size;
+        var session = Session(Segment.DecoderFile);
+        var coordinates = points.SelectMany(point => new[] { (float)(point.X * size), (float)(point.Y * size) }).ToArray();
+        var labels = points.Select(point => (long)(point.Include ? Segment.Include : Segment.Exclude)).ToArray();
+        float[] corners = box is { } b ? [(float)(Math.Min(b.X0, b.X1) * size), (float)(Math.Min(b.Y0, b.Y1) * size), (float)(Math.Max(b.X0, b.X1) * size), (float)(Math.Max(b.Y0, b.Y1) * size)] : [];
+        List<NamedOnnxValue> inputs =
+        [
+            NamedOnnxValue.CreateFromTensor("input_points", new DenseTensor<float>(coordinates, [1, 1, points.Count, 2])),
+            NamedOnnxValue.CreateFromTensor("input_labels", new DenseTensor<long>(labels, [1, 1, points.Count])),
+            NamedOnnxValue.CreateFromTensor("input_boxes", new DenseTensor<float>(corners, [1, box is null ? 0 : 1, 4])),
+            .. features.Levels.Select((level, index) => NamedOnnxValue.CreateFromTensor($"image_embeddings.{index}", level)),
+        ];
+        using var results = session.Run(inputs);
+        var scores = results.First(result => result.Name == "iou_scores").AsTensor<float>().ToArray();
+        var objectScore = results.First(result => result.Name == "object_score_logits").AsTensor<float>().ToArray()[0];
+        if (objectScore < 0) return null;
+        var masks = results.First(result => result.Name == "pred_masks").AsTensor<float>();
+        var best = Array.IndexOf(scores, scores.Max());
+        var plane = masks.Dimensions[^1] * masks.Dimensions[^2];
+        return masks.ToArray().AsSpan(best * plane, plane).ToArray();
     }
 
     public void Dispose()

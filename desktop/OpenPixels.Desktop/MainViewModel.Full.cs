@@ -289,7 +289,7 @@ public sealed partial class MainViewModel
         {
             _showingEdit = false;
             FullStatus = I18n.T("追色失败：{message}", ("message", Messages.Friendly(exception)));
-            if (ticket == _openTicket) await SetLookAsync(_engine, (int)_edit.GetValueOrDefault("lutId"));
+            if (ticket == _openTicket) await SetLookAsync(_engine, _edit);
         }
         finally
         {

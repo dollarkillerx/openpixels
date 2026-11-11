@@ -62,6 +62,26 @@ public sealed class LocalMaskTests
     }
 
     [Fact]
+    public void An_object_layers_mask_is_named_by_its_prompts_and_comes_from_logits()
+    {
+        var layer = new LocalLayer { Kind = LocalKind.Object, Points = [new(0.25, 0.5, true)] };
+        var copy = layer.Copy();
+        copy.Points.Add(new(0.75, 0.5, false));
+        Assert.Single(layer.Points);
+        Assert.NotEqual(layer.Model, copy.Model);
+        Assert.Equal(layer.Model, (layer with { }).Model);
+        Assert.NotEqual(layer.Model, (layer with { Box = new UvBox(0, 0, 1, 1) }).Model);
+        Assert.True(layer.IsAi && layer.HasPrompts);
+
+        // Positive logits on the left half of a 4 x 4 grid: covered there, clear on the right.
+        var logits = Enumerable.Range(0, 16).Select(i => i % 4 < 2 ? 8f : -8f).ToArray();
+        var mask = LocalMasks.FromLogits(logits, 4, 40, 20);
+        Assert.True(mask[10 * 40 + 2] > 250);
+        Assert.True(mask[10 * 40 + 37] < 5);
+        Assert.InRange(mask[10 * 40 + 20], 60, 195);
+    }
+
+    [Fact]
     public void Stray_sky_below_the_horizon_is_removed()
     {
         // Sky along the top row, and a separate bright patch lower down.

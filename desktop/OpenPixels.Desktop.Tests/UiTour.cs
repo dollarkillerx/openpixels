@@ -82,6 +82,12 @@ public sealed class UiTour
         Expand(window, I18n.T("风格滤镜"));
         model.SelectedLook = model.LookChoices.Single(look => look.Id == 17);
         await Shot(window, "05-look");
+        model.SelectedLook = model.LookChoices.Single(look => look.Id == 46);
+        model.SelectedFormat = 0;
+        model.Slider("filmHalation").Value = 0.8;
+        model.Slider("filmGrain").Value = 1;
+        await Shot(window, "05b-film");
+        model.SelectedLook = model.LookChoices.Single(look => look.Id == 17);
 
         Expand(window, I18n.T("裁剪与旋转"));
         model.CropEditing = true;
@@ -166,6 +172,21 @@ public sealed class UiTour
         await Task.Delay(800);
         await Shot(window, "20-subject-background");
         File.WriteAllText(Path.Combine(Folder, "ai.txt"), model.RetouchStatus);
+        if (AiModels.Segment.Available)
+        {
+            // An object layer from one click, with an Option-click to leave a part out.
+            await model.AddObjectLayerCommand.ExecuteAsync(null);
+            var click = model.StageOf(new UvPoint(0.5, 0.2));
+            await model.ToolPressAsync(click.X, click.Y, false);
+            model.ToolRelease();
+            var leaveOut = model.StageOf(new UvPoint(0.5, 0.45));
+            await model.ToolPressAsync(leaveOut.X, leaveOut.Y, true);
+            model.ToolRelease();
+            model.ShowMask = true;
+            await Task.Delay(1500);
+            await Shot(window, "20b-object-mask");
+            model.ShowMask = false;
+        }
 
         model.SelectedPhoto = model.Photos[0];
         await WaitFor(() => model.CanEdit && model.Preview is not null);

@@ -63,6 +63,26 @@ public sealed class SharedLogicTests
     }
 
     [Fact]
+    public void Film_looks_are_bundled_with_their_own_ids_and_keep_mid_grey()
+    {
+        Assert.True(Looks.FilmLooks.Count >= 20);
+        Assert.Equal(Looks.FilmLooks.Count, Looks.FilmLooks.Select(look => look.Id).Distinct().Count());
+        Assert.Empty(Looks.FilmLooks.Select(look => look.Id).Intersect(Looks.BuiltInLooks.Select(look => look.Id)));
+        foreach (var look in Looks.FilmLooks)
+        {
+            Assert.InRange(look.Id, 30, Looks.FirstImportedId - 1);
+            var lut = Looks.FilmLook(look.Id);
+            Assert.NotNull(lut);
+            // Negatives are balanced so mid grey keeps its brightness; slides keep their cast.
+            var centre = lut.Size / 2;
+            var at = ((centre * lut.Size + centre) * lut.Size + centre) * 3;
+            var luma = 0.2126 * lut.Data[at] + 0.7152 * lut.Data[at + 1] + 0.0722 * lut.Data[at + 2];
+            Assert.InRange(luma, 0.45, 0.55);
+        }
+        Assert.Contains(Looks.FilmLooks, look => look.Name == "Kodak Portra 400");
+    }
+
+    [Fact]
     public void Cube_files_are_parsed_and_bad_ones_explained()
     {
         var cube = "TITLE \"test\"\nLUT_3D_SIZE 2\n" + string.Join('\n', Enumerable.Range(0, 8).Select(i => $"{i & 1} {(i >> 1) & 1} {(i >> 2) & 1}"));

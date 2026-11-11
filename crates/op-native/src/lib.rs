@@ -180,6 +180,15 @@ impl NativeEngine {
                 e.set_look(int("size")?, &floats(data)?);
                 (none, vec![])
             }
+            "setFilm" => {
+                // The negative LUT's floats, then the output LUT's.
+                let (negative_size, output_size) = (int("negativeSize")?, int("outputSize")?);
+                let values = floats(data)?;
+                let split = (negative_size as usize).pow(3) * 3;
+                let (negative, output) = values.split_at_checked(split).ok_or_else(|| error("setFilm: data too short"))?;
+                let grain: Vec<f32> = args.get("grain").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect()).unwrap_or_default();
+                (parsed(e.set_film(negative_size, negative, output_size, output, flag("slide"), flag("mono"), &grain)?)?, vec![])
+            }
             "setLocalMask" => {
                 e.set_local_mask(int("width")?, int("height")?, data);
                 (none, vec![])
@@ -479,6 +488,65 @@ mod tests {
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
         let (tone, _) = call(&mut engine, "autoTone", Value::Null, &[]);
         assert!(tone["exposure"].is_number());
+    }
+
+    fn film_lut(name: &str) -> Vec<f32> {
+        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../desktop/film-sim/").to_owned() + name).unwrap();
+        bytes.chunks_exact(2).map(|b| f32::from(u16::from_le_bytes([b[0], b[1]])) / 65535.0).collect()
+    }
+
+    fn mean(rgba: &[u8]) -> [f64; 3] {
+        let count = (rgba.len() / 4) as f64;
+        std::array::from_fn(|c| rgba.chunks_exact(4).map(|p| f64::from(p[c])).sum::<f64>() / count)
+    }
+
+    #[test]
+    fn a_film_simulation_matches_the_cpu_and_adds_grain_and_halation() {
+        let mut engine = NativeEngine::new().expect("a GPU is required for this test");
+        // A mid grey frame with a bright spot in the middle.
+        let (w, h) = (96u32, 64u32);
+        let mut rgb = vec![118u8; (w * h * 3) as usize];
+        for y in 28..36 {
+            for x in 44..52 {
+                let i = ((y * w + x) * 3) as usize;
+                rgb[i..i + 3].copy_from_slice(&[255, 255, 255]);
+            }
+        }
+        let png = op_core::encode_png(&rgb, w, h, &op_core::srgb_icc_profile(), None).unwrap();
+        call(&mut engine, "decode", Value::Null, &png);
+        call(&mut engine, "buildProxy", json!({ "maxLongEdge": 96 }), &[]);
+        let (negative, output) = (film_lut("negative-31.lut"), film_lut("print-1.lut"));
+        let bytes: Vec<u8> = negative.iter().chain(&output).flat_map(|v| v.to_le_bytes()).collect();
+        let settings: Value = serde_json::from_slice(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../desktop/film-sim/film-sim.json")).unwrap()).unwrap();
+        let portra = settings["films"].as_array().unwrap().iter().find(|film| film["id"] == 31).unwrap();
+        let grain: Vec<Value> = portra["grain"].as_array().unwrap().iter().flat_map(|row| row.as_array().unwrap().clone()).collect();
+        let (answer, _) = call(&mut engine, "setFilm", json!({ "negativeSize": 33, "outputSize": 33, "grain": grain }), &bytes);
+        let balance = answer["balance"].as_f64().unwrap() as f32;
+        let render = |engine: &mut NativeEngine, film: [f32; 4]| {
+            call(engine, "setAdjustments", json!({ "lutAmount": 1.0, "film": film }), &[]);
+            call(engine, "render", json!({ "width": w, "height": h }), &[]).1
+        };
+        let plain = render(&mut engine, [0.0; 4]);
+        let corner = &plain[..4];
+        let film = op_core::Film {
+            negative: op_core::FilmLut { size: 33, data: negative.clone() },
+            output: op_core::FilmLut { size: 33, data: output.clone() },
+            slide: false,
+            mono: false,
+        };
+        let expected = film.display([118.0 / 255.0; 3], balance, [0.0; 3]);
+        for c in 0..3 {
+            assert!((f32::from(corner[c]) / 255.0 - expected[c]).abs() < 0.02, "{corner:?} vs {expected:?}");
+        }
+        // A tiny image holds few pixels per millimetre of film, so its grain averages away;
+        // a 1mm frame stands in for a large file.
+        let grainy = render(&mut engine, [0.0, 0.0, 2.0, 1.0]);
+        let differing = grainy.chunks_exact(4).zip(plain.chunks_exact(4)).filter(|(a, b)| a[1] != b[1]).count();
+        assert!(differing > (w * h / 3) as usize, "grain changes most pixels: {differing}");
+        assert!((mean(&grainy)[1] - mean(&plain)[1]).abs() < 2.0, "grain keeps the average");
+        let glowing = render(&mut engine, [0.0, 1.0, 0.0, 36.0]);
+        let near = |rgba: &[u8]| rgba[((32 * w + 56) * 4) as usize] as i32 - rgba[((32 * w + 56) * 4 + 2) as usize] as i32;
+        assert!(near(&glowing) > near(&plain) + 3, "halation reddens around the highlight: {} vs {}", near(&glowing), near(&plain));
     }
 
     #[test]

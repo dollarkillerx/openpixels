@@ -56,6 +56,14 @@ public static class SelfTest
                 return $"{new FileInfo(Path.Combine(AiModels.Folder, file)).Length / 1048576} MB";
             });
         }
+        Check("sam", () =>
+        {
+            if (!AiModels.Segment.Available) throw new FileNotFoundException("not bundled");
+            const int size = AiModels.Segment.Size;
+            var features = models.EncodeForSegment(new float[3 * size * size]);
+            var logits = models.SegmentLogits(features, [(0.5, 0.5, true)], null);
+            return $"encoded and decoded one click, {(logits is null ? "no object" : $"{logits.Length} values")}";
+        });
         Check("faces", () =>
         {
             if (!FaceFinder.Available) throw new FileNotFoundException("not bundled");

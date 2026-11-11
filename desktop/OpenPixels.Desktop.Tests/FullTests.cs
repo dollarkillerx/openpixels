@@ -118,6 +118,43 @@ public sealed class FullTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task Film_simulation_pairs_any_print_and_adds_grain()
+    {
+        var path = MakePhoto(_folder, "flat.png", 600, 400, solid: (150, 120, 100));
+        var (_, model) = await Open(path);
+        var plain = PixelAt(model, 0.5, 0.5);
+        Assert.False(model.FilmActive);
+
+        model.SelectedLook = model.LookChoices.Single(look => look.Id == 46); // Vision3 500T on 2383
+        Assert.True(model.FilmActive && model.FilmPrinted);
+        Assert.Equal(0, model.SelectedPrint!.Id);
+        await WaitFor(() => PixelAt(model, 0.5, 0.5) != plain, "the film look", model);
+
+        model.SelectedPrint = model.PrintChoices.Single(print => print.Name == "Kodak Polymax Fine-Art Grade 3");
+        Assert.Equal(12, (int)model.CurrentEdit["filmPrint"]);
+        await WaitFor(() => PixelAt(model, 0.5, 0.5) is var (r, g, b) && Math.Abs(r - b) <= 2 && Math.Abs(r - g) <= 2, "a black and white print", model);
+
+        model.Slider("filmLightGreen").Value = 0.5;
+        var lit = PixelAt(model, 0.5, 0.5);
+        await WaitFor(() => PixelAt(model, 0.5, 0.5) != lit, "the printer light", model);
+
+        model.SelectedFormat = 0;
+        Assert.Equal(12.5, model.CurrentEdit["filmFormat"]);
+        model.Slider("filmGrain").Value = 2;
+        int Distinct() => Enumerable.Range(0, 40).Select(i => PixelAt(model, 0.3 + i * 0.01, 0.5).G).Distinct().Count();
+        await WaitFor(() => Distinct() >= 4, "grain on a flat photo", model);
+
+        // A slide is projected: no print or printer lights.
+        model.SelectedLook = model.LookChoices.Single(look => look.Id == 50);
+        Assert.True(model.FilmActive);
+        Assert.False(model.FilmPrinted);
+        Assert.False(model.Slider("filmLightRed").IsVisible);
+        model.SelectedLook = model.LookChoices[0];
+        Assert.False(model.FilmActive);
+        Assert.True(model.Slider("filmLightRed").IsVisible);
+    }
+
+    [AvaloniaFact]
     public async Task Colour_match_takes_on_the_reference_look()
     {
         var grey = MakePhoto(_folder, "grey.png", 300, 200, pixel: (x, y) => ((byte)(90 + x % 60), (byte)(90 + x % 60), (byte)(90 + x % 60)));
@@ -178,5 +215,52 @@ public sealed class FullTests : IDisposable
         model.SelectedSky = model.SkyChoices.Single(choice => choice.Id == 12);
         Assert.Equal(0.3, model.CurrentEdit["skyRelight"]);
         await WaitFor(() => PixelAt(model, 0.2, 0.05) is var (r, _, b) && Math.Abs(r - before.R) + Math.Abs(b - before.B) > 40, "a different sky", model);
+    }
+
+    /// <summary>Uses the git-ignored outdoor portrait and SAM 2.1 when both are present.</summary>
+    [AvaloniaFact]
+    public async Task An_object_layer_follows_a_box_and_clicks_and_undoes()
+    {
+        var photo = Path.Combine(Root, "web/public/fixtures/people/06-outdoor.jpg");
+        if (!File.Exists(photo) || !AiModels.Segment.Available) return;
+        var (_, model) = await Open(photo);
+        (double X, double Y) Stage(double u, double v) => model.StageOf(new UvPoint(u, v)) is var at ? (at.X, at.Y) : default;
+        var jacket = PixelAt(model, 0.25, 0.85);
+        var field = PixelAt(model, 0.9, 0.55);
+
+        await model.AddObjectLayerCommand.ExecuteAsync(null);
+        Assert.True(model.IsObject);
+        Assert.True(model.ActiveIsObject);
+        Assert.StartsWith("已分析画面", model.RetouchStatus);
+
+        // A box around the woman selects all of her, and only her.
+        var (x0, y0) = Stage(0.25, 0.1);
+        var (x1, y1) = Stage(0.75, 0.98);
+        await model.ToolPressAsync(x0, y0, alt: false);
+        await model.ToolMoveAsync((x0 + x1) / 2, (y0 + y1) / 2);
+        await model.ToolMoveAsync(x1, y1);
+        model.ToolRelease();
+        Assert.True(model.ActiveHasPrompts);
+        await WaitFor(() => PixelAt(model, 0.25, 0.85).G > jacket.G + 5, "a brighter jacket", model);
+        Assert.True(Math.Abs(PixelAt(model, 0.9, 0.55).G - field.G) < 3, "the field stays");
+
+        // An Option-click is kept as a point to leave out, and undo takes it away again.
+        var (jx, jy) = Stage(0.25, 0.85);
+        await model.ToolPressAsync(jx, jy, alt: true);
+        model.ToolRelease();
+        Assert.Equal(2, model.LocalLayers[0].Points.Count + (model.LocalLayers[0].Box is null ? 0 : 1));
+        Assert.False(model.LocalLayers[0].Points[0].Include);
+        model.Undo();
+        Assert.Empty(model.LocalLayers[0].Points);
+
+        model.ClearObjectPromptsCommand.Execute(null);
+        Assert.False(model.ActiveHasPrompts);
+        await WaitFor(() => Math.Abs(PixelAt(model, 0.25, 0.85).G - jacket.G) < 3, "no mask once cleared", model);
+
+        // A single click on the jacket selects it again.
+        await model.ToolPressAsync(jx, jy, alt: false);
+        model.ToolRelease();
+        await WaitFor(() => PixelAt(model, 0.25, 0.85).G > jacket.G + 5, "the clicked jacket brighter", model);
+        Assert.True(Math.Abs(PixelAt(model, 0.9, 0.55).G - field.G) < 3, "the field stays");
     }
 }

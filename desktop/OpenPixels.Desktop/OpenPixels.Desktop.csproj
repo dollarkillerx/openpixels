@@ -61,11 +61,24 @@
     <EmbeddedResource Include="$(RepoRoot)web/src/i18n/*.json" LogicalName="OpenPixels.i18n.%(Filename).json" />
   </ItemGroup>
 
+  <!-- Film looks, shared with the web edition: the list is built in, the LUTs sit next to the app. -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(RepoRoot)web/src/film-looks.json" LogicalName="OpenPixels.film-looks.json" />
+    <None Include="$(RepoRoot)web/public/film-looks/*.lut;$(RepoRoot)web/public/film-looks/NOTICE.txt"
+          Link="film-looks/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The film simulation's negative, print and slide LUTs, made by the same script. -->
+    <None Include="$(RepoRoot)desktop/film-sim/*.lut;$(RepoRoot)desktop/film-sim/film-sim.json"
+          Link="film-sim/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- The AI models, if scripts/fetch-model.sh has fetched them. Checked licences are in the README. -->
   <ItemGroup>
     <None Include="$(RepoRoot)web/public/models/modnet.onnx;$(RepoRoot)web/public/models/skywater.onnx;$(RepoRoot)web/public/models/lama.onnx;$(RepoRoot)web/public/models/face_detector.onnx;$(RepoRoot)web/public/models/face_landmarks.onnx"
           Condition="Exists('$(RepoRoot)web/public/models/modnet.onnx')"
           Link="models/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- SAM 2.1: each graph and the weights file it names. -->
+    <None Include="$(RepoRoot)web/public/models/sam/*.onnx;$(RepoRoot)web/public/models/sam/*.onnx_data"
+          Link="models/sam/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- The Lensfun database (CC BY-SA 3.0), if scripts/fetch-lensfun.sh has fetched it. -->

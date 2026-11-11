@@ -53,6 +53,8 @@ struct Region {
     airlight: [f32; 4],
     sky_tint: [f32; 4],
     output: [[f32; 4]; 3],
+    film: [f32; 4],
+    film_grain: [[f32; 4]; op_core::film::GRAIN_SAMPLES],
 }
 
 #[repr(C)]
@@ -71,6 +73,19 @@ struct BlitParams {
     view: [f32; 4],
     detail_rect: [f32; 4],
     flags: [f32; 4],
+}
+
+/// How a film simulation joins its two LUTs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FilmSettings {
+    /// A slide is projected rather than printed, so printer lights do nothing.
+    pub slide: bool,
+    /// Black and white: the same grain in every channel, and only the green light.
+    pub mono: bool,
+    /// The exposure in stops that keeps mid grey as bright, from `op_core::Film::balance`.
+    pub balance: f32,
+    /// RMS grain per layer at evenly spaced densities; zeros for none.
+    pub grain: [[f32; 3]; op_core::film::GRAIN_SAMPLES],
 }
 
 /// How the framed image is shown: `zoom` times its fitted size, around `center` (0..=1).
@@ -165,6 +180,10 @@ pub struct Renderer {
     curve_texture: wgpu::Texture,
     curve_view: wgpu::TextureView,
     look_view: wgpu::TextureView,
+    /// Film simulation: the output LUT (the negative LUT is the look), and its settings.
+    film_output_view: wgpu::TextureView,
+    film: Option<FilmSettings>,
+    halation_view: wgpu::TextureView,
     background_image_view: wgpu::TextureView,
     sky_image_view: wgpu::TextureView,
     sky_mask_view: wgpu::TextureView,
@@ -272,6 +291,8 @@ impl Renderer {
         });
         let curve_view = curve_texture.create_view(&Default::default());
         let look_view = create_look_view(&device, &queue, 2, &IDENTITY_LOOK);
+        let film_output_view = create_look_view(&device, &queue, 2, &IDENTITY_LOOK);
+        let halation_view = create_correction_view(&device, &queue, 1, 1, &[0; 4]);
         let background_image_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
         let sky_image_view = create_replace_view(&device, &queue, 1, 1, &[0, 0, 0, 255]);
         let sky_mask_view = create_mask_view(&device, &queue, 1, 1, &[0]);
@@ -300,6 +321,9 @@ impl Renderer {
             curve_texture,
             curve_view,
             look_view,
+            film_output_view,
+            film: None,
+            halation_view,
             background_image_view,
             sky_image_view,
             sky_mask_view,
@@ -404,6 +428,8 @@ impl Renderer {
         self.detail_luma_view = create_luma_view(&self.device, &self.queue, detail_width, detail_height, &detail);
         let (haze_width, haze_height, haze, airlight) = proxy.haze_map(HAZE_LONG_EDGE);
         self.haze_view = create_luma_view(&self.device, &self.queue, haze_width, haze_height, &haze);
+        let (halation_width, halation_height, halation) = proxy.halation_map(self.base_exposure.map(f32::exp2));
+        self.halation_view = create_correction_view(&self.device, &self.queue, halation_width, halation_height, &halation);
         self.airlight = airlight;
     }
 
@@ -434,10 +460,20 @@ impl Renderer {
     /// Sets the creative 3D lookup table: `size`^3 RGB triples with red varying fastest.
     /// `None` restores the identity.
     pub fn set_look(&mut self, look: Option<(u32, &[f32])>) {
+        self.film = None;
         self.look_view = match look {
             Some((size, rgb)) => create_look_view(&self.device, &self.queue, size, rgb),
             None => create_look_view(&self.device, &self.queue, 2, &IDENTITY_LOOK),
         };
+        self.rebuild_preview_bindings();
+    }
+
+    /// Sets a film simulation in place of the look: the negative and output LUTs, as
+    /// `size`^3 RGB triples with red varying fastest, and how they are joined.
+    pub fn set_film(&mut self, negative: (u32, &[f32]), output: (u32, &[f32]), settings: FilmSettings) {
+        self.look_view = create_look_view(&self.device, &self.queue, negative.0, negative.1);
+        self.film_output_view = create_look_view(&self.device, &self.queue, output.0, output.1);
+        self.film = Some(settings);
         self.rebuild_preview_bindings();
     }
 
@@ -1016,6 +1052,14 @@ impl Renderer {
                     binding: 15,
                     resource: wgpu::BindingResource::TextureView(&self.sky_mask_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: wgpu::BindingResource::TextureView(&self.film_output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
+                    resource: wgpu::BindingResource::TextureView(&self.halation_view),
+                },
             ],
         })
     }
@@ -1046,6 +1090,8 @@ impl Renderer {
             airlight: [self.airlight[0], self.airlight[1], self.airlight[2], 0.0],
             sky_tint: [self.sky_tint[0], self.sky_tint[1], self.sky_tint[2], 0.0],
             output: op_core::OutputSpace::from_shader_code(adjustments.output_space).shader_rows(),
+            film: self.film.map_or([0.0; 4], |film| [if film.slide { 2.0 } else { 1.0 }, f32::from(u8::from(film.mono)), film.balance, 0.0]),
+            film_grain: self.film.map_or([[0.0; 4]; op_core::film::GRAIN_SAMPLES], |film| film.grain.map(|[r, g, b]| [r, g, b, 0.0])),
         };
         self.queue.write_buffer(&self.region_buffer, 0, bytes_of(&region));
     }
@@ -1165,6 +1211,17 @@ fn develop_pass(device: &wgpu::Device, format: wgpu::TextureFormat, shader: &str
             texture_entry(14, wgpu::ShaderStages::COMPUTE, true),
             texture_entry(15, wgpu::ShaderStages::COMPUTE, true),
             texture_entry(16, wgpu::ShaderStages::COMPUTE, true),
+            wgpu::BindGroupLayoutEntry {
+                binding: 17,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            texture_entry(18, wgpu::ShaderStages::COMPUTE, true),
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

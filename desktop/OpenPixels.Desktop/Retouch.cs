@@ -6,8 +6,14 @@ namespace OpenPixels.Desktop;
 
 public readonly record struct UvPoint(double X, double Y);
 
+/// <summary>A point clicked on an object layer, and whether it marks the object or something to leave out.</summary>
+public readonly record struct ObjectPoint(double X, double Y, bool Include);
+
+/// <summary>A box dragged around an object, in source-image UV.</summary>
+public readonly record struct UvBox(double X0, double Y0, double X1, double Y1);
+
 [JsonConverter(typeof(JsonStringEnumConverter<LocalKind>))]
-public enum LocalKind { Linear, Radial, Brush, Full, Subject, Background, Sky }
+public enum LocalKind { Linear, Radial, Brush, Full, Subject, Background, Sky, Object }
 
 /// <summary>
 /// A local adjustment's shape, in source-image UV. Its values live in the edit as
@@ -27,14 +33,36 @@ public sealed record LocalLayer
     /// <summary>Brush radius as a fraction of the long edge.</summary>
     public double Radius { get; init; } = 0.04;
     public bool Invert { get; init; }
+    /// <summary>On an object layer, the points clicked for SAM.</summary>
+    public List<ObjectPoint> Points { get; init; } = [];
+    /// <summary>On an object layer, the box dragged around the object, if any.</summary>
+    public UvBox? Box { get; init; }
 
-    public bool IsAi => Kind is LocalKind.Subject or LocalKind.Background or LocalKind.Sky;
+    public bool IsAi => Kind is LocalKind.Subject or LocalKind.Background or LocalKind.Sky or LocalKind.Object;
     public bool HasHandles => Kind is LocalKind.Linear or LocalKind.Radial;
-    /// <summary>The model behind an AI layer; a background is the inverse of the subject.</summary>
-    public string Model => Kind == LocalKind.Sky ? "sky" : "subject";
+    public bool HasPrompts => Points.Count > 0 || Box is not null;
 
-    /// <summary>A copy whose stroke lists can be changed without touching this one.</summary>
-    public LocalLayer Copy() => this with { Strokes = Strokes.Select(stroke => stroke.ToList()).ToList(), Erase = Erase.Select(stroke => stroke.ToList()).ToList() };
+    /// <summary>
+    /// The mask behind an AI layer; a background is the inverse of the subject. An object's mask
+    /// is named by its prompts, so going back to earlier prompts finds the mask made for them.
+    /// </summary>
+    public string Model => Kind switch
+    {
+        LocalKind.Sky => "sky",
+        LocalKind.Object => ObjectKey(),
+        _ => "subject",
+    };
+
+    private string ObjectKey()
+    {
+        static string Number(double value) => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        var points = string.Join(';', Points.Select(point => $"{Number(point.X)},{Number(point.Y)},{(point.Include ? 1 : 0)}"));
+        var box = Box is { } b ? $"{Number(b.X0)},{Number(b.Y0)},{Number(b.X1)},{Number(b.Y1)}" : "";
+        return $"object:{points}|{box}";
+    }
+
+    /// <summary>A copy whose stroke and point lists can be changed without touching this one.</summary>
+    public LocalLayer Copy() => this with { Strokes = Strokes.Select(stroke => stroke.ToList()).ToList(), Erase = Erase.Select(stroke => stroke.ToList()).ToList(), Points = Points.ToList() };
 
     public string Title => Kind switch
     {
@@ -44,6 +72,7 @@ public sealed record LocalLayer
         LocalKind.Full => I18n.T("全图"),
         LocalKind.Subject => I18n.T("主体"),
         LocalKind.Background => I18n.T("背景"),
+        LocalKind.Object => I18n.T("对象"),
         _ => I18n.T("天空"),
     };
 }
@@ -161,6 +190,32 @@ public static class LocalMasks
                 var top = mask[y0 * width + x0] * (1 - tx) + mask[y0 * width + x1] * tx;
                 var bottom = mask[y1 * width + x0] * (1 - tx) + mask[y1 * width + x1] * tx;
                 output[row * outWidth + col] = (byte)Math.Round(top * (1 - ty) + bottom * ty);
+            }
+        }
+        return output;
+    }
+
+    /// <summary>
+    /// A SAM mask's logits (square, over the whole image) as a coverage mask of the given size:
+    /// bilinear in logits, as SAM upsamples, then a sigmoid, so the edge is soft but narrow.
+    /// </summary>
+    public static byte[] FromLogits(float[] logits, int logitSize, int width, int height)
+    {
+        var output = new byte[width * height];
+        for (var row = 0; row < height; row++)
+        {
+            var fy = Math.Clamp((row + 0.5) * logitSize / height - 0.5, 0, logitSize - 1);
+            var (y0, ty) = ((int)fy, fy - (int)fy);
+            var y1 = Math.Min(y0 + 1, logitSize - 1);
+            for (var col = 0; col < width; col++)
+            {
+                var fx = Math.Clamp((col + 0.5) * logitSize / width - 0.5, 0, logitSize - 1);
+                var (x0, tx) = ((int)fx, fx - (int)fx);
+                var x1 = Math.Min(x0 + 1, logitSize - 1);
+                var top = logits[y0 * logitSize + x0] * (1 - tx) + logits[y0 * logitSize + x1] * tx;
+                var bottom = logits[y1 * logitSize + x0] * (1 - tx) + logits[y1 * logitSize + x1] * tx;
+                var logit = top * (1 - ty) + bottom * ty;
+                output[row * width + col] = (byte)Math.Round(255 / (1 + Math.Exp(-logit)));
             }
         }
         return output;

@@ -8,6 +8,12 @@
       "port": 5173
     },
     {
+      "name": "web-lite",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "web", "dev:lite", "--port", "5174", "--strictPort"],
+      "port": 5174
+    },
+    {
       "name": "web-production",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--dir", "web", "exec", "vite", "preview", "--port", "4173", "--strictPort"],

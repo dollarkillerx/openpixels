@@ -383,6 +383,26 @@ impl Engine {
         self.renderer.set_look((size > 0).then_some((size, rgb)));
     }
 
+    /// Sets a film simulation in place of the look: a negative LUT and an output LUT, each
+    /// `size`^3 RGB triples with red varying fastest, and the stock's grain as 16 RGB rows
+    /// (or nothing). Returns JSON with the exposure that keeps mid grey as bright.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_film(&mut self, negative_size: u32, negative: &[f32], output_size: u32, output: &[f32], slide: bool, mono: bool, grain: &[f32]) -> Result<String> {
+        let cube = |size: u32, data: &[f32]| {
+            (size >= 2 && data.len() == (size as usize).pow(3) * 3).then(|| op_core::FilmLut { size, data: data.to_vec() }).ok_or_else(|| EngineError::new("film LUT has the wrong size"))
+        };
+        let film = op_core::Film { negative: cube(negative_size, negative)?, output: cube(output_size, output)?, slide, mono };
+        let balance = film.balance();
+        let mut rows = [[0.0; 3]; op_core::film::GRAIN_SAMPLES];
+        if grain.len() == rows.len() * 3 {
+            for (row, values) in rows.iter_mut().zip(grain.chunks_exact(3)) {
+                *row = [values[0], values[1], values[2]];
+            }
+        }
+        self.renderer.set_film((negative_size, negative), (output_size, output), op_gpu::FilmSettings { slide, mono, balance, grain: rows });
+        Ok(serde_json::json!({ "balance": balance }).to_string())
+    }
+
     /// Shows the preview as it would come out through an ICC profile. Returns JSON
     /// describing the profile. Exports are unaffected.
     pub fn set_proof(&mut self, icc: &[u8], perceptual: bool, simulate_paper: bool, gamut_warning: bool) -> Result<String> {

@@ -5,6 +5,7 @@ pub mod curve;
 pub mod decode;
 pub mod demosaic;
 pub mod exif;
+pub mod film;
 pub mod geometry;
 pub mod heal;
 pub mod icc;
@@ -27,6 +28,7 @@ pub use decode::{
     DecodeError, DevelopJob, LensQuery, Opened, TileRecipe, camera_matched_exposure, decode_linear, develop_raw_full, open,
     process_tile, open_rgba, open_rgba8, RgbaSamples};
 pub use exif::{capture_time, export_exif, mark_uncalibrated};
+pub use film::{Film, FilmLut};
 pub use geometry::Geometry;
 pub use icc::{rgb_icc_profile, srgb_icc_profile};
 pub use input_profile::InputProfile;

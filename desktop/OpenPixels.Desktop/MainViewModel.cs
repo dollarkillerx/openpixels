@@ -69,6 +69,10 @@ public sealed partial class SliderItem(SliderSpec spec, Action<SliderItem> chang
     [NotifyPropertyChangedFor(nameof(Display), nameof(Changed))]
     private double _value = spec.Resting;
 
+    /// <summary>False for a setting that means nothing in the current state, such as printer lights for a slide.</summary>
+    [ObservableProperty]
+    private bool _isVisible = true;
+
     public string Display => Spec.Max > 10 ? Value.ToString("0") : Value.ToString("0.00");
     public bool Changed => Value != Spec.Resting;
 
@@ -177,6 +181,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MakeLocalSliders();
         MakeFullSliders();
         MakePortraitSliders();
+        MakeFilmSliders();
         Groups = [WhiteBalanceGroup, ToneGroup, ParametricGroup, EffectsGroup, CalibrationGroup, LensGroup, PerspectiveGroup, PointGroup, new("HSL", HslAll), new(I18n.T("其他"), [LookAmount, RotateSlider])];
         Grades = Edits.GradeRanges.Select(range => new GradeItem(range.Key, range.Label)).ToList();
         RefreshLookChoices();
@@ -508,7 +513,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Tool = RetouchTool.None;
             await LoadRetouchAsync(photo, proxy);
             await _engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(_edit));
-            await SetLookAsync(_engine, (int)_edit.GetValueOrDefault("lutId"));
+            await SetLookAsync(_engine, _edit);
             await _engine.CallAsync("setView", new { zoom = 1.0, x = 0.5, y = 0.5 });
             await _engine.CallAsync("setCompare", new { split = CompareOn ? CompareSplit : 0 });
             await _engine.CallAsync("setClipWarnings", new { highlights = ClipHighlights, shadows = ClipShadows });
@@ -602,6 +607,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
             var lookId = (int)_edit.GetValueOrDefault("lutId");
             SelectedLook = LookChoices.FirstOrDefault(look => look.Id == lookId) ?? LookChoices[0];
+            ShowFilm();
             PointActive = _edit.GetValueOrDefault("pointWidth") > 0;
             PointSwatch = new Avalonia.Media.SolidColorBrush(ColorWheel.HsvColour(_edit.GetValueOrDefault("pointHue"), 0.75, 0.85));
             ShowFullEdit();
@@ -633,7 +639,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (SelectedPhoto is null) return;
         _store.Save(SelectedPhoto.Id, _edit);
         var lookId = (int)_edit.GetValueOrDefault("lutId");
-        if (lookId != (int)before.GetValueOrDefault("lutId")) _ = Fire(() => SetLookAsync(_engine, lookId));
+        if (lookId != (int)before.GetValueOrDefault("lutId") || _edit.GetValueOrDefault("filmPrint") != before.GetValueOrDefault("filmPrint"))
+        {
+            var edit = _edit;
+            _ = Fire(() => SetLookAsync(_engine, edit));
+        }
         if (ReplacementChanged(before, _edit)) _ = UpdateReplacementAsync();
         if (NeedsSkin(before) != NeedsSkin(_edit)) _ = UpdateSkinAsync();
         else ShowSkinStatus(SelectedPhoto.Id, _edit);
@@ -717,11 +727,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         LookChoices.Clear();
         LookChoices.Add(new LookInfo(0, "", I18n.T("无")));
         foreach (var look in Looks.BuiltInLooks) LookChoices.Add(look);
+        foreach (var look in Looks.FilmLooks) LookChoices.Add(look);
         foreach (var look in _looks.Imported) LookChoices.Add(new LookInfo(look.Id, I18n.T("导入"), look.Name));
     }
 
-    private async Task SetLookAsync(EngineClient engine, int id)
+    /// <summary>Sets an edit's look: a film simulation for a film look, else its LUT.</summary>
+    private async Task SetLookAsync(EngineClient engine, IReadOnlyDictionary<string, double> edit)
     {
+        var id = (int)edit.GetValueOrDefault("lutId");
+        if (FilmSim.Film(id) is { } film && FilmSim.Call(film, edit) is { } call)
+        {
+            await engine.CallAsync("setFilm", call.Args, call.Data);
+            return;
+        }
         var lut = _looks.Resolve(id);
         if (lut is null)
         {

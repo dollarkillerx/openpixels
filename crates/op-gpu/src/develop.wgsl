@@ -76,6 +76,10 @@ struct Adjustments {
     output_space: f32,
     point_padding_1: f32,
     point_padding_2: f32,
+    // Exposure into the film, halation, grain, frame long edge in mm (0 is 35mm).
+    film: vec4<f32>,
+    // Printer lights in stops.
+    film_lights: vec4<f32>,
 }
 
 struct Region {
@@ -109,6 +113,11 @@ struct Region {
     output_red: vec4<f32>,
     output_green: vec4<f32>,
     output_blue: vec4<f32>,
+    // Film simulation: 0 off, 1 negative and print, 2 slide; whether black and white; and the
+    // exposure in stops that keeps mid grey as it was. The negative LUT is in look_lut.
+    film: vec4<f32>,
+    // RMS grain per layer at 16 evenly spaced densities, in ADX code per pixel per mm.
+    film_grain: array<vec4<f32>, 16>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -137,6 +146,10 @@ struct Region {
 @group(0) @binding(12) var detail_luma: texture_2d<f32>;
 // Smoothed dark channel of the whole image, for dehazing.
 @group(0) @binding(13) var haze_map: texture_2d<f32>;
+// Film simulation: from printing densities through the print to display colour.
+@group(0) @binding(17) var film_output: texture_3d<f32>;
+// Light scattered back by the film base around highlights, spread for 16mm, 35mm and 70mm.
+@group(0) @binding(18) var halation_map: texture_2d<f32>;
 
 // This pixel's combined local adjustments: exposure, contrast, saturation, temperature.
 var<private> local_values: vec4<f32>;
@@ -545,6 +558,78 @@ fn apply_look(display: vec3<f32>) -> vec3<f32> {
     return mix(display, textureSampleLevel(look_lut, mask_sampler, at, 0.0).rgb, adj.lut_amount);
 }
 
+// Keep in sync with op-core/src/film.rs.
+const FILM_LOG_MIN = -8.0;
+const FILM_LOG_MAX = 7.0;
+const FILM_MID = 0.18;
+const ADX_PER_DENSITY = vec3<f32>(0.24414435, 0.22461280, 0.23193713);
+const DENSITY_PER_STOP = 0.30103;
+const FILM_WHITEST = 0.995;
+const FILM_GRAIN_SAMPLES = 16u;
+// Scattered light reaches the red layer most, through the base below it.
+const HALATION_TINT = vec3<f32>(1.0, 0.3, 0.05);
+
+fn sample_cube(lut: texture_3d<f32>, at: vec3<f32>) -> vec3<f32> {
+    let size = vec3<f32>(textureDimensions(lut));
+    return textureSampleLevel(lut, mask_sampler, (clamp(at, vec3<f32>(0.0), vec3<f32>(1.0)) * (size - 1.0) + 0.5) / size, 0.0).rgb;
+}
+
+// Roughly Gaussian noise with a standard deviation of 1, different for each seed.
+fn film_noise(pixel: vec2<f32>, seed: i32) -> f32 {
+    let at = vec2<i32>(floor(pixel)) * vec2<i32>(4, 1) + vec2<i32>(0, seed * 1000003);
+    return cell_hash(at) + cell_hash(at + vec2<i32>(1, 0)) + cell_hash(at + vec2<i32>(2, 0));
+}
+
+fn film_grain_sigma(density: vec3<f32>) -> vec3<f32> {
+    let position = clamp(density, vec3<f32>(0.0), vec3<f32>(1.0)) * f32(FILM_GRAIN_SAMPLES - 1u);
+    let index = min(vec3<u32>(floor(position)), vec3<u32>(FILM_GRAIN_SAMPLES - 2u));
+    let t = position - vec3<f32>(index);
+    return vec3<f32>(
+        mix(region.film_grain[index.x].x, region.film_grain[index.x + 1u].x, t.x),
+        mix(region.film_grain[index.y].y, region.film_grain[index.y + 1u].y, t.y),
+        mix(region.film_grain[index.z].z, region.film_grain[index.z + 1u].z, t.z),
+    );
+}
+
+// A film look on the desktop: the display colour is turned back into scene light, exposed
+// onto the negative, printed with the printer lights and viewed, with the stock's grain
+// in the negative's densities and halation glowing into its red layer. Otherwise the
+// look LUT, from display colour to display colour.
+fn apply_film(display: vec3<f32>, pixel: vec2<f32>, uv: vec2<f32>, gain: f32) -> vec3<f32> {
+    let mode = region.film.x;
+    if mode == 0.0 {
+        return apply_look(display);
+    }
+    if adj.lut_amount == 0.0 {
+        return display;
+    }
+    let linear = min(srgb_to_linear(display), vec3<f32>(FILM_WHITEST));
+    var scene = pow(max(linear * LOOK_KNEE / (1.0 - linear), vec3<f32>(0.0)), vec3<f32>(1.0 / LOOK_CONTRAST));
+    let frame_mm = select(36.0, adj.film.w, adj.film.w > 0.0);
+    if adj.film.y > 0.0 {
+        let halo = textureSampleLevel(halation_map, mask_sampler, uv, 0.0).rgb;
+        let small = mix(halo.r, halo.g, clamp((frame_mm - 12.5) / 23.5, 0.0, 1.0));
+        let spread = select(mix(halo.g, halo.b, clamp((frame_mm - 36.0) / 34.0, 0.0, 1.0)), small, frame_mm < 36.0);
+        scene += HALATION_TINT * adj.film.y * spread * gain;
+    }
+    scene *= exp2(region.film.z + adj.film.x);
+    let code = (log2(max(scene, vec3<f32>(1e-12)) / FILM_MID) - FILM_LOG_MIN) / (FILM_LOG_MAX - FILM_LOG_MIN);
+    var density = sample_cube(look_lut, code);
+    let mono = region.film.y > 0.0;
+    if mode == 1.0 {
+        let per_density = select(ADX_PER_DENSITY, vec3<f32>(ADX_PER_DENSITY.y), mono);
+        let lights = select(adj.film_lights.xyz, adj.film_lights.yyy, mono);
+        density -= lights * DENSITY_PER_STOP * per_density;
+    }
+    if adj.film.z > 0.0 {
+        let pixels_per_mm = max(region.full_size.x, region.full_size.y) / frame_mm;
+        let first = film_noise(pixel, 0);
+        let noise = select(vec3<f32>(first, film_noise(pixel, 1), film_noise(pixel, 2)), vec3<f32>(first), mono);
+        density += film_grain_sigma(density) * pixels_per_mm * adj.film.z * noise;
+    }
+    return mix(display, sample_cube(film_output, density), adj.lut_amount);
+}
+
 fn apply_vignette(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let centered = (pixel + 0.5 - region.full_size * 0.5) / (region.full_size * 0.5);
     let falloff = smoothstep(0.35, 1.45, length(centered));
@@ -727,7 +812,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let encoded = linear_to_srgb(rgb);
     let excess = gamut_excess(encoded);
     let fitted = clamp(encoded - excess, vec3<f32>(0.0), vec3<f32>(1.0));
-    var display = mix(apply_grain(apply_look(fitted), pixel) + excess, tint, adj.mask_overlay * background * 0.65);
+    var display = mix(apply_grain(apply_film(fitted, pixel, uv, scene_gain), pixel) + excess, tint, adj.mask_overlay * background * 0.65);
     if adj.local_overlay > 0.0 {
         let layer = min(u32(max(adj.local_overlay, 1.0)) - 1u, 3u);
         display = mix(display, vec3<f32>(0.2, 0.6, 0.95), weights[layer] * 0.55);

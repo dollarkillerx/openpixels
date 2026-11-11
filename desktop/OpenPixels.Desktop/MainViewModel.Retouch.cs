@@ -7,7 +7,7 @@ using OpenPixels.Desktop.Engine;
 
 namespace OpenPixels.Desktop;
 
-public enum RetouchTool { None, Spot, Clone, RedEye, Erase, Linear, Radial, Brush, RefineAdd, RefineSubtract, Liquify }
+public enum RetouchTool { None, Spot, Clone, RedEye, Erase, Linear, Radial, Brush, RefineAdd, RefineSubtract, Liquify, Object }
 
 public sealed partial class LayerRow(int index, string title) : ObservableObject
 {
@@ -23,7 +23,9 @@ public sealed record ToolOverlayState(
     IReadOnlyList<(Point A, Point B, bool Radial, bool Active)> Handles,
     IReadOnlyList<(Point Centre, double Radius)> Dabs,
     Point? StampSource,
-    double BrushRadius);
+    double BrushRadius,
+    IReadOnlyList<(Point At, bool Include)> ObjectPoints,
+    IReadOnlyList<Point> ObjectBox);
 
 /// <summary>Healing, clone stamp, red-eye, AI erase, and local adjustments with AI masks.</summary>
 public sealed partial class MainViewModel
@@ -99,7 +101,7 @@ public sealed partial class MainViewModel
     public bool SkyAvailable => AiModels.Has(AiModels.Sky.File);
     public bool CanAddLayer => CanEdit && _locals.Count < LocalMasks.MaxLayers && !AiBusy;
     public bool HasActiveLayer => ActiveLayer >= 0 && ActiveLayer < _locals.Count;
-    public bool ActiveIsBrushable => HasActiveLayer && _locals[ActiveLayer].Kind is LocalKind.Brush or LocalKind.Subject or LocalKind.Background or LocalKind.Sky;
+    public bool ActiveIsBrushable => HasActiveLayer && _locals[ActiveLayer].Kind is LocalKind.Brush or LocalKind.Subject or LocalKind.Background or LocalKind.Sky or LocalKind.Object;
     public IReadOnlyList<SliderItem> ActiveLocalSliders => HasActiveLayer ? LocalMasks.Sliders.Select(slider => Slider($"local{ActiveLayer}{slider.Suffix}")).ToList() : [];
     public IReadOnlyList<SliderItem> ActiveRangeSliders => !HasActiveLayer ? [] : ActiveRangeMode switch
     {
@@ -149,7 +151,7 @@ public sealed partial class MainViewModel
             CropEditing = false;
         }
         _drawing = false;
-        foreach (var name in new[] { nameof(IsSpot), nameof(IsClone), nameof(IsRedEye), nameof(IsErase), nameof(IsLinear), nameof(IsRadial), nameof(IsBrush), nameof(IsRefineAdd), nameof(IsRefineSubtract), nameof(UsesHealBrush), nameof(IsLiquify) })
+        foreach (var name in new[] { nameof(IsSpot), nameof(IsClone), nameof(IsRedEye), nameof(IsErase), nameof(IsLinear), nameof(IsRadial), nameof(IsBrush), nameof(IsRefineAdd), nameof(IsRefineSubtract), nameof(UsesHealBrush), nameof(IsLiquify), nameof(IsObject) })
         {
             OnPropertyChanged(name);
         }
@@ -165,6 +167,7 @@ public sealed partial class MainViewModel
             RetouchTool.RefineAdd => I18n.T("涂抹以加入蒙版"),
             RetouchTool.RefineSubtract => I18n.T("涂抹以从蒙版中去掉"),
             RetouchTool.Liquify => I18n.T("在画面上拖动以变形"),
+            RetouchTool.Object => I18n.T("点击要选的对象，按住 Option（Alt）点击要排除的部分，拖动可框选"),
             _ => ToolHint,
         };
         if (value == RetouchTool.None && Picker == Picker.None) ToolHint = "";
@@ -198,6 +201,7 @@ public sealed partial class MainViewModel
         {
             nameof(HasActiveLayer), nameof(ActiveIsBrushable), nameof(ActiveLocalSliders), nameof(ActiveRangeSliders), nameof(ActiveRangeMode),
             nameof(ActiveInvert), nameof(CanAddLayer), nameof(CanRunErase), nameof(HasHeals), nameof(HasErases), nameof(HealSummary),
+            nameof(ActiveIsObject), nameof(ActiveHasPrompts),
         })
         {
             OnPropertyChanged(name);
@@ -264,9 +268,11 @@ public sealed partial class MainViewModel
     private async Task<Dictionary<string, ModelMask>> ModelMasksAsync(EngineClient engine, string id, IReadOnlyList<LocalLayer> locals, (int Width, int Height) proxy, bool main)
     {
         if (!_modelMasks.TryGetValue(id, out var known)) _modelMasks[id] = known = [];
-        foreach (var model in locals.Where(layer => layer.IsAi).Select(layer => layer.Model).Distinct())
+        foreach (var layer in locals.Where(layer => layer.IsAi).DistinctBy(layer => layer.Model).ToList())
         {
-            if (!known.ContainsKey(model)) await FindModelMaskAsync(engine, id, model, proxy);
+            if (known.ContainsKey(layer.Model)) continue;
+            if (layer.Kind != LocalKind.Object) await FindModelMaskAsync(engine, id, layer.Model, proxy);
+            else if (layer.HasPrompts && AiModels.Segment.Available) await FindObjectMaskAsync(engine, id, layer, locals, proxy);
         }
         return known;
     }
@@ -376,7 +382,8 @@ public sealed partial class MainViewModel
             _ => 0,
         };
         Point? source = Tool == RetouchTool.Clone && _stampSource is { } stamp ? StageOf(stamp) : null;
-        return new ToolOverlayState(handles, dabs, source, radius);
+        var (objectPoints, objectBox) = ObjectOverlay();
+        return new ToolOverlayState(handles, dabs, source, radius, objectPoints, objectBox);
     }
 
     partial void OnHealRadiusChanged(double value) => OverlayChanged?.Invoke();
@@ -451,6 +458,9 @@ public sealed partial class MainViewModel
                 }
                 StartStroke(uv, erase: false);
                 break;
+            case RetouchTool.Object:
+                ObjectPress(uv, px, py, alt);
+                break;
             case RetouchTool.RefineAdd or RetouchTool.RefineSubtract:
                 if (!ActiveIsBrushable)
                 {
@@ -492,6 +502,9 @@ public sealed partial class MainViewModel
             case RetouchTool.Brush or RetouchTool.RefineAdd or RetouchTool.RefineSubtract:
                 ContinueStroke(uv);
                 break;
+            case RetouchTool.Object:
+                ObjectMove(uv, px, py);
+                break;
         }
     }
 
@@ -519,6 +532,9 @@ public sealed partial class MainViewModel
                 break;
             case RetouchTool.Brush or RetouchTool.RefineAdd or RetouchTool.RefineSubtract:
                 RecordLayers(Tool == RetouchTool.RefineSubtract ? I18n.T("擦除蒙版") : I18n.T("画笔"));
+                break;
+            case RetouchTool.Object:
+                ObjectRelease();
                 break;
         }
     }
@@ -828,7 +844,22 @@ public sealed partial class MainViewModel
                 _maskQueued = false;
                 var layers = _locals.Select(layer => layer.Copy()).ToList();
                 var proxy = _proxySize;
-                var masks = SelectedPhoto is { } photo && _modelMasks.TryGetValue(photo.Id, out var known) ? known : [];
+                // An object layer's prompts may have changed since its mask was found.
+                if (SelectedPhoto is { } open && layers.Any(layer => layer.Kind == LocalKind.Object && layer.HasPrompts))
+                {
+                    try
+                    {
+                        await ModelMasksAsync(_engine, open.Id, layers, proxy, main: true);
+                    }
+                    catch (Exception exception) when (exception is not EngineException)
+                    {
+                        RetouchStatus = I18n.T("识别失败：{exception}", ("exception", Messages.Friendly(exception)));
+                        StatusDetail = Messages.Detail(exception);
+                    }
+                    if (ticket != _openTicket) break;
+                }
+                // A copy, as finding an object's mask can change the cache while this one draws.
+                var masks = SelectedPhoto is { } photo && _modelMasks.TryGetValue(photo.Id, out var known) ? new Dictionary<string, ModelMask>(known) : [];
                 var rgba = layers.Count == 0 ? new byte[4] : await Task.Run(() => LocalMasks.Render(layers, proxy.Width, proxy.Height, masks));
                 if (ticket != _openTicket) break;
                 await _engine.CallAsync("setLocalMask", layers.Count == 0 ? new { width = 1, height = 1 } : new { width = proxy.Width, height = proxy.Height }, rgba);

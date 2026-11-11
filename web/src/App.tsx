@@ -6,7 +6,7 @@ import { chooseBatchTarget } from "./batch";
 import { EngineClient, type MaskStats, type SkinStats } from "./engine";
 import { FIT_VIEW, FULL_FRAME, cropFields, cropForRatio, cropOf, fitBox, frameSize, outputToSource, shrinkToImage, sourceToOutput, viewBox, type Crop, type View } from "./frame";
 import { Histogram } from "./Histogram";
-import { BUILT_IN_LOOKS, LOOK_GROUPS, builtInLut, parseCube } from "./lut";
+import { BUILT_IN_LOOKS, FILM_LOOK_GROUPS, FILM_LOOKS, LOOK_GROUPS, builtInLut, filmLut, parseCube } from "./lut";
 import { deleteProfile, deleteProject, forgetHandle, getAsset, getLut, listAssets, listLuts, listProfiles, listProjects, loadAnalyses, loadErases, recallHandle, recallHandleEntries, rememberHandle, saveAnalysis, saveAsset, saveErases, saveLut, saveProfile, saveProject, type Project, type StoredAsset, type StoredLut, type StoredProfile } from "./store";
 import { analyzeImage, groupPhotos, judgeGroup, type PhotoAnalysis, type Verdict } from "./analysis";
 import { matchColours } from "./colormatch";
@@ -598,6 +598,8 @@ export function App() {
 
   const resolveLook = useCallback(async (id: number) => {
     if (!id) return null;
+    const film = filmLut(id);
+    if (film) return await film;
     return builtInLut(id) ?? (await getLut(id).catch(() => undefined)) ?? null;
   }, []);
 
@@ -828,9 +830,13 @@ export function App() {
   useEffect(() => {
     if (!ready || !loaded) return;
     let cancelled = false;
-    void resolveLook(lookId).then((lut) => {
-      if (!cancelled) void engineRef.current?.setLook(lut);
-    });
+    resolveLook(lookId)
+      .then((lut) => {
+        if (!cancelled) void engineRef.current?.setLook(lut);
+      })
+      .catch((reason: Error) => {
+        if (!cancelled) setError(t("滤镜加载失败：{message}", { message: reason.message }));
+      });
     return () => {
       cancelled = true;
     };
@@ -2820,6 +2826,13 @@ export function App() {
                 <optgroup key={group} label={group}>
                   {BUILT_IN_LOOKS.filter((look) => look.group === group).map((look) => (
                     <option key={look.id} value={look.id}>{look.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+              {FILM_LOOK_GROUPS.map((group) => (
+                <optgroup key={group} label={group}>
+                  {FILM_LOOKS.filter((look) => look.group === group).map((look) => (
+                    <option key={look.id} value={look.id} title={look.print ?? undefined}>{look.name}</option>
                   ))}
                 </optgroup>
               ))}

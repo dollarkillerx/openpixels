@@ -206,7 +206,7 @@ public sealed partial class MainViewModel
         await ApplyRetouchAsync(engine, photo.Id, open ? _locals : _retouch.Locals(photo.Id), open ? (JsonArray)_heals.DeepClone() : _retouch.Heals(photo.Id),
             open ? _erases : _retouch.Erases(photo.Id), ((int)proxy["width"]!, (int)proxy["height"]!), main: false, open ? _warps : _retouch.Warps(photo.Id), edit);
         await engine.CallRawAsync("setAdjustments", Edits.ToEngineJson(edit));
-        await SetLookAsync(engine, (int)edit.GetValueOrDefault("lutId"));
+        await SetLookAsync(engine, edit);
         return info;
     }
 

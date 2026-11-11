@@ -406,6 +406,8 @@ public sealed class ToolOverlay : Control
     private static readonly IPen Outline = new Pen(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)), 1.5);
     private static readonly IPen Shadow = new Pen(new SolidColorBrush(Color.FromArgb(120, 0, 0, 0)), 3);
     private static readonly IBrush EraseFill = new SolidColorBrush(Color.FromArgb(110, 255, 90, 60));
+    private static readonly IBrush IncludeFill = new SolidColorBrush(Color.Parse("#2FA84F"));
+    private static readonly IBrush ExcludeFill = new SolidColorBrush(Color.Parse("#E5484D"));
 
     public ToolOverlay()
     {
@@ -459,6 +461,23 @@ public sealed class ToolOverlay : Control
             context.DrawEllipse(null, new Pen(new SolidColorBrush(Color.Parse("#FF7A45")), 1.5), at, radius, radius);
             context.DrawLine(Outline, new Point(at.X - 4, at.Y), new Point(at.X + 4, at.Y));
             context.DrawLine(Outline, new Point(at.X, at.Y - 4), new Point(at.X, at.Y + 4));
+        }
+        if (state.ObjectBox.Count == 4)
+        {
+            var corners = state.ObjectBox.Select(P).ToList();
+            for (var i = 0; i < 4; i++)
+            {
+                context.DrawLine(Shadow, corners[i], corners[(i + 1) % 4]);
+                context.DrawLine(Outline, corners[i], corners[(i + 1) % 4]);
+            }
+        }
+        foreach (var (device, include) in state.ObjectPoints)
+        {
+            // Green with a plus for the object, red with a minus for what is left out.
+            var at = P(device);
+            context.DrawEllipse(include ? IncludeFill : ExcludeFill, Shadow, at, 6, 6);
+            context.DrawLine(Outline, new Point(at.X - 3, at.Y), new Point(at.X + 3, at.Y));
+            if (include) context.DrawLine(Outline, new Point(at.X, at.Y - 3), new Point(at.X, at.Y + 3));
         }
         if (Pointer is { } pointer && state.BrushRadius > 0)
         {

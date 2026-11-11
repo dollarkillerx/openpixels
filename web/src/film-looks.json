@@ -1,0 +1,173 @@
+{
+  "size": 33,
+  "looks": [
+    {
+      "id": 30,
+      "group": "彩色负片",
+      "name": "Kodak Portra 160",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 31,
+      "group": "彩色负片",
+      "name": "Kodak Portra 400",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 32,
+      "group": "彩色负片",
+      "name": "Kodak Portra 800",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 33,
+      "group": "彩色负片",
+      "name": "Kodak Ektar 100",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 34,
+      "group": "彩色负片",
+      "name": "Kodak Gold 200",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 35,
+      "group": "彩色负片",
+      "name": "Kodak Ultramax 400",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 36,
+      "group": "彩色负片",
+      "name": "Fuji Pro 400H",
+      "print": "Fuji Crystal Archive Maxima"
+    },
+    {
+      "id": 37,
+      "group": "彩色负片",
+      "name": "Fuji Pro 160S",
+      "print": "Fuji Crystal Archive Maxima"
+    },
+    {
+      "id": 38,
+      "group": "彩色负片",
+      "name": "Fuji Superia X-Tra 400",
+      "print": "Fuji Crystal Archive Maxima"
+    },
+    {
+      "id": 39,
+      "group": "彩色负片",
+      "name": "Fuji Superia Reala",
+      "print": "Fuji Crystal Archive Maxima"
+    },
+    {
+      "id": 40,
+      "group": "彩色负片",
+      "name": "Fuji C200",
+      "print": "Fuji Crystal Archive Maxima"
+    },
+    {
+      "id": 41,
+      "group": "彩色负片",
+      "name": "Fuji Natura 1600",
+      "print": "Fuji Crystal Archive Maxima"
+    },
+    {
+      "id": 42,
+      "group": "彩色负片",
+      "name": "Agfa Vista 100",
+      "print": "Kodak Portra Endura Paper"
+    },
+    {
+      "id": 43,
+      "group": "电影负片",
+      "name": "Kodak Vision3 50D 5203",
+      "print": "Kodak Vision 2383"
+    },
+    {
+      "id": 44,
+      "group": "电影负片",
+      "name": "Kodak Vision3 250D 5207",
+      "print": "Kodak Vision 2383"
+    },
+    {
+      "id": 45,
+      "group": "电影负片",
+      "name": "Kodak Vision3 200T 5213",
+      "print": "Kodak Vision 2383"
+    },
+    {
+      "id": 46,
+      "group": "电影负片",
+      "name": "Kodak Vision3 500T 5219",
+      "print": "Kodak Vision 2383"
+    },
+    {
+      "id": 47,
+      "group": "电影负片",
+      "name": "Kodak EXR 200T 5293",
+      "print": "Kodak Vision 2383"
+    },
+    {
+      "id": 48,
+      "group": "电影负片",
+      "name": "Fuji Eterna 500",
+      "print": "Fuji Eterna-CP 3523XD"
+    },
+    {
+      "id": 49,
+      "group": "电影负片",
+      "name": "Fuji Eterna 500 Vivid",
+      "print": "Fuji Eterna-CP 3523XD"
+    },
+    {
+      "id": 50,
+      "group": "反转片",
+      "name": "Fuji Velvia 50",
+      "print": null
+    },
+    {
+      "id": 51,
+      "group": "反转片",
+      "name": "Fuji Provia 100F",
+      "print": null
+    },
+    {
+      "id": 52,
+      "group": "反转片",
+      "name": "Kodak Ektachrome 100D",
+      "print": null
+    },
+    {
+      "id": 53,
+      "group": "反转片",
+      "name": "Kodachrome 64",
+      "print": null
+    },
+    {
+      "id": 54,
+      "group": "反转片",
+      "name": "Fuji Instax color",
+      "print": null
+    },
+    {
+      "id": 55,
+      "group": "反转片",
+      "name": "Fuji FP-100C",
+      "print": null
+    },
+    {
+      "id": 56,
+      "group": "黑白胶片",
+      "name": "Kodak Tri-X 400",
+      "print": "Kodak Polymax Fine-Art Grade 3"
+    },
+    {
+      "id": 57,
+      "group": "黑白胶片",
+      "name": "Kodak Double-X 5222",
+      "print": "Kodak 2302 Dev 7"
+    }
+  ]
+}

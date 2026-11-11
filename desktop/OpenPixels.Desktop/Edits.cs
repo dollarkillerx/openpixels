@@ -59,6 +59,13 @@ public static partial class Edits
         new("pointSatShift", I18n.T("混合点饱和度"), -1, 1), new("pointLumShift", I18n.T("混合点明度"), -1, 1),
     ]);
 
+    public static readonly SliderGroupSpec Film = new(I18n.T("胶片模拟"),
+    [
+        new("filmExposure", I18n.T("胶片曝光"), -2, 2), new("filmLightRed", I18n.T("印片红光"), -1, 1),
+        new("filmLightGreen", I18n.T("印片绿光"), -1, 1), new("filmLightBlue", I18n.T("印片蓝光"), -1, 1),
+        new("filmHalation", I18n.T("光晕"), 0, 1), new("filmGrain", I18n.T("胶片颗粒"), 0, 2),
+    ]);
+
     public static readonly SliderGroupSpec Skin = new(I18n.T("皮肤"), [new("skinSmooth", I18n.T("磨皮"), 0, 1), new("skinBlemish", I18n.T("祛斑"), 0, 1)]);
 
     public static readonly SliderGroupSpec BackgroundReplace = new(I18n.T("换背景"),
@@ -124,6 +131,8 @@ public static partial class Edits
         json["replaceSkyExposure"] = Get(edit, "skyFillExposure");
         json["replaceSkyShift"] = Get(edit, "skyShift");
         json["replaceSkyRelight"] = Get(edit, "skyRelight");
+        json["film"] = Numbers([Get(edit, "filmExposure"), Get(edit, "filmHalation"), Get(edit, "filmGrain"), FilmSim.FormatsMm[FilmSim.FormatIndex(edit)]]);
+        json["filmLights"] = Numbers([Get(edit, "filmLightRed"), Get(edit, "filmLightGreen"), Get(edit, "filmLightBlue"), 0]);
         json["lensManual"] = Numbers([Get(edit, "lensDistortion"), Get(edit, "lensVignette"), Get(edit, "lensCaRed"), Get(edit, "lensCaBlue")]);
         json["perspective"] = Numbers([Get(edit, "perspectiveV"), Get(edit, "perspectiveH")]);
         json["grade"] = new JsonArray(GradeRanges.Select(range => (JsonNode)Numbers([Get(edit, $"grade{range.Key}Hue"), Get(edit, $"grade{range.Key}Amount"), 0, 0])).ToArray());
@@ -163,7 +172,7 @@ public static partial class Edits
     // History names, as in the web edition's describeChange.
 
     private static readonly Dictionary<string, string> SliderLabels =
-        new[] { WhiteBalance, Tone, Parametric, Effects, Calibration, Lens, Perspective, Point, Skin, BackgroundReplace, SkyReplace }
+        new[] { WhiteBalance, Tone, Parametric, Effects, Calibration, Lens, Perspective, Point, Film, Skin, BackgroundReplace, SkyReplace }
             .SelectMany(group => group.Sliders).Concat(HslSliders()).Concat([LookAmount, Rotate])
             .ToDictionary(slider => slider.Key, slider => slider.Label);
 
@@ -191,6 +200,8 @@ public static partial class Edits
         if (slider is not null) return new(slider, null, true);
         if (key == "quarter" || (key.Length == 5 && key.StartsWith("crop", StringComparison.Ordinal))) return new(CropGroup, CropGroup);
         if (key == "lutId") return new(I18n.T("滤镜"), I18n.T("滤镜"));
+        if (key == "filmPrint") return new(I18n.T("相纸"), I18n.T("胶片模拟"));
+        if (key == "filmFormat") return new(I18n.T("画幅"), I18n.T("胶片模拟"));
         if (key == "cameraProfile") return new(I18n.T("色彩配置"));
         if (key == "backgroundAsset") return new(I18n.T("换背景"));
         if (key == "skyAsset") return new(I18n.T("换天"));

@@ -51,3 +51,20 @@ fetch "https://huggingface.co/fernandotonon/QtMeshEditor-blazeface-onnx/resolve/
 fetch "https://huggingface.co/fernandotonon/QtMeshEditor-facemesh-onnx/resolve/32714088ed9830a98df6ee653ad406a3b83ef014/face_landmarks.onnx" \
   d16e5a55e6a480284d468ee32469692464049518c311662ab3956681de31e3e9 \
   web/public/models/face_landmarks.onnx
+
+# The desktop edition's point and box masks: Meta's SAM 2.1 Hiera Small (Apache-2.0, code
+# and weights), as exported to ONNX for Transformers.js by onnx-community. Each graph keeps
+# its weights in a .onnx_data file beside it, under the name the graph refers to.
+SAM=https://huggingface.co/onnx-community/sam2.1-hiera-small-ONNX/resolve/a7df49d8de14b9d2e4504d1687b0d568f905fd8d/onnx
+fetch "$SAM/vision_encoder.onnx" \
+  aacf1f7137bb6fffcf6bf166abcfabe28f57a76059254f3fb611c4a64a208119 \
+  web/public/models/sam/vision_encoder.onnx
+fetch "$SAM/vision_encoder.onnx_data" \
+  260fd1f0a34e72a3dc79a739e563b4facc0ba75504818b433a1f808e66637456 \
+  web/public/models/sam/vision_encoder.onnx_data
+fetch "$SAM/prompt_encoder_mask_decoder.onnx" \
+  079c59b261f723ff5c6a125e69b0170a957b21c58738c28d2b0394ecd0587d7f \
+  web/public/models/sam/prompt_encoder_mask_decoder.onnx
+fetch "$SAM/prompt_encoder_mask_decoder.onnx_data" \
+  f9e59a584ab8ced21fa812c211bc01084204db1c9e92a5ef4fb3a49972b4e864 \
+  web/public/models/sam/prompt_encoder_mask_decoder.onnx_data
